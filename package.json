@@ -1,0 +1,62 @@
+{
+  "name": "gamevault",
+  "version": "1.0.0",
+  "description": "Modern personal game library manager, playtime tracker, and launcher.",
+  "main": "main.js",
+  "author": "itzSornet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itzSornet/Gamevault.git"
+  },
+  "keywords": [
+    "electron",
+    "game-launcher",
+    "game-library",
+    "playtime-tracker",
+    "steam",
+    "epic-games",
+    "steamgriddb"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.gamevault.app",
+    "productName": "GameVault",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "itzSornet",
+        "repo": "Gamevault"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^29.4.6",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
