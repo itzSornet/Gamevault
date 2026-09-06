@@ -38,6 +38,10 @@ async function boot() {
   
   const cols = config.gridColumns || 8;
   document.documentElement.style.setProperty('--grid-columns', cols);
+
+  // Apply corner radius from config
+  const radiusVal = config.cornerRadius !== undefined ? config.cornerRadius : (config.radius !== undefined ? config.radius : 14);
+  applyCornerRadius(radiusVal);
   
   if (config.noise === false) {
     document.body.classList.add('no-noise');
@@ -119,6 +123,10 @@ async function boot() {
       card.classList.add('active');
       const theme = card.dataset.theme;
       
+      // Remove any legacy injected custom theme style tag
+      const oldStyles = document.getElementById('custom-theme-styles');
+      if (oldStyles) oldStyles.remove();
+
       if (theme === 'custom') {
         document.getElementById('custom-theme-builder').style.display = 'block';
         applyCustomTheme();
@@ -186,22 +194,14 @@ async function boot() {
     });
   }
 
-  // Custom Theme Sliders
-  const glowSlider = document.getElementById('custom-glow');
-  const glowValue = document.getElementById('glow-value');
-  if (glowSlider) {
-    glowSlider.addEventListener('input', (e) => {
-      glowValue.textContent = e.target.value + '%';
-      applyCustomTheme();
-    });
-  }
-  
-  const radiusSlider = document.getElementById('custom-radius');
+  // Corner Radius Slider (under Grid section)
+  const radiusSlider = document.getElementById('corner-radius-slider');
   const radiusValue = document.getElementById('radius-value');
   if (radiusSlider) {
     radiusSlider.addEventListener('input', (e) => {
-      radiusValue.textContent = e.target.value + 'px';
-      applyCustomTheme();
+      const val = parseInt(e.target.value, 10);
+      if (radiusValue) radiusValue.textContent = `${val}px`;
+      applyCornerRadius(val);
     });
   }
   
@@ -375,22 +375,36 @@ async function boot() {
     generatePerfAnalysis(currentGamePageId);
   };
 
-  // Rating — button + input
-  document.getElementById('gp-rate-btn').onclick = () => {
-    const g = currentGamePageId ? games.find(x => String(x.id) === String(currentGamePageId)) : null;
-    document.getElementById('gp-rate-btn').style.display = 'none';
-    document.getElementById('gp-rate-input-wrap').style.display = 'flex';
-    const input = document.getElementById('gp-rate-input');
-    input.value = g?.rating || '';
-    input.focus();
-    input.select();
-  };
-  document.getElementById('gp-rate-save').onclick = () => saveRatingFromInput();
-  document.getElementById('gp-rate-cancel').onclick = () => cancelRatingInput();
-  document.getElementById('gp-rate-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') saveRatingFromInput();
-    if (e.key === 'Escape') cancelRatingInput();
-  });
+  // Rating — button + typing pill
+  const gpRateBtn = document.getElementById('gp-rate-btn');
+  const gpRateWrap = document.getElementById('gp-rate-input-wrap');
+  const gpRateInput = document.getElementById('gp-rate-input');
+  const gpRateSave = document.getElementById('gp-rate-save');
+
+  if (gpRateBtn) {
+    gpRateBtn.onclick = () => {
+      const g = currentGamePageId ? games.find(x => String(x.id) === String(currentGamePageId)) : null;
+      gpRateBtn.style.display = 'none';
+      gpRateWrap.style.display = 'inline-flex';
+      gpRateInput.value = g && g.rating ? (g.rating >= 10 ? 'PEAK' : g.rating) : '';
+      gpRateInput.focus();
+      gpRateInput.select();
+    };
+  }
+  if (gpRateSave) {
+    gpRateSave.onclick = () => saveRatingFromInput();
+  }
+  if (gpRateInput) {
+    gpRateInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') saveRatingFromInput();
+      if (e.key === 'Escape') cancelRatingInput();
+    });
+    gpRateInput.addEventListener('blur', () => {
+      setTimeout(() => {
+        if (gpRateWrap.style.display !== 'none') saveRatingFromInput();
+      }, 150);
+    });
+  }
 
   // Context menu items
   document.getElementById('ctx-launch').onclick = () => { if (ctxGameId) launchGame(ctxGameId); hideContextMenu(); };
@@ -557,9 +571,9 @@ function render() {
 
     grid.querySelectorAll('.game-card').forEach(card => {
       const id = card.dataset.id;
-      // Left-click → game detail page (unless clicking play button)
+      // Left-click → game detail page (unless clicking play button or rating pill)
       card.addEventListener('click', e => {
-        if (!e.target.closest('.card-play')) openGamePage(id);
+        if (!e.target.closest('.card-play') && !e.target.closest('.card-rating-wrap')) openGamePage(id);
       });
       // Right-click → context menu
       card.addEventListener('contextmenu', e => {
@@ -574,8 +588,54 @@ function render() {
         if (isRunning) stopGame(id);
         else launchGame(id);
       });
+      // Rating pill or PEAK badge click → open inline typing pill
+      card.querySelector('.card-rating, .card-peak-badge, .card-peak-ribbon, .card-peak-strip')?.addEventListener('click', e => {
+        e.stopPropagation();
+        openCardRatingInput(card, id);
+      });
     });
   }
+}
+
+function buildRatingBadgeHtml(g) {
+  const sid = String(g.id);
+  const hasRating = g.rating != null && g.rating > 0;
+  const ratingNum = hasRating ? parseFloat(g.rating) : 0;
+  const isPeak = hasRating && ratingNum >= 10;
+
+  if (isPeak) {
+    return {
+      isPeak: true,
+      html: `
+        <button class="card-peak-badge" data-id="${sid}" title="10/10 PEAK · Click to change rating">
+          <svg class="peak-crown-icon" viewBox="0 0 24 24" width="13" height="13" fill="#fde047" aria-hidden="true">
+            <path d="M2.5 17.5h19v2.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8v-2.2z"/>
+            <path d="M3.5 16l1.2-8.8 4.3 4.2 3-7.4 3 7.4 4.3-4.2 1.2 8.8H3.5z"/>
+            <circle cx="12" cy="3" r="1.3" fill="#fffbeb"/>
+            <circle cx="4.7" cy="6.2" r="1.1" fill="#fffbeb"/>
+            <circle cx="19.3" cy="6.2" r="1.1" fill="#fffbeb"/>
+          </svg>
+          <span class="peak-label">PEAK</span>
+        </button>
+      `
+    };
+  }
+
+  const ratingText = hasRating
+    ? `★ ${ratingNum % 1 === 0 ? ratingNum : ratingNum.toFixed(1)}`
+    : 'Rate';
+  const ratingClass = hasRating
+    ? (ratingNum >= 8 ? 'score-high' : ratingNum >= 6 ? 'score-mid' : 'score-low')
+    : 'unrated';
+
+  return {
+    isPeak: false,
+    html: `
+      <button class="card-rating ${ratingClass}" data-id="${sid}" title="${hasRating ? 'Click to change rating' : 'Click to rate'}">
+        <span class="rating-label">${ratingText}</span>
+      </button>
+    `
+  };
 }
 
 function buildCard(g, index = 0) {
@@ -605,17 +665,38 @@ function buildCard(g, index = 0) {
 
   const source = g.source ? `<span class="card-dot">·</span><span class="card-source">${esc(g.source)}</span>` : '';
 
-  const ratingBadge = g.rating
-    ? `<div class="card-rating ${g.rating <= 3 ? 'score-low' : g.rating <= 5 ? 'score-mid' : g.rating <= 8 ? 'score-high' : 'score-top'}">${g.rating}/10</div>`
-    : '';
+  const badgeInfo = buildRatingBadgeHtml(g);
+  const ratingBadge = `
+    <div class="card-rating-wrap ${badgeInfo.isPeak ? 'is-peak-wrap' : ''}">
+      ${badgeInfo.html}
+    </div>
+  `;
 
   // Big play/stop button
   let playBtn = '';
   if (canLaunch) {
     if (isRunning) {
-      playBtn = `<button class="card-play running"><span class="cp-default"><span class="running-dot"></span> Running</span><span class="cp-hover">Stop</span></button>`;
+      playBtn = `
+        <button class="card-play running" title="Running · Click to stop" data-id="${sid}">
+          <span class="cp-running-view">
+            <span class="running-pulse-dot"></span>
+            <span class="card-play-label is-running-label">Running</span>
+          </span>
+          <span class="cp-stop-view">
+            <svg class="stop-svg-icon" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="2.5"/>
+            </svg>
+            <span class="card-play-label is-stop-label">Stop</span>
+          </span>
+        </button>`;
     } else {
-      playBtn = `<button class="card-play"><span class="cp-default">▶</span><span class="cp-hover">▶ Play</span></button>`;
+      playBtn = `
+        <button class="card-play" title="Launch ${esc(g.name)}" data-id="${sid}">
+          <svg class="play-svg-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+            <path d="M7 4.5v15a1 1 0 0 0 1.55.83l12-7.5a1 1 0 0 0 0-1.66l-12-7.5A1 1 0 0 0 7 4.5z"/>
+          </svg>
+          <span class="card-play-label">Play</span>
+        </button>`;
     }
   }
 
@@ -664,7 +745,19 @@ function updateTrackingBadge(gameId, sessionMins) {
   const playBtn = card.querySelector('.card-play');
   if (playBtn && !playBtn.classList.contains('running')) {
     playBtn.classList.add('running');
-    playBtn.innerHTML = '<span class="cp-default"><span class="running-dot"></span> Running</span><span class="cp-hover">Stop</span>';
+    playBtn.title = 'Running · Click to stop';
+    playBtn.innerHTML = `
+      <span class="cp-running-view">
+        <span class="running-pulse-dot"></span>
+        <span class="card-play-label is-running-label">Running</span>
+      </span>
+      <span class="cp-stop-view">
+        <svg class="stop-svg-icon" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
+          <rect x="5" y="5" width="14" height="14" rx="2.5"/>
+        </svg>
+        <span class="card-play-label is-stop-label">Stop</span>
+      </span>
+    `;
   }
 }
 
@@ -1204,32 +1297,59 @@ function closeGamePage() {
   currentGamePageId = null;
 }
 
+function parseRatingInput(val) {
+  if (val === undefined || val === null) return 0;
+  const s = String(val).trim().toLowerCase();
+  if (!s) return 0;
+  if (s === 'peak' || s === 'goated' || s === 'goat') return 10;
+  const num = parseFloat(s);
+  if (isNaN(num) || num <= 0) return 0;
+  return Math.round(Math.min(10, num) * 10) / 10;
+}
+
 function updateRatingDisplay(rating) {
   const btn = document.getElementById('gp-rate-btn');
+  if (!btn) return;
   btn.className = 'gp-rate-btn';
-  if (rating) {
-    btn.textContent = `${rating}/10`;
+  const num = parseFloat(rating);
+  if (!isNaN(num) && num > 0) {
     btn.classList.add('has-rating');
-    if (rating <= 3) btn.classList.add('score-low');
-    else if (rating <= 5) btn.classList.add('score-mid');
-    else if (rating <= 7) btn.classList.add('score-ok');
-    else if (rating <= 9) btn.classList.add('score-high');
-    else btn.classList.add('score-top');
+    if (num >= 10) {
+      btn.innerHTML = `
+        <svg class="peak-crown-icon" viewBox="0 0 24 24" width="13" height="13" fill="#fde047" aria-hidden="true">
+          <path d="M2.5 17.5h19v2.2a.8.8 0 0 1-.8.8H3.3a.8.8 0 0 1-.8-.8v-2.2z"/>
+          <path d="M3.5 16l1.2-8.8 4.3 4.2 3-7.4 3 7.4 4.3-4.2 1.2 8.8H3.5z"/>
+          <circle cx="12" cy="3" r="1.3" fill="#fffbeb"/>
+          <circle cx="4.7" cy="6.2" r="1.1" fill="#fffbeb"/>
+          <circle cx="19.3" cy="6.2" r="1.1" fill="#fffbeb"/>
+        </svg>
+        <span>PEAK</span>
+      `;
+      btn.classList.add('score-top', 'score-peak');
+    } else {
+      btn.textContent = `★ ${num % 1 === 0 ? num : num.toFixed(1)}`;
+      if (num < 6) btn.classList.add('score-low');
+      else if (num < 8) btn.classList.add('score-mid');
+      else btn.classList.add('score-high');
+    }
   } else {
-    btn.textContent = 'Rate this game';
+    btn.textContent = 'Rate Game';
   }
 }
 
-function saveRatingFromInput() {
-  const raw = parseFloat(document.getElementById('gp-rate-input').value);
-  const rating = isNaN(raw) ? 0 : Math.round(Math.min(10, Math.max(0, raw)) * 10) / 10; // clamp 0-10, 1 decimal
-  setGameRating(currentGamePageId, rating);
+async function saveRatingFromInput() {
+  const input = document.getElementById('gp-rate-input');
+  if (!input) return;
+  const rating = parseRatingInput(input.value);
+  await setGameRating(currentGamePageId, rating);
   cancelRatingInput();
 }
 
 function cancelRatingInput() {
-  document.getElementById('gp-rate-btn').style.display = '';
-  document.getElementById('gp-rate-input-wrap').style.display = 'none';
+  const btn = document.getElementById('gp-rate-btn');
+  const wrap = document.getElementById('gp-rate-input-wrap');
+  if (btn) btn.style.display = '';
+  if (wrap) wrap.style.display = 'none';
 }
 
 async function setGameRating(id, rating) {
@@ -1237,8 +1357,97 @@ async function setGameRating(id, rating) {
   if (!g) return;
   g.rating = rating || 0;
   await window.api.saveGames(games);
-  updateRatingDisplay(g.rating);
-  render();
+  if (currentGamePageId && String(currentGamePageId) === String(id)) {
+    updateRatingDisplay(g.rating);
+  }
+  updateCardRatingBadge(id);
+  if (g.rating >= 10) toast(`"${g.name}" rated PEAK! ★`);
+  else if (g.rating > 0) toast(`"${g.name}" rated ★ ${g.rating}`);
+  else toast(`Rating cleared for "${g.name}"`);
+}
+
+function updateCardRatingBadge(id) {
+  const card = document.querySelector(`.game-card[data-id="${id}"]`);
+  if (!card) return;
+  const g = games.find(x => String(x.id) === String(id));
+  if (!g) return;
+
+  const wrap = card.querySelector('.card-rating-wrap');
+  if (!wrap) return;
+
+  const badgeInfo = buildRatingBadgeHtml(g);
+  wrap.className = `card-rating-wrap ${badgeInfo.isPeak ? 'is-peak-wrap' : ''}`;
+  wrap.innerHTML = badgeInfo.html;
+
+  const btn = wrap.querySelector('.card-rating, .card-peak-badge');
+  if (btn) {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openCardRatingInput(card, id);
+    });
+  }
+}
+
+function openCardRatingInput(card, id) {
+  const wrap = card.querySelector('.card-rating-wrap');
+  if (!wrap || wrap.querySelector('.rating-typing-pill')) return;
+
+  const g = games.find(x => String(x.id) === String(id));
+  const currentVal = g && g.rating ? (g.rating >= 10 ? 'PEAK' : g.rating) : '';
+  wrap.classList.add('editing-peak');
+
+  wrap.innerHTML = `
+    <div class="rating-typing-pill" data-id="${id}">
+      <span class="rating-typing-star">★</span>
+      <input type="text" class="rating-typing-input" value="${currentVal}" placeholder="1-10" maxlength="6" spellcheck="false" />
+      <button class="rating-typing-save" title="Save">✓</button>
+    </div>
+  `;
+
+  const pill = wrap.querySelector('.rating-typing-pill');
+  const input = pill.querySelector('.rating-typing-input');
+  const saveBtn = pill.querySelector('.rating-typing-save');
+
+  pill.addEventListener('click', e => e.stopPropagation());
+  pill.addEventListener('mousedown', e => e.stopPropagation());
+
+  let committed = false;
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const parsed = parseRatingInput(input.value);
+    await setGameRating(id, parsed);
+  };
+
+  const cancel = () => {
+    if (committed) return;
+    committed = true;
+    updateCardRatingBadge(id);
+  };
+
+  saveBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    commit();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.stopPropagation();
+      commit();
+    } else if (e.key === 'Escape') {
+      e.stopPropagation();
+      cancel();
+    }
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (!committed) commit();
+    }, 150);
+  });
+
+  input.focus();
+  input.select();
 }
 
 function renderPerfAnalysis(el, perf) {
@@ -1373,6 +1582,15 @@ async function confirmDelete() {
   render();
 }
 
+// Corner Radius Helper (proportionally scales UI rounding across cards, modals, and inputs)
+function applyCornerRadius(val) {
+  const r = parseInt(val, 10);
+  const radius = isNaN(r) ? 14 : r;
+  document.documentElement.style.setProperty('--radius-lg', `${radius}px`);
+  document.documentElement.style.setProperty('--radius-md', `${Math.max(0, Math.round(radius * 0.7))}px`);
+  document.documentElement.style.setProperty('--radius-sm', `${Math.max(0, Math.round(radius * 0.42))}px`);
+}
+
 // Custom Theme
 function applyCustomTheme(colors) {
   const bg = colors ? colors.bg : document.getElementById('custom-bg').value;
@@ -1381,8 +1599,6 @@ function applyCustomTheme(colors) {
   const accent = colors ? colors.accent : document.getElementById('custom-accent').value;
   const text = colors ? colors.text : document.getElementById('custom-text').value;
   const border = colors && colors.border ? colors.border : (document.getElementById('custom-border') ? document.getElementById('custom-border').value : '#1e2130');
-  const glow = colors && colors.glow !== undefined ? colors.glow : (document.getElementById('custom-glow') ? document.getElementById('custom-glow').value : 50);
-  const radius = colors && colors.radius !== undefined ? colors.radius : (document.getElementById('custom-radius') ? document.getElementById('custom-radius').value : 14);
 
   document.documentElement.removeAttribute('data-theme');
   document.documentElement.style.setProperty('--bg-base', bg);
@@ -1394,23 +1610,10 @@ function applyCustomTheme(colors) {
   document.documentElement.style.setProperty('--text-primary', text);
   document.documentElement.style.setProperty('--border', hexToRgba(border, 0.5));
   document.documentElement.style.setProperty('--border-hover', border);
-  document.documentElement.style.setProperty('--radius-lg', `${radius}px`);
 
-  // We handle glow intensity using a CSS variable but currently the card uses box-shadow directly.
-  // We can inject a style tag for the hover shadow to respect the glow intensity.
-  let styleTag = document.getElementById('custom-theme-styles');
-  if (!styleTag) {
-    styleTag = document.createElement('style');
-    styleTag.id = 'custom-theme-styles';
-    document.head.appendChild(styleTag);
-  }
-  const glowOpacity = glow / 100;
-  styleTag.innerHTML = `
-    .game-card:hover { 
-      border-color: ${hexToRgba(accent, Math.min(1, glowOpacity + 0.2))} !important;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 30px ${hexToRgba(accent, glowOpacity)} !important; 
-    }
-  `;
+  // Remove legacy custom-theme-styles tag if it exists so it doesn't override global glow CSS
+  const oldStyleTag = document.getElementById('custom-theme-styles');
+  if (oldStyleTag) oldStyleTag.remove();
 
   // Update the custom theme preview swatch
   const preview = document.getElementById('custom-theme-preview');
@@ -1471,10 +1674,6 @@ async function openSettings(targetTab = 'general') {
       document.getElementById('custom-text-hex').value = config.customTheme.text || '#e8eaf0';
       document.getElementById('custom-border').value = config.customTheme.border || '#1e2130';
       document.getElementById('custom-border-hex').value = config.customTheme.border || '#1e2130';
-      document.getElementById('custom-glow').value = config.customTheme.glow !== undefined ? config.customTheme.glow : 50;
-      document.getElementById('glow-value').textContent = document.getElementById('custom-glow').value + '%';
-      document.getElementById('custom-radius').value = config.customTheme.radius !== undefined ? config.customTheme.radius : 14;
-      document.getElementById('radius-value').textContent = document.getElementById('custom-radius').value + 'px';
     }
   } else {
     document.getElementById('custom-theme-builder').style.display = 'none';
@@ -1488,6 +1687,12 @@ async function openSettings(targetTab = 'general') {
   const gridCols = config.gridColumns || 8;
   document.getElementById('grid-size-slider').value = gridCols;
   document.getElementById('grid-size-value').textContent = gridCols === 8 ? '8 Columns (Default)' : `${gridCols} Columns`;
+
+  const radiusVal = config.cornerRadius !== undefined ? config.cornerRadius : (config.radius !== undefined ? config.radius : 14);
+  const cornerRadiusSlider = document.getElementById('corner-radius-slider');
+  if (cornerRadiusSlider) cornerRadiusSlider.value = radiusVal;
+  const cornerRadiusValue = document.getElementById('radius-value');
+  if (cornerRadiusValue) cornerRadiusValue.textContent = `${radiusVal}px`;
   
   document.getElementById('settings-noise').checked = config.noise !== false;
   document.getElementById('settings-animations').checked = config.animations !== false;
@@ -1525,15 +1730,19 @@ async function saveSettings() {
       card: document.getElementById('custom-card').value,
       accent: document.getElementById('custom-accent').value,
       text: document.getElementById('custom-text').value,
-      border: document.getElementById('custom-border').value,
-      glow: document.getElementById('custom-glow').value,
-      radius: document.getElementById('custom-radius').value
+      border: document.getElementById('custom-border').value
     };
   }
   
   const gridColsVal = parseInt(document.getElementById('grid-size-slider').value, 10) || 8;
   config.gridColumns = gridColsVal;
   document.documentElement.style.setProperty('--grid-columns', gridColsVal);
+
+  const cornerRadiusSlider = document.getElementById('corner-radius-slider');
+  if (cornerRadiusSlider) {
+    config.cornerRadius = parseInt(cornerRadiusSlider.value, 10);
+    applyCornerRadius(config.cornerRadius);
+  }
   config.noise = document.getElementById('settings-noise').checked;
   config.animations = document.getElementById('settings-animations').checked;
   config.autoCheckUpdates = document.getElementById('settings-auto-update').checked;
@@ -2381,13 +2590,14 @@ function initAppUpdater() {
   const relLink = document.getElementById('link-github-releases');
   if (relLink) relLink.onclick = (e) => { e.preventDefault(); window.api.openExternal('https://github.com/itzSornet/Gamevault/releases'); };
 
-  // Check for updates button in Settings
   if (checkBtn) {
     checkBtn.onclick = () => {
       isManualUpdateCheck = true;
-      spinner.style.display = 'inline-block';
-      btnText.textContent = 'Checking...';
-      statusEl.textContent = 'Contacting GitHub releases...';
+      if (spinner) spinner.style.display = 'inline-flex';
+      if (btnText) btnText.textContent = 'Checking...';
+      if (statusEl) statusEl.textContent = 'Contacting GitHub releases...';
+      checkBtn.style.pointerEvents = 'none';
+      checkBtn.style.opacity = '0.75';
       window.api.checkForUpdates(true);
     };
   }
@@ -2431,13 +2641,14 @@ function initAppUpdater() {
 
   // IPC Event Listeners
   window.api.onUpdateChecking(() => {
-    if (spinner) spinner.style.display = 'inline-block';
+    if (spinner) spinner.style.display = 'inline-flex';
     if (btnText) btnText.textContent = 'Checking...';
     if (statusEl) statusEl.textContent = 'Checking for new releases...';
   });
 
   window.api.onUpdateAvailable((info) => {
     currentAvailableUpdate = info;
+    if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
     if (statusEl) statusEl.innerHTML = `<span style="color:#10b981;font-weight:600;">Update v${esc(info.version)} available!</span>`;
@@ -2484,6 +2695,7 @@ function initAppUpdater() {
   });
 
   window.api.onUpdateNotAvailable((info) => {
+    if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
     if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.0.0'}).`;
@@ -2515,6 +2727,7 @@ function initAppUpdater() {
   });
 
   window.api.onUpdateError((err) => {
+    if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
     if (statusEl) statusEl.textContent = 'Update check failed. Check internet connection.';

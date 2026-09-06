@@ -7,7 +7,7 @@
 <title>GameVault</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Alex+Brush&family=Caveat:wght@700&family=Great+Vibes&family=MonteCarlo&family=Mrs+Saint+Delafield&family=Pinyon+Script&family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -187,11 +187,11 @@
           <span class="gp-source" id="gp-source"></span>
         </div>
         <div class="gp-rating" id="gp-rating">
-          <button class="gp-rate-btn" id="gp-rate-btn">Rate this game</button>
-          <div class="gp-rate-input-wrap" id="gp-rate-input-wrap" style="display:none">
-            <input type="number" class="gp-rate-input" id="gp-rate-input" min="0" max="10" step="0.1" placeholder="0-10" />
-            <button class="gp-rate-save" id="gp-rate-save">✓</button>
-            <button class="gp-rate-cancel" id="gp-rate-cancel">✕</button>
+          <button class="gp-rate-btn" id="gp-rate-btn">Rate Game</button>
+          <div class="rating-typing-pill" id="gp-rate-input-wrap" style="display:none;">
+            <span class="rating-typing-star">★</span>
+            <input type="text" class="rating-typing-input" id="gp-rate-input" placeholder="1-10" maxlength="6" spellcheck="false" />
+            <button class="rating-typing-save" id="gp-rate-save" title="Save Rating">✓</button>
           </div>
         </div>
         <div class="gp-actions">
@@ -650,16 +650,6 @@
                   </div>
                 </div>
               </div>
-              <div class="custom-sliders" style="margin-top:12px;">
-                <div class="field">
-                  <label class="field-label">Glow Intensity <span class="slider-value" id="glow-value">50%</span></label>
-                  <input type="range" class="styled-slider" id="custom-glow" min="0" max="100" value="50" />
-                </div>
-                <div class="field" style="margin-top:10px;">
-                  <label class="field-label">Card Radius <span class="slider-value" id="radius-value">14px</span></label>
-                  <input type="range" class="styled-slider" id="custom-radius" min="0" max="24" value="14" />
-                </div>
-              </div>
             </div>
           </div>
 
@@ -669,6 +659,11 @@
               <label class="field-label">Cards per Row <span class="slider-value" id="grid-size-value">8 Columns (Default)</span></label>
               <input type="range" class="styled-slider" id="grid-size-slider" min="4" max="12" value="8" step="1" />
               <div class="slider-labels"><span>4 (Large)</span><span style="color:var(--accent);font-weight:600;text-align:center;">8 (Default)</span><span style="text-align:right;">12 (Small)</span></div>
+            </div>
+            <div class="field" style="margin-top:14px;">
+              <label class="field-label">Corner Radius <span class="slider-value" id="radius-value">14px</span></label>
+              <input type="range" class="styled-slider" id="corner-radius-slider" min="0" max="28" value="14" step="1" />
+              <div class="slider-labels"><span>0px (Sharp)</span><span style="color:var(--accent);font-weight:600;text-align:center;">14px (Default)</span><span style="text-align:right;">28px (Round)</span></div>
             </div>
           </div>
 
@@ -729,8 +724,12 @@
                 <div style="font-size: 13px; font-weight: 500; color: #fff;">Check for Updates</div>
                 <div id="settings-update-status" style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">You are currently on the latest version.</div>
               </div>
-              <button class="btn-secondary" id="settings-btn-check-update" style="white-space: nowrap; display: flex; align-items: center; gap: 6px;">
-                <span id="update-check-spinner" style="display:none; animation: spin 1s linear infinite;">⟳</span>
+              <button class="btn-secondary" id="settings-btn-check-update" style="white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 110px; height: 32px;">
+                <span id="update-check-spinner" class="btn-spinner" style="display:none;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                </span>
                 <span id="update-check-btn-text">Check Now</span>
               </button>
             </div>

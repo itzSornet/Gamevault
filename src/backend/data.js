@@ -72,7 +72,8 @@ function loadConfig() {
     aiProvider: null,
     aiKey: '',
     aiCustomEndpoint: '',
-    aiCustomModel: ''
+    aiCustomModel: '',
+    cornerRadius: 14
   };
   try { 
     if (fs.existsSync(CONFIG_PATH)) {

@@ -341,21 +341,208 @@ body{font-family:'Inter',sans-serif;color:var(--text-primary);font-size:14px;lin
 .card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:4px}
 .card-name{font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;color:#fff;line-height:1.25;flex:1;text-shadow:0 1px 3px rgba(0,0,0,0.8);word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 
-/* Play/Stop button on card */
-.card-play{position:absolute;bottom:54px;right:8px;z-index:5;border:none;border-radius:50%;width:30px;height:30px;background:rgba(29,158,117,0.9);color:#fff;font-size:12px;font-weight:600;cursor:pointer;opacity:0;transition:all .2s;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);box-shadow:0 2px 8px rgba(0,0,0,0.4)}
-.game-card:hover .card-play{opacity:1}
-.card-play:hover{transform:scale(1.1);background:rgba(29,158,117,1)}
-.card-play .cp-hover{display:none}
-.card-play:hover .cp-default{display:none}
-.card-play:hover .cp-hover{display:inline}
-.card-play:hover{border-radius:14px;width:auto;padding:0 12px}
-/* Running state */
-.card-play.running{opacity:1;border-radius:14px;width:auto;padding:0 10px;font-size:10px;gap:0}
-.card-play.running:hover{background:rgba(231,76,60,0.9)}
-.card-play.running .cp-hover{display:none}
-.card-play.running .cp-default{display:inline}
-.card-play.running:hover .cp-default{display:none}
-.card-play.running:hover .cp-hover{display:inline}
+/* 🎮 Luminous Emerald Glass Play/Stop Action Button (Smooth Glass) */
+.card-play {
+  position: absolute;
+  bottom: 74px;
+  right: 10px;
+  z-index: 5;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 20px;
+  height: 32px;
+  width: 32px;
+  padding: 0;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.06) 45%, transparent 60%),
+    linear-gradient(180deg, #10b981 0%, #059669 58%, #047857 100%);
+  color: #ffffff;
+  cursor: pointer;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5), 0 0 14px rgba(16, 185, 129, 0.45), inset 0 1px 1.5px rgba(255, 255, 255, 0.65), inset 0 -1.5px 3px rgba(0, 0, 0, 0.25);
+  transform: translateY(6px) scale(0.88) translateZ(0);
+  transition:
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.2s ease,
+    width 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    padding 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    gap 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.2s,
+    border-color 0.2s,
+    box-shadow 0.25s;
+  outline: none;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+/* Smooth curved glass dome specular highlight */
+.card-play::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  right: 2px;
+  height: 46%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border-radius: 18px 18px 50% 50% / 14px 14px 22% 22%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Card hover: floats into view smoothly */
+.game-card:hover .card-play {
+  opacity: 1;
+  transform: translateY(0) scale(1) translateZ(0);
+}
+
+/* Hover on play button itself: expands into a pill with label */
+.card-play:hover {
+  width: 76px;
+  padding: 0 11px 0 9px;
+  gap: 5px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.1) 45%, transparent 62%),
+    linear-gradient(180deg, #34d399 0%, #10b981 55%, #059669 100%);
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.65), 0 0 20px rgba(52, 211, 153, 0.45), inset 0 1px 2px rgba(255, 255, 255, 0.8), inset 0 -2px 3px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px) scale(1.04) translateZ(0);
+}
+
+/* Active click press micro-compression */
+.card-play:active {
+  transform: translateY(0) scale(0.93) translateZ(0);
+  transition: transform 0.08s ease;
+}
+
+/* Custom Play Icon */
+.card-play .play-svg-icon {
+  position: relative;
+  z-index: 3;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  fill: #ffffff;
+  color: #ffffff;
+  margin-left: 1.5px;
+  transition: transform 0.2s ease, margin 0.2s ease;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+
+.card-play:hover .play-svg-icon {
+  transform: scale(1.08);
+  margin-left: 0;
+}
+
+/* Label text smoothly reveals horizontally on expansion */
+.card-play .card-play-label {
+  position: relative;
+  z-index: 3;
+  font-family: 'Space Grotesk', 'Outfit', -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.26s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.card-play:hover .card-play-label {
+  max-width: 44px;
+  opacity: 1;
+}
+
+/* ── Running / Stop State ── */
+.card-play.running {
+  opacity: 1;
+  width: auto;
+  min-width: 80px;
+  padding: 0 11px;
+  background: rgba(10, 26, 20, 0.94);
+  border-color: rgba(16, 185, 129, 0.6);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 14px rgba(16, 185, 129, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+  transform: translateY(0) scale(1) translateZ(0);
+}
+
+.card-play.running .cp-running-view {
+  position: relative;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6ee7b7;
+}
+
+.card-play.running .cp-stop-view {
+  position: relative;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  gap: 5px;
+  color: #ffffff;
+}
+
+.card-play.running .is-running-label,
+.card-play.running .is-stop-label {
+  max-width: none !important;
+  opacity: 1 !important;
+  font-size: 11px;
+}
+
+/* Pulse radar dot for running */
+.card-play .running-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+  display: inline-block;
+  animation: playDotPulse 1.6s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes playDotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 6px #10b981; }
+  50% { opacity: 0.5; transform: scale(0.75); box-shadow: 0 0 2px #10b981; }
+}
+
+/* Hovering running state turns into Glass Crimson Stop button */
+.card-play.running:hover {
+  width: auto;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.08) 45%, transparent 62%),
+    linear-gradient(180deg, #f87171 0%, #ef4444 60%, #dc2626 100%);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.65), 0 0 16px rgba(239, 68, 68, 0.4), inset 0 1px 1.5px rgba(255, 255, 255, 0.7);
+  transform: translateY(-2px) scale(1.04) translateZ(0);
+}
+
+.card-play.running:hover .cp-running-view {
+  display: none;
+}
+
+.card-play.running:hover .cp-stop-view {
+  display: inline-flex;
+}
+
+.card-play .stop-svg-icon {
+  position: relative;
+  z-index: 3;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  fill: #ffffff;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
 
 .card-meta{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .status-badge{font-size:9.5px;font-weight:700;padding:1.5px 6px;border-radius:20px;letter-spacing:.5px;text-transform:uppercase;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
@@ -663,15 +850,17 @@ body{font-family:'Inter',sans-serif;color:var(--text-primary);font-size:14px;lin
 .gp-hours{font-size:13px;color:var(--text-secondary);font-weight:500}
 .gp-source{font-size:12px;color:var(--text-muted);background:rgba(255,255,255,0.05);padding:2px 8px;border-radius:10px}
 .gp-rating{display:flex;align-items:center;gap:8px;margin:4px 0}
-.gp-rate-btn{border:1px solid var(--border);border-radius:20px;background:rgba(255,255,255,0.04);color:var(--text-secondary);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;padding:5px 14px;cursor:pointer;transition:all .15s}
-.gp-rate-btn:hover{background:rgba(255,255,255,0.08);border-color:var(--border-hover);color:var(--text-primary)}
+.gp-rate-btn{border:1px solid var(--border);border-radius:20px;background:rgba(255,255,255,0.03);color:var(--text-secondary);font-family:'Plus Jakarta Sans', 'Outfit', -apple-system, sans-serif;font-size:11.5px;font-weight:700;padding:5px 14px;cursor:pointer;transition:all .28s cubic-bezier(0.2, 0.9, 0.3, 1);letter-spacing:0.3px;display:inline-flex;align-items:center;gap:5px}
+.gp-rate-btn:hover{background:rgba(255,255,255,0.08);border-color:var(--border-hover);color:var(--text-primary);transform:scale(1.05)}
+.gp-rate-btn:active{transform:scale(0.94);transition:transform .1s ease}
 .gp-rate-btn.has-rating{color:#fff;border-color:transparent}
-.gp-rate-btn.score-low{background:rgba(231,76,60,0.25);color:#e74c3c}
-.gp-rate-btn.score-mid{background:rgba(230,126,34,0.25);color:#e67e22}
-.gp-rate-btn.score-ok{background:rgba(241,196,15,0.2);color:#f1c40f}
-.gp-rate-btn.score-high{background:rgba(46,204,113,0.2);color:#2ecc71}
-.gp-rate-btn.score-top{background:linear-gradient(135deg,rgba(88,101,242,0.3),rgba(139,92,246,0.3));color:#a78bfa}
-.gp-rate-input-wrap{display:flex;align-items:center;gap:4px}
+.gp-rate-btn.score-low{background:rgba(18,22,30,0.92);border:1px solid rgba(148,163,184,0.35);color:#cbd5e1;box-shadow:0 2px 8px rgba(0,0,0,0.3)}
+.gp-rate-btn.score-mid{background:rgba(22,20,14,0.92);border:1px solid rgba(245,158,11,0.45);color:#fde047;box-shadow:0 2px 8px rgba(0,0,0,0.3),0 0 8px rgba(245,158,11,0.15)}
+.gp-rate-btn.score-high{background:rgba(14,24,18,0.92);border:1px solid rgba(34,197,94,0.45);color:#4ade80;box-shadow:0 2px 8px rgba(0,0,0,0.3),0 0 8px rgba(34,197,94,0.15)}
+.gp-rate-btn.score-top,.gp-rate-btn.score-peak{background:rgba(22,18,12,0.94);border:1px solid rgba(245,158,11,0.6);color:#fde047;font-weight:800;letter-spacing:1px;box-shadow:0 3px 12px rgba(0,0,0,0.45),0 0 10px rgba(245,158,11,0.25)}
+.gp-rate-btn.score-top:hover,.gp-rate-btn.score-peak:hover{filter:brightness(1.15);box-shadow:0 4px 16px rgba(0,0,0,0.5),0 0 14px rgba(245,158,11,0.4);transform:scale(1.05)}
+.gp-rate-input-wrap{display:flex;align-items:center;gap:4px;animation:gpRateSlideIn 0.32s cubic-bezier(0.16, 1, 0.3, 1)}
+@keyframes gpRateSlideIn{from{opacity:0;transform:scale(0.9) translateX(-6px)}to{opacity:1;transform:scale(1) translateX(0)}}
 .gp-rate-input{width:60px;background:var(--bg-input);border:1px solid var(--border-hover);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'Inter',sans-serif;font-size:13px;font-weight:600;padding:4px 8px;text-align:center;outline:none;-moz-appearance:textfield}
 .gp-rate-input::-webkit-inner-spin-button,.gp-rate-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .gp-rate-input:focus{border-color:var(--accent)}
@@ -724,9 +913,270 @@ body{font-family:'Inter',sans-serif;color:var(--text-primary);font-size:14px;lin
 .ctx-danger:hover{background:rgba(231,76,60,0.15);color:var(--danger)}
 .ctx-divider{height:1px;background:var(--border);margin:4px 0}
 
-/* Rating badge on card */
-.card-rating{position:absolute;top:6px;left:6px;font-size:11px;background:rgba(0,0,0,0.75);padding:2px 7px;border-radius:8px;font-weight:700;backdrop-filter:blur(4px);letter-spacing:.3px}
-.card-rating.score-low{color:#e74c3c}.card-rating.score-mid{color:#f1c40f}.card-rating.score-high{color:#2ecc71}.card-rating.score-top{color:#8b5cf6}
+/* Rating badge on card (Centered at top of card) */
+.card-rating-wrap {
+  position: absolute;
+  top: 9px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 6;
+  pointer-events: none;
+  transition: top 0.2s ease;
+}
+.card-rating-wrap.is-peak-wrap {
+  top: 9px;
+}
+.card-rating-wrap.is-peak-wrap:has(.rating-typing-pill),
+.card-rating-wrap.is-peak-wrap.editing-peak {
+  top: 9px;
+}
+
+/* 🌟 Modern Horizontal Rounded Badge Strip for PEAK (Clean & Non-Skeuomorphic) */
+.card-peak-badge {
+  pointer-events: auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 25px;
+  padding: 3px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  outline: none;
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  background: rgba(20, 16, 12, 0.92);
+  color: #fde047;
+  font-family: 'Space Grotesk', 'Outfit', -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.5), 0 0 10px rgba(245, 158, 11, 0.22);
+  user-select: none;
+  box-sizing: border-box;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  transition: transform 0.26s cubic-bezier(0.2, 0.9, 0.3, 1), background 0.18s, border-color 0.18s, box-shadow 0.26s, color 0.18s;
+}
+.card-peak-badge:hover {
+  transform: scale(1.06) translateZ(0);
+  background: rgba(28, 22, 14, 0.96);
+  border-color: rgba(251, 191, 36, 0.85);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), 0 0 14px rgba(245, 158, 11, 0.35);
+  color: #ffffff;
+}
+.card-peak-badge:active {
+  transform: scale(0.93) translateZ(0);
+  transition: transform 0.1s ease;
+}
+.card-peak-badge .peak-crown-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  color: #fbbf24;
+  fill: #fbbf24;
+  transition: transform 0.22s ease;
+}
+.card-peak-badge:hover .peak-crown-icon {
+  transform: scale(1.15);
+}
+.card-peak-badge .peak-label {
+  font-family: 'Space Grotesk', 'Outfit', -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+/* Regular Rating Pill (Solid, High-Contrast & Rock-Solid No Flicker) */
+.card-rating {
+  pointer-events: auto;
+  font-family: 'Plus Jakarta Sans', 'Outfit', -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(15, 18, 26, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+  padding: 3px 10px;
+  min-height: 24px;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+  transition: transform 0.26s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.18s ease, background 0.18s, border-color 0.18s, box-shadow 0.26s, color 0.18s;
+  user-select: none;
+  outline: none;
+  color: #fff;
+  box-sizing: border-box;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+.card-rating:hover {
+  transform: scale(1.06) translateZ(0);
+}
+.card-rating:active {
+  transform: scale(0.93) translateZ(0);
+  transition: transform 0.1s ease;
+}
+/* Unrated hover appearance - pops smoothly without flicker */
+.card-rating.unrated {
+  opacity: 0;
+  pointer-events: none;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(15, 18, 26, 0.88);
+  border-color: rgba(255, 255, 255, 0.16);
+  font-size: 11px;
+  padding: 3px 11px;
+  min-height: 24px;
+  transform: scale(0.9) translateZ(0);
+}
+.game-card:hover .card-rating.unrated {
+  opacity: 1;
+  transform: scale(1) translateZ(0);
+  pointer-events: auto;
+}
+.game-card:hover .card-rating.unrated:hover {
+  transform: scale(1.06) translateZ(0);
+  background: rgba(88, 101, 242, 0.85);
+  border-color: rgba(129, 140, 248, 0.7);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(88, 101, 242, 0.45);
+}
+
+/* Low Score (1.0 - 5.9): Titanium Slate / Silver */
+.card-rating.score-low {
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(18, 22, 30, 0.90);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+}
+.card-rating.score-low:hover {
+  background: rgba(28, 34, 46, 0.96);
+  border-color: rgba(203, 213, 225, 0.55);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+
+/* Mid Score (6.0 - 7.9): Honey Amber */
+.card-rating.score-mid {
+  color: #fde047;
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(22, 20, 14, 0.90);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4), 0 0 8px rgba(245, 158, 11, 0.15);
+}
+.card-rating.score-mid:hover {
+  background: rgba(32, 28, 16, 0.96);
+  border-color: rgba(251, 191, 36, 0.7);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 12px rgba(245, 158, 11, 0.3);
+  color: #fff;
+}
+
+/* High Score (8.0 - 9.9): Emerald Green */
+.card-rating.score-high {
+  color: #4ade80;
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(14, 24, 18, 0.90);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4), 0 0 8px rgba(34, 197, 94, 0.15);
+}
+.card-rating.score-high:hover {
+  background: rgba(18, 34, 24, 0.96);
+  border-color: rgba(74, 222, 128, 0.7);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 12px rgba(34, 197, 94, 0.3);
+  color: #fff;
+}
+
+/* PEAK Score Pill Fallback (Used when rendered as a pill, e.g. list view) */
+.card-rating.score-top,
+.card-rating.score-peak {
+  color: #fde047;
+  background: rgba(22, 18, 12, 0.92);
+  border-color: rgba(245, 158, 11, 0.55);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45), 0 0 10px rgba(245, 158, 11, 0.2);
+  letter-spacing: 1px;
+  font-weight: 800;
+}
+
+/* Inline typing pill for quick rating (Silky, Slower, and Fluid Animation) */
+.rating-typing-pill {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(14, 17, 24, 0.94);
+  border: 1.5px solid var(--accent);
+  border-radius: 20px;
+  padding: 2px 6px 2px 10px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.6), 0 0 12px rgba(88, 101, 242, 0.35);
+  animation: typingPillPop 0.34s cubic-bezier(0.16, 1, 0.3, 1);
+  height: 28px;
+  box-sizing: border-box;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+@keyframes typingPillPop {
+  0% { transform: scale(0.82) translateZ(0); opacity: 0; }
+  60% { opacity: 1; }
+  100% { transform: scale(1) translateZ(0); opacity: 1; }
+}
+.rating-typing-star {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+  animation: typingPillContentFade 0.28s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: 0.04s;
+}
+.rating-typing-input {
+  width: 44px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-family: 'Plus Jakarta Sans', 'Outfit', -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: center;
+  padding: 0;
+  animation: typingPillContentFade 0.28s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: 0.07s;
+}
+.rating-typing-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 500;
+}
+.rating-typing-save {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.15s;
+  padding: 0;
+  flex-shrink: 0;
+  animation: typingPillContentFade 0.28s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: 0.10s;
+}
+.rating-typing-save:hover {
+  transform: scale(1.12);
+  background: var(--accent-hover);
+}
+.rating-typing-save:active {
+  transform: scale(0.92);
+}
+@keyframes typingPillContentFade {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
 
 /* Lightbox Animation */
 @keyframes lightboxFadeIn {
@@ -958,6 +1408,12 @@ body{font-family:'Inter',sans-serif;color:var(--text-primary);font-size:14px;lin
 .game-grid.layout-list .game-card:hover .card-play { opacity: 1; }
 .game-grid.layout-list .game-card:hover .card-cover { transform: none; }
 .game-grid.layout-list .game-card:hover { transform: none; box-shadow: none; border-color: var(--border-hover); }
+.game-grid.layout-list .card-rating-wrap { position: relative; top: auto; left: auto; right: auto; margin-right: 12px; }
+.game-grid.layout-list .card-rating-wrap.is-peak-wrap { position: relative; top: auto; left: auto; right: auto; margin-right: 12px; }
+.game-grid.layout-list .card-rating-wrap.is-peak-wrap .card-peak-badge {
+  min-height: 24px;
+  padding: 2px 12px;
+}
 
 /* ── Tabbed Settings Layout ── */
 .settings-modal { width: 780px; max-width: calc(100vw - 40px); padding: 0; overflow: hidden; }
@@ -1044,3 +1500,23 @@ body{font-family:'Inter',sans-serif;color:var(--text-primary);font-size:14px;lin
 .btn-success { background: #10b981 !important; border-color: #10b981 !important; color: #fff !important; }
 .btn-success:hover { background: #059669 !important; border-color: #059669 !important; }
 
+/* Centered Button Spinner */
+.btn-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  animation: btnSpinnerRotate 0.85s linear infinite;
+}
+.btn-spinner svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+@keyframes btnSpinnerRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
