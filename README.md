@@ -4,7 +4,7 @@
   <p><strong>A modern, privacy-first personal game library manager, launcher, and playtime tracker.</strong></p>
 
   <p>
-    <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.2.0-blue.svg?style=flat-square" alt="Version 1.2.0" /></a>
+    <a href="https://github.com/itzSornet/Gamevault/releases"><img src="https://img.shields.io/badge/version-1.2.0-blue.svg?style=flat-square" alt="Version 1.2.0" /></a>
     <img src="https://img.shields.io/badge/platform-Windows-0078d7.svg?style=flat-square" alt="Platform: Windows" />
     <img src="https://img.shields.io/badge/electron-v29-47848f.svg?style=flat-square" alt="Electron" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License: MIT" />
@@ -20,11 +20,13 @@
 ## ✨ Features
 
 - **🎮 Unified Game Library**: Organize and launch all your games from one centralized vault — Steam, Epic Games, GOG, standalone executables, and emulated titles.
+- **🚀 Secondary Launcher Support**: Play games with custom launchers or performance wrappers while accurately tracking playtime on the true game process.
 - **🔍 Multi-Platform Library Scanner**: One-click detection for installed Steam and Epic Games titles, custom directory scanning, and deep filesystem heuristics.
-- **⏱️ Automated Playtime Tracking**: Background process monitor detects game launches automatically and logs play sessions down to the minute with 30-day activity breakdowns.
+- **⏱️ Automated Playtime Tracking**: Background process monitor detects game launches automatically and logs play sessions down to the minute with weekly breakdowns and 30-day activity logs.
 - **🤖 Hardware-Aware AI Advisor**: Bring your own API key (*OpenAI, Anthropic Claude, Google Gemini, DeepSeek, or custom endpoints*) for personalized recommendations and hardware performance estimation based on your CPU and GPU.
-- **🖼️ SteamGridDB Cover Art**: Automatic high-resolution 600×900 vertical covers and ultra-wide hero banner art integration.
-- **🎨 Custom Theming & Dynamic Grid**: Built-in curated themes (*Midnight, Cyberpunk, Crimson, Monochrome, Ocean, AMOLED, Sunset*) plus a full custom theme builder and configurable Cards-per-Row scaling (4 to 12 columns).
+- **🖼️ SteamGridDB Cover Art**: Automatic high-resolution vertical covers and ultra-wide hero banner art integration.
+- **🎨 Custom Theming & Dynamic Grid**: Built-in curated themes (*Default, Midnight, Cyberpunk, Crimson, Monochrome, Ocean, AMOLED, Sunset*) plus a full custom theme builder, corner radius slider, and configurable Cards-per-Row scaling (4 to 12 columns).
+- **🖱️ Modern Frosted-Glass Menus**: Dynamic ambient game glows, one-click "Open File Location", quick status switching, and sleek context menus.
 - **⚡ In-Game Overlay & Media Capture**: Access your library and game advisor in-game via global hotkey (`Shift+Alt+G`) with built-in screenshot and clip capture.
 
 ---
@@ -39,8 +41,8 @@
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/gamevault.git
-   cd gamevault
+   git clone https://github.com/itzSornet/Gamevault.git
+   cd Gamevault
    ```
 
 2. **Install dependencies:**
@@ -60,9 +62,9 @@
 GameVault is packaged using `electron-builder`:
 
 - **Windows NSIS Installer (`.exe`):**
-  ```bash
-  npm run build
-  ```
+   ```bash
+   npm run build
+   ```
 
 - **Portable Executable (`.exe`):**
   ```bash
@@ -88,7 +90,9 @@ All library data and preferences are saved locally on your device:
 %APPDATA%\gamevault\
 ├── games.json
 ├── config.json
-└── profile.json
+├── ai-profile.json
+├── artworks_cache/
+└── data_media/
 ```
 
 ---
