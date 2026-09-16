@@ -1,3 +1,4 @@
+// GameVault v1.1.1 - Main Process
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');

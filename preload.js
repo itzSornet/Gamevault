@@ -1,3 +1,4 @@
+// GameVault v1.1.1 - Preload Bridge
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {

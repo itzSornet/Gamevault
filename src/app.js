@@ -1,3 +1,4 @@
+// GameVault v1.1.1 - Renderer Application
 'use strict';
 
 // State
@@ -2667,7 +2668,7 @@ function initAppUpdater() {
 
     // Populate and open update modal
     document.getElementById('update-modal-title').textContent = info.releaseName || `GameVault v${info.version}`;
-    document.getElementById('update-current-ver').textContent = info.currentVersion ? `v${info.currentVersion}` : 'v1.1.0';
+    document.getElementById('update-current-ver').textContent = info.currentVersion ? `v${info.currentVersion}` : 'v1.1.1';
     document.getElementById('update-new-ver').textContent = `v${info.version}`;
     
     if (info.releaseDate) {
@@ -2710,7 +2711,7 @@ function initAppUpdater() {
     if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
-    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.1.0'}).`;
+    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.1.1'}).`;
     if (isManualUpdateCheck) {
       toast('You are already using the latest version of GameVault');
       isManualUpdateCheck = false;
