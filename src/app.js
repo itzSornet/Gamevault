@@ -1,4 +1,5 @@
-// GameVault v1.1.1 - Renderer Application
+// GameVault v1.2.0 - Renderer Application
+// Handles UI interactions, state management, and IPC communication
 'use strict';
 
 // State
@@ -145,13 +146,34 @@ async function boot() {
     };
   });
 
-  // Custom theme color pickers (sync color <-> hex inputs, and live-apply)
-  ['bg', 'sidebar', 'card', 'accent', 'text'].forEach(key => {
-    const colorInput = document.getElementById(`custom-${key}`);
-    const hexInput = document.getElementById(`custom-${key}-hex`);
+  // Custom theme color pickers (sync color <-> hex inputs, and live-apply with 3-digit hex support)
+  const bindColorHexSync = (colorInput, hexInput) => {
     if (!colorInput || !hexInput) return;
-    colorInput.addEventListener('input', () => { hexInput.value = colorInput.value; applyCustomTheme(); });
-    hexInput.addEventListener('input', () => { if (/^#[0-9a-f]{6}$/i.test(hexInput.value)) { colorInput.value = hexInput.value; applyCustomTheme(); } });
+    colorInput.addEventListener('input', () => {
+      hexInput.value = colorInput.value;
+      applyCustomTheme();
+    });
+    hexInput.addEventListener('input', () => {
+      const norm = normalizeHex(hexInput.value);
+      if (norm) {
+        colorInput.value = norm;
+        applyCustomTheme();
+      }
+    });
+    hexInput.addEventListener('blur', () => {
+      const norm = normalizeHex(hexInput.value);
+      if (norm) {
+        hexInput.value = norm;
+        colorInput.value = norm;
+        applyCustomTheme();
+      } else {
+        hexInput.value = colorInput.value;
+      }
+    });
+  };
+
+  ['bg', 'sidebar', 'card', 'accent', 'text'].forEach(key => {
+    bindColorHexSync(document.getElementById(`custom-${key}`), document.getElementById(`custom-${key}-hex`));
   });
 
   // Layout Picker
@@ -209,8 +231,7 @@ async function boot() {
   const borderHexInput = document.getElementById('custom-border-hex');
   const borderColorInput = document.getElementById('custom-border');
   if (borderColorInput && borderHexInput) {
-    borderColorInput.addEventListener('input', () => { borderHexInput.value = borderColorInput.value; applyCustomTheme(); });
-    borderHexInput.addEventListener('input', () => { if (/^#[0-9a-f]{6}$/i.test(borderHexInput.value)) { borderColorInput.value = borderHexInput.value; applyCustomTheme(); } });
+    bindColorHexSync(borderColorInput, borderHexInput);
   }
 
   // Sidebar Toggle
@@ -318,10 +339,62 @@ async function boot() {
   document.getElementById('modal-save').onclick   = saveGame;
   document.getElementById('modal-overlay').onclick = e => { if (e.target === e.currentTarget) closeModal(); };
   document.getElementById('exe-pick-btn').onclick  = pickExe;
+  const exeClearBtn = document.getElementById('exe-clear-btn');
+  if (exeClearBtn) {
+    exeClearBtn.onclick = () => {
+      document.getElementById('field-exe').value = '';
+      updateExeClearBtns();
+    };
+  }
+  const launcherPickBtn = document.getElementById('launcher-pick-btn');
+  if (launcherPickBtn) launcherPickBtn.onclick = pickLauncherExe;
+  const launcherClearBtn = document.getElementById('launcher-clear-btn');
+  if (launcherClearBtn) {
+    launcherClearBtn.onclick = () => {
+      document.getElementById('field-launcher').value = '';
+      updateExeClearBtns();
+    };
+  }
+  const hasLauncherToggle = document.getElementById('field-has-launcher');
+  if (hasLauncherToggle) {
+    hasLauncherToggle.onchange = (e) => {
+      const wrap = document.getElementById('launcher-field-wrap');
+      if (wrap) wrap.style.display = e.target.checked ? 'block' : 'none';
+      if (e.target.checked && !document.getElementById('field-launcher').value) {
+        document.getElementById('field-launcher').focus();
+      }
+      updateExeClearBtns();
+    };
+  }
   document.getElementById('cover-pick-btn').onclick = async () => {
     const dataUrl = await window.api.pickImage();
     if (dataUrl) { document.getElementById('field-cover').value = dataUrl; setCoverPreview(dataUrl); }
   };
+  const coverClearBtn = document.getElementById('cover-clear-btn');
+  if (coverClearBtn) {
+    coverClearBtn.onclick = () => {
+      document.getElementById('field-cover').value = '';
+      setCoverPreview('');
+    };
+  }
+
+  // Status Segmented Picker Click
+  document.querySelectorAll('.status-segment-pill').forEach(pill => {
+    pill.onclick = () => {
+      const st = pill.dataset.status;
+      document.getElementById('field-status').value = st;
+      syncStatusSegmentedPills(st);
+    };
+  });
+
+  // Platform Suggestion Chips Click
+  document.querySelectorAll('.platform-chip').forEach(chip => {
+    chip.onclick = () => {
+      const val = chip.dataset.val;
+      document.getElementById('field-source').value = val;
+      highlightPlatformChip(val);
+    };
+  });
 
   // SGDB search
   document.getElementById('sgdb-search').addEventListener('input', onSGDBInput);
@@ -366,7 +439,12 @@ async function boot() {
 
   // Game detail page
   document.getElementById('gp-back').onclick = closeGamePage;
-  document.getElementById('gp-launch').onclick = () => { if (currentGamePageId) launchGame(currentGamePageId); };
+  document.getElementById('gp-launch').onclick = () => {
+    if (!currentGamePageId) return;
+    const isRunning = liveTracking[String(currentGamePageId)] != null;
+    if (isRunning) stopGame(currentGamePageId);
+    else launchGame(currentGamePageId);
+  };
   document.getElementById('gp-edit').onclick = () => { const id = currentGamePageId; if (id) { closeGamePage(); openEdit(id); } };
   document.getElementById('gp-delete').onclick = () => { const id = currentGamePageId; if (id) { closeGamePage(); promptDelete(id); } };
   document.getElementById('gp-summary-refresh').onclick = () => {
@@ -408,9 +486,46 @@ async function boot() {
   }
 
   // Context menu items
-  document.getElementById('ctx-launch').onclick = () => { if (ctxGameId) launchGame(ctxGameId); hideContextMenu(); };
+  document.getElementById('ctx-launch').onclick = () => {
+    if (ctxGameId) {
+      const isRunning = liveTracking[String(ctxGameId)] != null;
+      if (isRunning) stopGame(ctxGameId);
+      else launchGame(ctxGameId);
+    }
+    hideContextMenu();
+  };
   document.getElementById('ctx-edit').onclick = () => { if (ctxGameId) openEdit(ctxGameId); hideContextMenu(); };
   document.getElementById('ctx-page').onclick = () => { if (ctxGameId) openGamePage(ctxGameId); hideContextMenu(); };
+  
+  const ctxFolderBtn = document.getElementById('ctx-folder');
+  if (ctxFolderBtn) {
+    ctxFolderBtn.onclick = () => {
+      if (ctxGameId) {
+        const g = games.find(x => String(x.id) === String(ctxGameId));
+        if (g && (g.exePath || g.installDir)) {
+          window.api.showInFolder(g.exePath || g.installDir);
+        }
+      }
+      hideContextMenu();
+    };
+  }
+
+  const ctxToggleStatusBtn = document.getElementById('ctx-toggle-status');
+  if (ctxToggleStatusBtn) {
+    ctxToggleStatusBtn.onclick = async () => {
+      if (ctxGameId) {
+        const g = games.find(x => String(x.id) === String(ctxGameId));
+        if (g) {
+          g.status = (g.status === 'Finished') ? 'Playing' : 'Finished';
+          await window.api.saveGames(games);
+          render();
+          toast(`Marked "${g.name}" as ${g.status}`);
+        }
+      }
+      hideContextMenu();
+    };
+  }
+
   document.getElementById('ctx-delete').onclick = () => { if (ctxGameId) promptDelete(ctxGameId); hideContextMenu(); };
 
   // Click away to dismiss context menu
@@ -440,6 +555,8 @@ async function boot() {
   });
   window.api.onTrackingSessionEnd(async ({ gameId, sessionHours, sessionStart, sessionEnd }) => {
     delete liveTracking[String(gameId)];
+    resetCardPlayBtn(gameId);
+    updateGamePageLaunchBtn();
     const g = games.find(x => String(x.id) === String(gameId));
     if (g) {
       if (!g.sessions) g.sessions = [];
@@ -467,11 +584,14 @@ async function boot() {
         const dur = formatDurationLong(sessionHours * 60);
         showSessionSummary(g.name, dur, `${g.hours}h total`);
       }
+    } else {
+      render();
     }
   });
   window.api.onTrackingStarted(({ gameId }) => {
     liveTracking[String(gameId)] = 0;
     updateTrackingBadge(String(gameId), 0);
+    updateGamePageLaunchBtn();
     const g = games.find(x => String(x.id) === String(gameId));
     if (g) toast(`Tracking started: ${g.name}`);
   });
@@ -481,6 +601,10 @@ async function boot() {
   });
 
   window.api.onLaunchError(({ gameId, error }) => {
+    delete liveTracking[String(gameId)];
+    resetCardPlayBtn(gameId);
+    render();
+    updateGamePageLaunchBtn();
     const g = games.find(x => String(x.id) === String(gameId));
     const name = g ? g.name : 'Game';
     toast(`⚠ ${name}: ${error.split('\n')[0]}`, 'error');
@@ -488,10 +612,13 @@ async function boot() {
 
   // Start tracking for games already running when app opens
   const runningIds = await window.api.scanRunning(games);
-  games.filter(g => g.exePath && g.status === 'Playing').forEach(g => {
-    window.api.trackingStart(g.id, g.exePath);
-  });
-  if (runningIds.length) toast(`Tracking ${runningIds.length} already-running game${runningIds.length > 1 ? 's' : ''}`);
+  if (Array.isArray(runningIds) && runningIds.length) {
+    runningIds.forEach(id => {
+      liveTracking[String(id)] = 0;
+      updateTrackingBadge(String(id), 0);
+    });
+    toast(`Tracking ${runningIds.length} already-running game${runningIds.length > 1 ? 's' : ''}`);
+  }
 
   // Data path in settings
   const dp = await window.api.getDataPath();
@@ -585,9 +712,9 @@ function render() {
       // Play/Stop button
       card.querySelector('.card-play')?.addEventListener('click', e => {
         e.stopPropagation();
-        const isRunning = liveTracking[id] != null;
+        const isRunning = typeof liveTracking[id] === 'number';
         if (isRunning) stopGame(id);
-        else launchGame(id);
+        else if (liveTracking[id] !== 'launching') launchGame(id);
       });
       // Rating pill or PEAK badge click → open inline typing pill
       card.querySelector('.card-rating, .card-peak-badge, .card-peak-ribbon, .card-peak-strip')?.addEventListener('click', e => {
@@ -642,11 +769,14 @@ function buildRatingBadgeHtml(g) {
 function buildCard(g, index = 0) {
   const sid = String(g.id);
   const tracking = liveTracking[sid];
-  const canLaunch = !!(g.exePath || g.steamAppId);
+  const canLaunch = !!(g.exePath || g.steamAppId || g.launcherPath);
 
-  const isRunning = liveTracking[sid] != null;
-  const runningIndicator = isRunning
-    ? `<div class="running-indicator"><span class="running-dot"></span>Running</div>` : '';
+  const isRunning = typeof liveTracking[sid] === 'number';
+  const isLaunching = liveTracking[sid] === 'launching';
+  const isStopping = liveTracking[sid] === 'stopping';
+
+  const runningIndicator = (isRunning || isLaunching)
+    ? `<div class="running-indicator"><span class="running-dot"></span>${isLaunching ? 'Launching' : 'Running'}</div>` : '';
 
   const coverHtml = g.coverUrl
     ? `<img class="card-cover" src="${esc(g.coverUrl)}" loading="lazy" onerror="this.outerHTML='<div class=\\'card-cover-placeholder\\'>🎮</div>'" />`
@@ -657,7 +787,7 @@ function buildCard(g, index = 0) {
 
   const hoursDisplay = (() => {
     const base = g.hours || 0;
-    if (tracking != null) {
+    if (typeof tracking === 'number') {
       const total = base + tracking / 60;
       return `<span class="tracking-badge"><span class="tracking-dot"></span>${total.toFixed(1)}h</span>`;
     }
@@ -673,30 +803,36 @@ function buildCard(g, index = 0) {
     </div>
   `;
 
-  // Big play/stop button
+  // Obsidian Cyber-Glass Play / Stop button
   let playBtn = '';
   if (canLaunch) {
-    if (isRunning) {
+    if (isLaunching) {
       playBtn = `
-        <button class="card-play running" title="Running · Click to stop" data-id="${sid}">
-          <span class="cp-running-view">
-            <span class="running-pulse-dot"></span>
-            <span class="card-play-label is-running-label">Running</span>
-          </span>
-          <span class="cp-stop-view">
-            <svg class="stop-svg-icon" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
-              <rect x="5" y="5" width="14" height="14" rx="2.5"/>
-            </svg>
-            <span class="card-play-label is-stop-label">Stop</span>
-          </span>
+        <button class="card-play is-launching" title="Launching..." data-id="${sid}">
+          <span class="card-play-emoji"><span class="cp-beacon amber"></span></span>
+          <span class="card-play-text">LAUNCHING</span>
+        </button>`;
+    } else if (isStopping) {
+      playBtn = `
+        <button class="card-play is-stopping" title="Stopping..." data-id="${sid}">
+          <span class="card-play-emoji"><span class="cp-beacon red"></span></span>
+          <span class="card-play-text">STOPPING</span>
+        </button>`;
+    } else if (isRunning) {
+      playBtn = `
+        <button class="card-play is-running" title="Running · Click to stop" data-id="${sid}">
+          <span class="card-play-emoji"><span class="cp-beacon jade"></span></span>
+          <span class="card-play-text">STOP</span>
         </button>`;
     } else {
       playBtn = `
         <button class="card-play" title="Launch ${esc(g.name)}" data-id="${sid}">
-          <svg class="play-svg-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
-            <path d="M7 4.5v15a1 1 0 0 0 1.55.83l12-7.5a1 1 0 0 0 0-1.66l-12-7.5A1 1 0 0 0 7 4.5z"/>
-          </svg>
-          <span class="card-play-label">Play</span>
+          <span class="card-play-emoji">
+            <svg class="play-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <polygon points="6 4 20 12 6 20"></polygon>
+            </svg>
+          </span>
+          <span class="card-play-text">PLAY</span>
         </button>`;
     }
   }
@@ -722,9 +858,10 @@ function buildCard(g, index = 0) {
 }
 
 function updateTrackingBadge(gameId, sessionMins) {
-  const card = document.querySelector(`.game-card[data-id="${gameId}"]`);
+  const sid = String(gameId);
+  const card = document.querySelector(`.game-card[data-id="${sid}"]`);
   if (!card) return;
-  const g = games.find(x => String(x.id) === gameId);
+  const g = games.find(x => String(x.id) === sid);
   if (!g) return;
 
   // Update hours badge
@@ -744,20 +881,12 @@ function updateTrackingBadge(gameId, sessionMins) {
 
   // Update play button to running state
   const playBtn = card.querySelector('.card-play');
-  if (playBtn && !playBtn.classList.contains('running')) {
-    playBtn.classList.add('running');
+  if (playBtn && !playBtn.classList.contains('is-running')) {
+    playBtn.className = 'card-play is-running';
     playBtn.title = 'Running · Click to stop';
     playBtn.innerHTML = `
-      <span class="cp-running-view">
-        <span class="running-pulse-dot"></span>
-        <span class="card-play-label is-running-label">Running</span>
-      </span>
-      <span class="cp-stop-view">
-        <svg class="stop-svg-icon" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
-          <rect x="5" y="5" width="14" height="14" rx="2.5"/>
-        </svg>
-        <span class="card-play-label is-stop-label">Stop</span>
-      </span>
+      <span class="card-play-emoji"><span class="cp-beacon jade"></span></span>
+      <span class="card-play-text">STOP</span>
     `;
   }
 }
@@ -918,9 +1047,9 @@ async function confirmImport() {
   games.push(...toAdd);
   await window.api.saveGames(games);
 
-  // Start tracking for playing games with exe
-  toAdd.filter(g => g.exePath && g.status === 'Playing').forEach(g => {
-    window.api.trackingStart(g.id, g.exePath);
+  // Start tracking for playing games with exe or steamAppId
+  toAdd.filter(g => (g.exePath || g.steamAppId) && g.status === 'Playing').forEach(g => {
+    window.api.trackingStart(g.id, g.exePath || '', g.installDir || '', g.steamAppId || '');
   });
 
   closeImport();
@@ -928,15 +1057,54 @@ async function confirmImport() {
   toast(`Imported ${toAdd.length} game${toAdd.length !== 1 ? 's' : ''}`);
 }
 
+function syncStatusSegmentedPills(status) {
+  const pills = document.querySelectorAll('.status-segment-pill');
+  pills.forEach(p => {
+    if (p.dataset.status === status) p.classList.add('active');
+    else p.classList.remove('active');
+  });
+}
+
+function highlightPlatformChip(source) {
+  const chips = document.querySelectorAll('.platform-chip');
+  chips.forEach(c => {
+    if (source && c.dataset.val && c.dataset.val.toLowerCase() === source.toLowerCase()) c.classList.add('selected');
+    else c.classList.remove('selected');
+  });
+}
+
+function updateExeClearBtns() {
+  const exeVal = document.getElementById('field-exe')?.value || '';
+  const exeClear = document.getElementById('exe-clear-btn');
+  if (exeClear) exeClear.style.display = exeVal ? 'inline-flex' : 'none';
+
+  const launcherVal = document.getElementById('field-launcher')?.value || '';
+  const launcherClear = document.getElementById('launcher-clear-btn');
+  if (launcherClear) launcherClear.style.display = launcherVal ? 'inline-flex' : 'none';
+}
+
 // Add / Edit Modal
 function openAdd() {
   editingId = null;
   document.getElementById('modal-title').textContent = 'Add Game';
+  const badgeText = document.getElementById('modal-badge-text');
+  if (badgeText) badgeText.textContent = 'NEW GAME ENTRY';
+  const saveText = document.getElementById('modal-save-text');
+  if (saveText) saveText.textContent = 'Add Game';
+  const delBtn = document.getElementById('modal-delete-btn');
+  if (delBtn) delBtn.style.display = 'none';
+
   document.getElementById('field-name').value   = '';
   document.getElementById('field-status').value = 'Playing';
+  syncStatusSegmentedPills('Playing');
   document.getElementById('field-hours').value  = '';
   document.getElementById('field-source').value = '';
+  highlightPlatformChip('');
   document.getElementById('field-exe').value    = '';
+  document.getElementById('field-has-launcher').checked = false;
+  document.getElementById('launcher-field-wrap').style.display = 'none';
+  document.getElementById('field-launcher').value = '';
+  updateExeClearBtns();
   document.getElementById('field-notes').value  = '';
   document.getElementById('field-cover').value  = '';
   document.getElementById('sgdb-search').value  = '';
@@ -944,7 +1112,7 @@ function openAdd() {
   setCoverPreview('');
   document.getElementById('field-name').classList.remove('error');
   document.getElementById('modal-overlay').style.display = 'flex';
-  setTimeout(() => document.getElementById('sgdb-search').focus(), 50);
+  setTimeout(() => document.getElementById('field-name').focus(), 50);
 }
 
 function openEdit(id) {
@@ -952,11 +1120,31 @@ function openEdit(id) {
   if (!g) return;
   editingId = id;
   document.getElementById('modal-title').textContent  = 'Edit Game';
+  const badgeText = document.getElementById('modal-badge-text');
+  if (badgeText) badgeText.textContent = 'EDIT GAME ENTRY';
+  const saveText = document.getElementById('modal-save-text');
+  if (saveText) saveText.textContent = 'Save Changes';
+  const delBtn = document.getElementById('modal-delete-btn');
+  if (delBtn) {
+    delBtn.style.display = 'inline-flex';
+    delBtn.onclick = () => {
+      closeModal();
+      promptDelete(id);
+    };
+  }
+
   document.getElementById('field-name').value   = g.name;
   document.getElementById('field-status').value = g.status;
+  syncStatusSegmentedPills(g.status);
   document.getElementById('field-hours').value  = g.hours || '';
   document.getElementById('field-source').value = g.source || '';
+  highlightPlatformChip(g.source || '');
   document.getElementById('field-exe').value    = g.exePath || '';
+  const hasLauncher = Boolean(g.launcherPath);
+  document.getElementById('field-has-launcher').checked = hasLauncher;
+  document.getElementById('launcher-field-wrap').style.display = hasLauncher ? 'block' : 'none';
+  document.getElementById('field-launcher').value = g.launcherPath || '';
+  updateExeClearBtns();
   document.getElementById('field-notes').value  = g.notes || '';
   document.getElementById('field-cover').value  = g.coverUrl || '';
   document.getElementById('sgdb-search').value  = '';
@@ -972,35 +1160,64 @@ function closeModal() {
   document.getElementById('sgdb-results').style.display = 'none';
   editingId = null;
 }
+window.closeModal = closeModal;
 
 async function saveGame() {
   const name = document.getElementById('field-name').value.trim();
   if (!name) { document.getElementById('field-name').classList.add('error'); document.getElementById('field-name').focus(); return; }
 
-  const hours  = parseFloat(document.getElementById('field-hours').value) || 0;
+  const rawHours = parseFloat(document.getElementById('field-hours').value);
+  const hours = isNaN(rawHours) ? 0 : Math.max(0, Math.min(999999, Math.round(rawHours * 10) / 10));
   const exePath = document.getElementById('field-exe').value.trim();
+  const hasLauncher = document.getElementById('field-has-launcher').checked;
+  const launcherPath = hasLauncher ? document.getElementById('field-launcher').value.trim() : '';
   const wasExe = editingId ? (games.find(g => String(g.id) === String(editingId))?.exePath || '') : '';
+  const wasLauncher = editingId ? (games.find(g => String(g.id) === String(editingId))?.launcherPath || '') : '';
 
   if (editingId !== null) {
     const idx = games.findIndex(g => String(g.id) === String(editingId));
     if (idx !== -1) {
       const old = games[idx];
-      games[idx] = { ...old, name, status: document.getElementById('field-status').value, hours, source: document.getElementById('field-source').value.trim(), exePath, notes: document.getElementById('field-notes').value.trim(), coverUrl: document.getElementById('field-cover').value || old.coverUrl || '' };
+      games[idx] = {
+        ...old,
+        name,
+        status: document.getElementById('field-status').value,
+        hours,
+        source: document.getElementById('field-source').value.trim(),
+        exePath,
+        launcherPath,
+        notes: document.getElementById('field-notes').value.trim(),
+        coverUrl: document.getElementById('field-cover').value || old.coverUrl || ''
+      };
       // Restart tracking if exe changed
-      if (exePath && exePath !== wasExe) {
+      if (exePath && (exePath !== wasExe || launcherPath !== wasLauncher)) {
         window.api.trackingStop(editingId);
-        if (games[idx].status === 'Playing') window.api.trackingStart(editingId, exePath);
+        if (games[idx].status === 'Playing') window.api.trackingStart(editingId, exePath, games[idx].installDir || '', games[idx].steamAppId || '');
       }
     }
   } else {
-    const newGame = { id: crypto.randomUUID(), name, status: document.getElementById('field-status').value, hours, source: document.getElementById('field-source').value.trim(), exePath, notes: document.getElementById('field-notes').value.trim(), coverUrl: document.getElementById('field-cover').value || '', added: Date.now() };
+    const newGame = {
+      id: crypto.randomUUID(),
+      name,
+      status: document.getElementById('field-status').value,
+      hours,
+      source: document.getElementById('field-source').value.trim(),
+      exePath,
+      launcherPath,
+      notes: document.getElementById('field-notes').value.trim(),
+      coverUrl: document.getElementById('field-cover').value || '',
+      added: Date.now()
+    };
     games.push(newGame);
-    if (exePath && newGame.status === 'Playing') window.api.trackingStart(newGame.id, exePath);
+    if ((exePath || newGame.steamAppId) && newGame.status === 'Playing') {
+      window.api.trackingStart(newGame.id, exePath || '', newGame.installDir || '', newGame.steamAppId || '');
+    }
   }
 
   await window.api.saveGames(games);
   closeModal();
   render();
+  renderWishlistGames();
 }
 
 // SteamGridDB search
@@ -1013,7 +1230,7 @@ function onSGDBInput() {
   if (!q) { results.style.display = 'none'; spinner.style.display = 'none'; return; }
 
   if (!config.sgdbKey) {
-    results.innerHTML = `<div class="sgdb-no-key">SteamGridDB key required for cover search.<br><button onclick="window.openSettings('integrations')" style="margin-top:8px;background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Add API Key in Settings ↗</button></div>`;
+    results.innerHTML = `<div class="sgdb-no-key">SteamGridDB key required for cover search.<br><button onclick="window.closeModal(); window.openSettings('integrations')" style="margin-top:8px;background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Add API Key in Settings ↗</button></div>`;
     results.style.display = 'block'; return;
   }
 
@@ -1069,25 +1286,126 @@ async function searchSGDB(q) {
 
 function setCoverPreview(url) {
   const preview = document.getElementById('cover-preview');
+  const heroGlow = document.getElementById('modal-hero-glow');
+  const clearBtn = document.getElementById('cover-clear-btn');
   if (url) {
-    preview.innerHTML = `<img src="${esc(url)}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<span class=\\'cover-placeholder\\'>No cover</span>'" />`;
+    preview.innerHTML = `<img src="${esc(url)}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<span class=\\'cover-placeholder\\'>No cover</span>'; document.getElementById('modal-hero-glow').style.backgroundImage='none';" />`;
+    if (heroGlow) heroGlow.style.backgroundImage = `url("${esc(url)}")`;
+    if (clearBtn) clearBtn.style.display = 'inline-flex';
   } else {
     preview.innerHTML = `<span class="cover-placeholder">No cover</span>`;
+    if (heroGlow) heroGlow.style.backgroundImage = 'none';
+    if (clearBtn) clearBtn.style.display = 'none';
   }
 }
 
-// Executable File Picker
+// Executable File Pickers
 async function pickExe() {
   const p = await window.api.pickExe();
-  if (p) document.getElementById('field-exe').value = p;
+  if (p) {
+    document.getElementById('field-exe').value = p;
+    updateExeClearBtns();
+  }
+}
+
+async function pickLauncherExe() {
+  const p = await window.api.pickExe();
+  if (p) {
+    document.getElementById('field-launcher').value = p;
+    updateExeClearBtns();
+  }
+}
+
+function setCardLaunchingState(id) {
+  const sid = String(id);
+  liveTracking[sid] = 'launching';
+  const card = document.querySelector(`.game-card[data-id="${sid}"]`);
+  if (card) {
+    const playBtn = card.querySelector('.card-play');
+    if (playBtn) {
+      playBtn.className = 'card-play is-launching';
+      playBtn.title = 'Launching...';
+      playBtn.innerHTML = `
+        <span class="card-play-emoji"><span class="cp-beacon amber"></span></span>
+        <span class="card-play-text">LAUNCHING</span>
+      `;
+    }
+  }
+  updateGamePageLaunchBtn();
+}
+
+function setCardStoppingState(id) {
+  const sid = String(id);
+  liveTracking[sid] = 'stopping';
+  const card = document.querySelector(`.game-card[data-id="${sid}"]`);
+  if (card) {
+    const playBtn = card.querySelector('.card-play');
+    if (playBtn) {
+      playBtn.className = 'card-play is-stopping';
+      playBtn.title = 'Stopping...';
+      playBtn.innerHTML = `
+        <span class="card-play-emoji"><span class="cp-beacon red"></span></span>
+        <span class="card-play-text">STOPPING</span>
+      `;
+    }
+  }
+  updateGamePageLaunchBtn();
+}
+
+function resetCardPlayBtn(id) {
+  const sid = String(id);
+  const card = document.querySelector(`.game-card[data-id="${sid}"]`);
+  if (!card) return;
+  const g = games.find(x => String(x.id) === sid);
+  const playBtn = card.querySelector('.card-play');
+  if (playBtn && g) {
+    playBtn.className = 'card-play';
+    playBtn.title = `Launch ${g.name}`;
+    playBtn.innerHTML = `
+      <span class="card-play-emoji">
+        <svg class="play-svg-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <polygon points="6 4 20 12 6 20"></polygon>
+        </svg>
+      </span>
+      <span class="card-play-text">PLAY</span>
+    `;
+  }
+}
+
+function updateGamePageLaunchBtn() {
+  const launchBtn = document.getElementById('gp-launch');
+  if (!launchBtn || !currentGamePageId) return;
+  const sid = String(currentGamePageId);
+  const isRunning = typeof liveTracking[sid] === 'number';
+  const isLaunching = liveTracking[sid] === 'launching';
+  const isStopping = liveTracking[sid] === 'stopping';
+
+  if (isLaunching) {
+    launchBtn.textContent = '⏳ Launching...';
+    launchBtn.className = 'gp-btn gp-launch is-launching';
+    launchBtn.title = 'Game is launching...';
+  } else if (isStopping) {
+    launchBtn.textContent = '⏳ Stopping...';
+    launchBtn.className = 'gp-btn gp-launch is-stopping';
+    launchBtn.title = 'Game is stopping...';
+  } else if (isRunning) {
+    launchBtn.textContent = '■ Stop';
+    launchBtn.className = 'gp-btn gp-launch is-running';
+    launchBtn.title = 'Stop game process';
+  } else {
+    launchBtn.textContent = '▶ Launch';
+    launchBtn.className = 'gp-btn gp-launch';
+    launchBtn.title = 'Launch game';
+  }
 }
 
 // Game launcher
 function launchGame(id) {
   const g = games.find(x => String(x.id) === String(id));
   if (!g) return;
-  if (g.exePath || g.steamAppId) {
-    window.api.launchGame(g.exePath || '', g.steamAppId || '', g.id);
+  if (g.exePath || g.steamAppId || g.launcherPath) {
+    setCardLaunchingState(id);
+    window.api.launchGame(g.exePath || '', g.steamAppId || '', g.id, g.installDir || '', g.launcherPath || '');
     toast(`Launching ${g.name}...`);
   }
 }
@@ -1096,7 +1414,9 @@ async function stopGame(id) {
   const g = games.find(x => String(x.id) === String(id));
   if (!g) return;
   try {
-    await window.api.killGame(g.id, g.exePath, g.installDir || '');
+    setCardStoppingState(id);
+    toast(`Stopping ${g.name}...`);
+    await window.api.killGame(g.id, g.exePath || '', g.installDir || '', g.steamAppId || '', g.launcherPath || '');
     toast(`Stopped ${g.name}`);
   } catch (e) {
     toast('Failed to stop game');
@@ -1152,8 +1472,9 @@ function openGamePage(id) {
 
   // Launch button
   const launchBtn = document.getElementById('gp-launch');
-  const canLaunch = !!(g.exePath || g.steamAppId);
+  const canLaunch = !!(g.exePath || g.steamAppId || g.launcherPath);
   launchBtn.style.display = canLaunch ? '' : 'none';
+  updateGamePageLaunchBtn();
 
   // Rating
   updateRatingDisplay(g.rating || 0);
@@ -1552,11 +1873,92 @@ function showContextMenu(x, y, id) {
   ctxGameId = id;
   const menu = document.getElementById('ctx-menu');
   const g = games.find(x => String(x.id) === String(id));
-  // Show/hide launch based on whether game has exe
-  document.getElementById('ctx-launch').style.display = (g && (g.exePath || g.steamAppId)) ? '' : 'none';
-  menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
-  menu.style.top = Math.min(y, window.innerHeight - 200) + 'px';
-  menu.style.display = '';
+  if (!g) return;
+
+  const isRunning = typeof liveTracking[String(id)] === 'number';
+
+  // Header Mini-Card
+  const thumbEl = document.getElementById('ctx-thumb');
+  const fallbackEl = document.getElementById('ctx-thumb-fallback');
+  if (g.coverUrl) {
+    thumbEl.src = g.coverUrl;
+    thumbEl.style.display = 'block';
+    if (fallbackEl) fallbackEl.style.display = 'none';
+  } else {
+    thumbEl.src = '';
+    thumbEl.style.display = 'none';
+    if (fallbackEl) fallbackEl.style.display = 'block';
+  }
+
+  const titleEl = document.getElementById('ctx-title');
+  if (titleEl) titleEl.textContent = g.name || 'Untitled Game';
+
+  const badgeEl = document.getElementById('ctx-meta-badge');
+  if (badgeEl) {
+    const st = g.status || 'Playing';
+    badgeEl.textContent = st;
+    badgeEl.className = 'ctx-meta-badge ' + st.toLowerCase();
+  }
+
+  const hoursEl = document.getElementById('ctx-meta-hours');
+  if (hoursEl) {
+    const hrs = g.hours || 0;
+    hoursEl.textContent = `${hrs % 1 === 0 ? hrs : hrs.toFixed(1)} hrs`;
+  }
+
+  // Launch Item
+  const launchEl = document.getElementById('ctx-launch');
+  const launchIconEl = document.getElementById('ctx-launch-icon');
+  const launchTextEl = document.getElementById('ctx-launch-text');
+  const liveBadgeEl = document.getElementById('ctx-live-badge');
+  const canLaunch = !!(g.exePath || g.steamAppId || g.launcherPath);
+
+  if (launchEl) {
+    launchEl.style.display = canLaunch ? 'flex' : 'none';
+    if (isRunning) {
+      launchEl.className = 'ctx-item ctx-item-play is-running';
+      if (launchIconEl) launchIconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>`;
+      if (launchTextEl) launchTextEl.textContent = 'Stop Game';
+      if (liveBadgeEl) liveBadgeEl.style.display = 'inline-flex';
+    } else {
+      launchEl.className = 'ctx-item ctx-item-play';
+      if (launchIconEl) launchIconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
+      if (launchTextEl) launchTextEl.textContent = 'Launch Game';
+      if (liveBadgeEl) liveBadgeEl.style.display = 'none';
+    }
+  }
+
+  // Open File Location
+  const folderEl = document.getElementById('ctx-folder');
+  if (folderEl) {
+    const hasPath = Boolean(g.exePath || g.installDir);
+    folderEl.style.display = hasPath ? 'flex' : 'none';
+  }
+
+  // Toggle Finished / Playing
+  const toggleTextEl = document.getElementById('ctx-toggle-status-text');
+  const toggleIconEl = document.getElementById('ctx-toggle-icon');
+  if (toggleTextEl) {
+    if (g.status === 'Finished') {
+      toggleTextEl.textContent = 'Mark as Playing';
+      if (toggleIconEl) toggleIconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+    } else {
+      toggleTextEl.textContent = 'Mark as Finished';
+      if (toggleIconEl) toggleIconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    }
+  }
+
+  // Dynamic clamping to prevent window overflow
+  menu.style.visibility = 'hidden';
+  menu.style.display = 'block';
+  const menuWidth = menu.offsetWidth || 230;
+  const menuHeight = menu.offsetHeight || 260;
+  const pad = 10;
+  const posX = Math.min(x, window.innerWidth - menuWidth - pad);
+  const posY = Math.min(y, window.innerHeight - menuHeight - pad);
+  menu.style.left = Math.max(pad, posX) + 'px';
+  menu.style.top = Math.max(pad, posY) + 'px';
+  menu.style.visibility = 'visible';
 }
 
 function hideContextMenu() {
@@ -1581,6 +1983,7 @@ async function confirmDelete() {
   document.getElementById('confirm-overlay').style.display = 'none';
   await window.api.saveGames(games);
   render();
+  renderWishlistGames();
 }
 
 // Corner Radius Helper (proportionally scales UI rounding across cards, modals, and inputs)
@@ -1590,6 +1993,26 @@ function applyCornerRadius(val) {
   document.documentElement.style.setProperty('--radius-lg', `${radius}px`);
   document.documentElement.style.setProperty('--radius-md', `${Math.max(0, Math.round(radius * 0.7))}px`);
   document.documentElement.style.setProperty('--radius-sm', `${Math.max(0, Math.round(radius * 0.42))}px`);
+}
+
+// Normalizes 3-digit (#rgb) or 6-digit (#rrggbb) hex codes safely
+function normalizeHex(input) {
+  if (!input) return null;
+  let val = String(input).trim();
+  if (val.startsWith('#')) val = val.slice(1);
+  if (/^[0-9a-fA-F]{3}$/.test(val)) {
+    val = val[0] + val[0] + val[1] + val[1] + val[2] + val[2];
+  }
+  if (/^[0-9a-fA-F]{6}$/.test(val)) {
+    return '#' + val.toLowerCase();
+  }
+  return null;
+}
+
+// Normalizes hotkey strings (e.g. 'Alt+Shift+G' or 'Shift+Alt+G' -> 'ALT+G+SHIFT')
+function canonicalHotkey(str) {
+  if (!str) return '';
+  return str.toUpperCase().split('+').map(s => s.trim()).filter(Boolean).sort().join('+');
 }
 
 // Custom Theme
@@ -1622,16 +2045,18 @@ function applyCustomTheme(colors) {
 }
 
 function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
+  const norm = normalizeHex(hex) || '#000000';
+  const r = parseInt(norm.slice(1, 3), 16) || 0;
+  const g = parseInt(norm.slice(3, 5), 16) || 0;
+  const b = parseInt(norm.slice(5, 7), 16) || 0;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function lightenHex(hex, amount) {
-  let r = parseInt(hex.slice(1, 3), 16) + amount;
-  let g = parseInt(hex.slice(3, 5), 16) + amount;
-  let b = parseInt(hex.slice(5, 7), 16) + amount;
+  const norm = normalizeHex(hex) || '#000000';
+  let r = (parseInt(norm.slice(1, 3), 16) || 0) + amount;
+  let g = (parseInt(norm.slice(3, 5), 16) || 0) + amount;
+  let b = (parseInt(norm.slice(5, 7), 16) || 0) + amount;
   r = Math.max(0, Math.min(255, r));
   g = Math.max(0, Math.min(255, g));
   b = Math.max(0, Math.min(255, b));
@@ -1712,6 +2137,13 @@ async function openSettings(targetTab = 'general') {
 function closeSettings() { 
   document.getElementById('settings-overlay').style.display = 'none'; 
   isCapturingHotkey = false;
+  // Revert corner radius live preview to saved configuration
+  const savedRadius = config.cornerRadius !== undefined ? config.cornerRadius : (config.radius !== undefined ? config.radius : 14);
+  applyCornerRadius(savedRadius);
+  const cornerRadiusSlider = document.getElementById('corner-radius-slider');
+  if (cornerRadiusSlider) cornerRadiusSlider.value = savedRadius;
+  const cornerRadiusValue = document.getElementById('radius-value');
+  if (cornerRadiusValue) cornerRadiusValue.textContent = `${savedRadius}px`;
 }
 async function saveSettings() {
   config.sgdbKey = document.getElementById('settings-sgdb').value.trim();
@@ -1883,8 +2315,10 @@ document.addEventListener('keydown', (e) => {
     if (e.altKey) modifiers.push('Alt');
     if (e.metaKey) modifiers.push('Super');
     if (!['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
-      const pressed = [...modifiers, e.key.toUpperCase()].join('+').toUpperCase();
-      const target = (config.overlayHotkey || 'Shift+Alt+G').toUpperCase();
+      let key = e.key.toUpperCase();
+      if (key === ' ') key = 'SPACE';
+      const pressed = canonicalHotkey([...modifiers, key].join('+'));
+      const target = canonicalHotkey(config.overlayHotkey || 'Shift+Alt+G');
       if (pressed === target) {
         e.preventDefault();
         window.api.toggleOverlay();
@@ -1930,6 +2364,7 @@ function openWishlist() {
 }
 
 function closeWishlist() { document.getElementById('wishlist-overlay').style.display = 'none'; }
+window.closeWishlist = closeWishlist;
 
 // Media Library
 window.deleteMediaFile = async (index) => {
@@ -2009,7 +2444,8 @@ async function openMediaLibrary() {
 }
 function closeMediaLibrary() { document.getElementById('media-overlay').style.display = 'none'; }
 
-// Activity Dashboard
+let currentActivityView = 'timeline';
+
 function openActivityDashboard() {
   document.getElementById('activity-overlay').style.display = 'flex';
   renderActivityDashboard();
@@ -2017,33 +2453,58 @@ function openActivityDashboard() {
 function closeActivityDashboard() { document.getElementById('activity-overlay').style.display = 'none'; }
 
 function renderActivityDashboard() {
-  // Gather all sessions across all games
+  // Gather all sessions across all games with game metadata
   const allSessions = [];
+  const gameMap = new Map();
+  
   games.forEach(g => {
-    (g.sessions || []).forEach(s => {
-      allSessions.push({ ...s, gameName: g.name, gameId: g.id });
+    const sList = g.sessions || [];
+    const dur = sList.reduce((a, s) => a + s.duration, 0);
+    gameMap.set(String(g.id), {
+      id: g.id,
+      name: g.name,
+      coverUrl: g.coverUrl || '',
+      hours: dur,
+      sessionsCount: sList.length
+    });
+    sList.forEach(s => {
+      allSessions.push({
+        ...s,
+        gameName: g.name,
+        gameId: g.id,
+        coverUrl: g.coverUrl || ''
+      });
     });
   });
   allSessions.sort((a, b) => b.start - a.start);
-  
+
+  // Bind view toggle buttons
+  const toggleWrap = document.getElementById('act-view-toggle');
+  if (toggleWrap && !toggleWrap.dataset.bound) {
+    toggleWrap.dataset.bound = 'true';
+    toggleWrap.querySelectorAll('.act-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toggleWrap.querySelectorAll('.act-toggle-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentActivityView = btn.dataset.view || 'timeline';
+        renderRecentActivityFeed(allSessions);
+      });
+    });
+  }
+
   const now = Date.now();
   const todayStart = new Date(); todayStart.setHours(0,0,0,0);
   const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
   const monthStart = new Date(todayStart); monthStart.setDate(1);
-  
+
   // Period cards
   const todaySessions = allSessions.filter(s => s.start >= todayStart.getTime());
   const weekSessions = allSessions.filter(s => s.start >= weekStart.getTime());
-  const monthSessions = allSessions.filter(s => s.start >= monthStart.getTime());
-  
   const sumDur = arr => arr.reduce((a, s) => a + s.duration, 0);
   const avgSession = allSessions.length ? (sumDur(allSessions) * 60) / allSessions.length : 0;
-  const longestSession = allSessions.length ? Math.max(...allSessions.map(s => s.duration)) * 60 : 0;
-  
-  // Daily average: total hours / number of unique days played
+  const totalAllTimeHours = sumDur(allSessions);
   const uniqueDays = new Set(allSessions.map(s => new Date(s.start).toDateString())).size;
-  const dailyAvg = uniqueDays ? (sumDur(allSessions) * 60) / uniqueDays : 0;
-  
+
   document.getElementById('activity-periods').innerHTML = `
     <div class="act-period-card">
       <div class="act-period-val">${formatDurationLong(sumDur(todaySessions) * 60)}</div>
@@ -2056,26 +2517,16 @@ function renderActivityDashboard() {
       <div class="act-period-label">This Week</div>
     </div>
     <div class="act-period-card">
-      <div class="act-period-val">${formatDurationLong(sumDur(monthSessions) * 60)}</div>
-      <div class="act-period-sub">${monthSessions.length} session${monthSessions.length !== 1 ? 's' : ''}</div>
-      <div class="act-period-label">This Month</div>
-    </div>
-    <div class="act-period-card">
-      <div class="act-period-val">${formatDurationLong(sumDur(allSessions) * 60)}</div>
-      <div class="act-period-sub">${allSessions.length} session${allSessions.length !== 1 ? 's' : ''}</div>
-      <div class="act-period-label">All Time</div>
+      <div class="act-period-val">${formatDurationLong(totalAllTimeHours * 60)}</div>
+      <div class="act-period-sub">${allSessions.length} total sessions recorded</div>
+      <div class="act-period-label">All-Time Playtime</div>
     </div>
     <div class="act-period-card">
       <div class="act-period-val">${formatDurationLong(avgSession)}</div>
-      <div class="act-period-sub">${formatDurationLong(dailyAvg)}/day</div>
+      <div class="act-period-sub">Across ${uniqueDays} active day${uniqueDays !== 1 ? 's' : ''}</div>
       <div class="act-period-label">Avg Session</div>
-    </div>
-    <div class="act-period-card">
-      <div class="act-period-val">${formatDurationLong(longestSession)}</div>
-      <div class="act-period-sub">${uniqueDays} day${uniqueDays !== 1 ? 's' : ''} played</div>
-      <div class="act-period-label">Longest</div>
     </div>`;
-  
+
   // Weekly heatmap (Mon-Sun)
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const weeklyEl = document.getElementById('activity-weekly');
@@ -2089,61 +2540,252 @@ function renderActivityDashboard() {
     weekDays.push({ name: dayNames[d.getDay()], hours: dayHrs, isToday: d.toDateString() === new Date().toDateString() });
   }
   const maxWeekDay = Math.max(...weekDays.map(d => d.hours), 0.1);
-  
-  weeklyEl.innerHTML = weekDays.map(d => {
-    const pct = Math.max((d.hours / maxWeekDay) * 100, d.hours > 0 ? 6 : 0);
-    const durText = d.hours > 0 ? formatDurationLong(d.hours * 60) : '—';
-    return `
-      <div class="act-week-row ${d.isToday ? 'act-today' : ''}">
-        <span class="act-week-day">${d.name}</span>
-        <div class="act-week-bar-wrap"><div class="act-week-bar" style="width:${pct}%"></div></div>
-        <span class="act-week-dur">${durText}</span>
-      </div>`;
-  }).join('');
-  
-  // Most played leaderboard
-  const topEl = document.getElementById('activity-top');
-  const gameHours = {};
-  allSessions.forEach(s => {
-    gameHours[s.gameName] = (gameHours[s.gameName] || 0) + s.duration;
-  });
-  const sorted = Object.entries(gameHours).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const maxHrs = sorted.length ? sorted[0][1] : 1;
-  
-  if (sorted.length === 0) {
-    topEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;">No sessions recorded yet.</div>';
-  } else {
-    topEl.innerHTML = sorted.map(([name, hrs], i) => {
-      const pct = (hrs / maxHrs) * 100;
+
+  if (weeklyEl) {
+    weeklyEl.className = 'act-week-list';
+    weeklyEl.innerHTML = weekDays.map(d => {
+      const pct = d.hours > 0 ? Math.max(6, Math.min(100, Math.round((d.hours / maxWeekDay) * 100))) : 0;
+      const durText = d.hours > 0 ? formatDurationLong(d.hours * 60) : '—';
       return `
-        <div class="act-top-row">
-          <span class="act-top-rank">${i + 1}</span>
-          <span class="act-top-name">${esc(name)}</span>
-          <div class="act-top-bar-wrap"><div class="act-top-bar" style="width:${pct}%"></div></div>
-          <span class="act-top-hrs">${formatDurationLong(hrs * 60)}</span>
+        <div class="act-week-item ${d.isToday ? 'is-today' : ''} ${d.hours > 0 ? 'has-playtime' : ''}" title="${d.name}: ${d.hours > 0 ? formatDurationLong(d.hours * 60) : 'No activity'}">
+          <div class="act-week-day-wrap">
+            <span class="act-week-day-name">${d.name}</span>
+            ${d.isToday ? '<span class="act-week-today-pill">TODAY</span>' : ''}
+          </div>
+          <div class="act-week-bar-track">
+            <div class="act-week-bar-fill" style="width: ${pct}%"></div>
+          </div>
+          <span class="act-week-dur">${durText}</span>
         </div>`;
     }).join('');
   }
-  
-  // Recent sessions
-  const recentEl = document.getElementById('activity-recent');
-  const recent = allSessions.slice(0, 15);
-  if (recent.length === 0) {
-    recentEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;">No sessions recorded yet. Launch a game to start tracking!</div>';
+
+  const weekSubEl = document.getElementById('act-week-sub');
+  if (weekSubEl) {
+    const totalWeekMins = Math.round(sumDur(weekSessions) * 60);
+    weekSubEl.textContent = totalWeekMins > 0 ? `${formatDurationLong(totalWeekMins)} logged` : '0m logged';
+  }
+
+  // Most Played Leaderboard
+  const topEl = document.getElementById('activity-top');
+  const sortedTop = Array.from(gameMap.values()).filter(g => g.hours > 0).sort((a, b) => b.hours - a.hours).slice(0, 5);
+  const maxTopHrs = sortedTop.length ? sortedTop[0].hours : 1;
+
+  if (sortedTop.length === 0) {
+    topEl.innerHTML = '<div style="color:var(--text-muted);padding:14px;background:rgba(255,255,255,0.02);border-radius:10px;text-align:center;">No game playtime recorded yet.</div>';
   } else {
+    topEl.innerHTML = `
+      <div class="act-top-list">
+        ${sortedTop.map((g, i) => {
+          const pct = Math.max(6, Math.min(100, (g.hours / maxTopHrs) * 100));
+          const rankClass = i === 0 ? 'rank-1' : (i === 1 ? 'rank-2' : (i === 2 ? 'rank-3' : ''));
+          const rankIcon = i === 0 ? '🥇' : (i === 1 ? '🥈' : (i === 2 ? '🥉' : `#${i + 1}`));
+          return `
+            <div class="act-top-card" onclick="openGamePage('${g.id}')" title="View details for ${esc(g.name)}">
+              <span class="act-top-rank ${rankClass}">${rankIcon}</span>
+              <div class="act-cover-wrap">
+                ${g.coverUrl ? `<img class="act-cover-img" src="${esc(g.coverUrl)}" loading="lazy" onerror="this.outerHTML='<div class=\\'act-cover-placeholder\\'>🎮</div>'" />` : `<div class="act-cover-placeholder">🎮</div>`}
+              </div>
+              <div class="act-top-main">
+                <div class="act-top-header">
+                  <span class="act-top-title">${esc(g.name)}</span>
+                  <span class="act-top-hrs">${formatDurationLong(g.hours * 60)}</span>
+                </div>
+                <div class="act-top-bar-track">
+                  <div class="act-top-bar-fill" style="width:${pct}%"></div>
+                </div>
+                <div class="act-top-meta">
+                  <span>${g.sessionsCount} session${g.sessionsCount !== 1 ? 's' : ''}</span>
+                  <span>${Math.round((g.hours / (totalAllTimeHours || 1)) * 100)}% of tracked library time</span>
+                </div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  // Render Recent Activity Feed
+  renderRecentActivityFeed(allSessions);
+}
+
+function renderRecentActivityFeed(allSessions) {
+  const recentEl = document.getElementById('activity-recent');
+  if (!recentEl) return;
+
+  if (allSessions.length === 0) {
+    recentEl.innerHTML = '<div style="color:var(--text-muted);padding:24px;text-align:center;background:rgba(255,255,255,0.02);border-radius:12px;">No sessions recorded yet. Launch a game to start tracking!</div>';
+    return;
+  }
+
+  if (currentActivityView === 'by-game') {
+    // Group all sessions by gameId, order by most recent session
+    const byGame = new Map();
+    allSessions.forEach(s => {
+      const gid = String(s.gameId);
+      if (!byGame.has(gid)) {
+        byGame.set(gid, {
+          gameId: s.gameId,
+          gameName: s.gameName,
+          coverUrl: s.coverUrl,
+          totalDuration: 0,
+          latestStart: s.start,
+          latestDuration: s.duration,
+          sessionsCount: 0
+        });
+      }
+      const entry = byGame.get(gid);
+      entry.totalDuration += s.duration;
+      entry.sessionsCount += 1;
+      if (s.start > entry.latestStart) {
+        entry.latestStart = s.start;
+        entry.latestDuration = s.duration;
+      }
+    });
+
+    const gameList = Array.from(byGame.values()).sort((a, b) => b.latestStart - a.latestStart);
+
+    recentEl.innerHTML = gameList.map(g => {
+      const d = new Date(g.latestStart);
+      const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      return `
+        <div class="act-game-card" onclick="openGamePage('${g.gameId}')" title="View details for ${esc(g.gameName)}">
+          <div class="act-cover-wrap" style="width:44px; height:58px;">
+            ${g.coverUrl ? `<img class="act-cover-img" src="${esc(g.coverUrl)}" loading="lazy" onerror="this.outerHTML='<div class=\\'act-cover-placeholder\\'>🎮</div>'" />` : `<div class="act-cover-placeholder">🎮</div>`}
+          </div>
+          <div class="act-game-main">
+            <div class="act-game-title">${esc(g.gameName)}</div>
+            <div class="act-game-meta">
+              <span>Last played ${dateStr} · ${timeStr}</span>
+              <span>•</span>
+              <span>${g.sessionsCount} session${g.sessionsCount !== 1 ? 's' : ''} (${formatDurationLong(g.totalDuration * 60)} total)</span>
+            </div>
+          </div>
+          <div class="act-session-dur-pill">Latest: ${formatDurationLong(g.latestDuration * 60)}</div>
+        </div>`;
+    }).join('');
+
+  } else if (currentActivityView === 'raw') {
+    // Raw log, upgraded with cover thumbnails and sleek layout
+    const recent = allSessions.slice(0, 30);
     recentEl.innerHTML = recent.map(s => {
       const d = new Date(s.start);
       const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
       return `
-        <div class="act-recent-row">
-          <div class="act-recent-game">${esc(s.gameName)}</div>
-          <div class="act-recent-date">${dateStr} · ${timeStr}</div>
-          <div class="act-recent-dur">${formatDurationLong(s.duration * 60)}</div>
+        <div class="act-session-item">
+          <div class="act-cover-wrap" style="width:38px; height:50px; cursor:pointer;" onclick="openGamePage('${s.gameId}')">
+            ${s.coverUrl ? `<img class="act-cover-img" src="${esc(s.coverUrl)}" loading="lazy" onerror="this.outerHTML='<div class=\\'act-cover-placeholder\\'>🎮</div>'" />` : `<div class="act-cover-placeholder">🎮</div>`}
+          </div>
+          <div class="act-session-main">
+            <div class="act-session-title" onclick="openGamePage('${s.gameId}')">${esc(s.gameName)}</div>
+            <div class="act-session-sub">
+              <span>${dateStr} · ${timeStr}</span>
+            </div>
+          </div>
+          <div class="act-session-dur-pill">${formatDurationLong(s.duration * 60)}</div>
         </div>`;
     }).join('');
+
+  } else {
+    // 'timeline': Smart date grouping + intra-day game session aggregation
+    const dateGroups = new Map();
+    const todayStr = new Date().toDateString();
+    const yesterdayDate = new Date(); yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterdayStr = yesterdayDate.toDateString();
+
+    allSessions.forEach(s => {
+      const d = new Date(s.start);
+      const ds = d.toDateString();
+      let label;
+      if (ds === todayStr) label = 'Today';
+      else if (ds === yesterdayStr) label = 'Yesterday';
+      else {
+        const opts = { weekday: 'short', month: 'short', day: 'numeric' };
+        if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+        label = d.toLocaleDateString('en-US', opts);
+      }
+
+      if (!dateGroups.has(label)) {
+        dateGroups.set(label, { label, sessions: [] });
+      }
+      dateGroups.get(label).sessions.push(s);
+    });
+
+    let html = '';
+    let groupIndex = 0;
+
+    dateGroups.forEach(group => {
+      groupIndex++;
+      // Within this date, aggregate sessions by game!
+      const gameInDay = new Map();
+      group.sessions.forEach(s => {
+        const gid = String(s.gameId || s.gameName);
+        if (!gameInDay.has(gid)) {
+          gameInDay.set(gid, {
+            gameId: s.gameId,
+            gameName: s.gameName,
+            coverUrl: s.coverUrl,
+            totalDuration: 0,
+            sessions: []
+          });
+        }
+        const item = gameInDay.get(gid);
+        item.totalDuration += s.duration;
+        item.sessions.push(s);
+      });
+
+      html += `
+        <div class="act-timeline-group">
+          <div class="act-date-header">${group.label}</div>
+          ${Array.from(gameInDay.values()).map((gItem, itemIdx) => {
+            const multi = gItem.sessions.length > 1;
+            const accordionId = `act-acc-${groupIndex}-${itemIdx}`;
+            const firstTime = new Date(gItem.sessions[0].start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            
+            return `
+              <div class="act-session-item">
+                <div class="act-cover-wrap" style="width:38px; height:50px; cursor:pointer;" onclick="openGamePage('${gItem.gameId}')">
+                  ${gItem.coverUrl ? `<img class="act-cover-img" src="${esc(gItem.coverUrl)}" loading="lazy" onerror="this.outerHTML='<div class=\\'act-cover-placeholder\\'>🎮</div>'" />` : `<div class="act-cover-placeholder">🎮</div>`}
+                </div>
+                <div class="act-session-main">
+                  <div class="act-session-title" onclick="openGamePage('${gItem.gameId}')">${esc(gItem.gameName)}</div>
+                  <div class="act-session-sub">
+                    <span>${firstTime}</span>
+                    ${multi ? `<span class="act-multi-chip" onclick="toggleActivityAccordion('${accordionId}', this)">${gItem.sessions.length} sessions ▾</span>` : ''}
+                  </div>
+                </div>
+                <div class="act-session-dur-pill">${formatDurationLong(gItem.totalDuration * 60)}${multi ? ' total' : ''}</div>
+              </div>
+              ${multi ? `
+                <div class="act-accordion" id="${accordionId}" style="display:none;">
+                  ${gItem.sessions.map((ses, sIdx) => {
+                    const t = new Date(ses.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                    return `
+                      <div class="act-sub-row">
+                        <span>Session ${sIdx + 1} at ${t}</span>
+                        <span class="act-sub-dur">${formatDurationLong(ses.duration * 60)}</span>
+                      </div>`;
+                  }).join('')}
+                </div>` : ''}
+            `;
+          }).join('')}
+        </div>`;
+    });
+
+    recentEl.innerHTML = html;
   }
 }
+
+window.toggleActivityAccordion = (id, chipEl) => {
+  const acc = document.getElementById(id);
+  if (!acc) return;
+  const isHidden = acc.style.display === 'none';
+  acc.style.display = isHidden ? 'flex' : 'none';
+  if (chipEl) {
+    chipEl.textContent = isHidden ? chipEl.textContent.replace('▾', '▴') : chipEl.textContent.replace('▴', '▾');
+  }
+};
 
 function renderWishlistGames() {
   const wishlist = games.filter(g => g.status === 'Want');
@@ -2190,7 +2832,7 @@ function onWishlistSearch() {
   const spinner = document.getElementById('wishlist-spinner');
   if (!q) { results.style.display = 'none'; spinner.style.display = 'none'; return; }
   if (!config.sgdbKey) {
-    results.innerHTML = `<div class="sgdb-no-key">SteamGridDB key required for search.<br><button onclick="window.openSettings('integrations')" style="margin-top:8px;background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Add API Key in Settings ↗</button></div>`;
+    results.innerHTML = `<div class="sgdb-no-key">SteamGridDB key required for search.<br><button onclick="window.closeWishlist(); window.openSettings('integrations')" style="margin-top:8px;background:var(--accent);color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Add API Key in Settings ↗</button></div>`;
     results.style.display = 'block'; return;
   }
   spinner.style.display = 'block';
@@ -2571,6 +3213,119 @@ function learnFromConversation(userMsg, aiResponse) {
   }
 }
 
+// Format and sanitize release notes from GitHub / electron-updater
+function formatReleaseNotes(raw) {
+  if (!raw) return '<span style="color:var(--text-muted)">Performance enhancements, bug fixes, and general improvements.</span>';
+
+  let text = '';
+  if (Array.isArray(raw)) {
+    text = raw.map(item => {
+      if (typeof item === 'string') return item;
+      if (item && item.note) return `### v${item.version || ''}\n${item.note}`;
+      return '';
+    }).filter(Boolean).join('\n\n');
+  } else {
+    text = String(raw);
+  }
+
+  text = text.trim();
+  if (!text) return '<span style="color:var(--text-muted)">Performance enhancements, bug fixes, and general improvements.</span>';
+
+  // 1. Normalize literal escaped characters from JSON/IPC strings (\r\n, \n, \r)
+  text = text
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  // 2. Extract and strip full changelog link
+  const fullChangelogMatch = text.match(/\*\*Full Changelog\*\*:\s*(https?:\/\/[^\s]+)/i);
+  let changelogUrl = fullChangelogMatch ? fullChangelogMatch[1] : null;
+  if (changelogUrl) {
+    text = text.replace(/\*\*Full Changelog\*\*:\s*https?:\/\/[^\s]+/gi, '').trim();
+  }
+
+  // 3. Clean up PR references (e.g. "by @user in https://github.com/.../pull/12" -> "by @user (#12)")
+  text = text.replace(/in\s+https?:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)/gi, '(#$1)');
+
+  // 4. Safe escaping of raw HTML brackets
+  let safe = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  // 5. Headings
+  safe = safe.replace(/^###[ \t]+(.*)$/gm, '<div class="update-notes-h3">$1</div>');
+  safe = safe.replace(/^##[ \t]+(.*)$/gm, '<div class="update-notes-h2">$1</div>');
+  safe = safe.replace(/^#[ \t]+(.*)$/gm, '<div class="update-notes-h1">$1</div>');
+
+  // 6. Horizontal rules
+  safe = safe.replace(/^(\s*[-*_]\s*){3,}$/gm, '<hr class="update-notes-hr" />');
+
+  // 7. Bullet items (- or * or +) & numbered items (1. 2.)
+  safe = safe.replace(/^[\t ]*[-*+][ \t]+(.*)$/gm, '<div class="update-notes-bullet"><span class="update-bullet-dot">•</span><span class="update-bullet-text">$1</span></div>');
+  safe = safe.replace(/^[\t ]*(\d+)\.[ \t]+(.*)$/gm, '<div class="update-notes-bullet"><span class="update-bullet-num">$1.</span><span class="update-bullet-text">$2</span></div>');
+
+  // 8. Bold & Italic
+  safe = safe.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  safe = safe.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  safe = safe.replace(/(^|[^\*])\*([^*]+)\*([^\*]|$)/g, '$1<em>$2</em>$3');
+
+  // 9. Inline code
+  safe = safe.replace(/`([^`]+)`/g, '<code class="update-notes-code">$1</code>');
+
+  // 10. Markdown links [title](url)
+  safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="#" class="update-notes-link" onclick="window.api.openExternal(\'$2\'); return false;">$1 ↗</a>');
+
+  // 11. Standalone URLs (excluding href attributes)
+  safe = safe.replace(/(^|[^"=])(https?:\/\/[^\s)<]+)/g, '$1<a href="#" class="update-notes-link" onclick="window.api.openExternal(\'$2\'); return false;">$2 ↗</a>');
+
+  // 12. Assemble paragraphs and blocks cleanly
+  const lines = safe.split('\n');
+  const output = [];
+  let inParagraph = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) {
+      if (inParagraph) {
+        output.push('</p>');
+        inParagraph = false;
+      }
+      continue;
+    }
+
+    const isBlock = line.startsWith('<div class="update-notes-h') ||
+                    line.startsWith('<div class="update-notes-bullet"') ||
+                    line.startsWith('<hr class="update-notes-hr"');
+
+    if (isBlock) {
+      if (inParagraph) {
+        output.push('</p>');
+        inParagraph = false;
+      }
+      output.push(line);
+    } else {
+      if (!inParagraph) {
+        output.push('<p class="update-notes-p">');
+        inParagraph = true;
+      } else {
+        output.push('<br />');
+      }
+      output.push(line);
+    }
+  }
+  if (inParagraph) output.push('</p>');
+
+  let finalHtml = output.join('');
+  if (changelogUrl) {
+    finalHtml += `<div class="update-notes-changelog"><a href="#" class="update-notes-link" onclick="window.api.openExternal('${changelogUrl}'); return false;">View Full Changelog on GitHub ↗</a></div>`;
+  }
+  return finalHtml;
+}
+
 // In-App Updater System
 let currentAvailableUpdate = null;
 let isManualUpdateCheck = false;
@@ -2668,8 +3423,10 @@ function initAppUpdater() {
 
     // Populate and open update modal
     document.getElementById('update-modal-title').textContent = info.releaseName || `GameVault v${info.version}`;
-    document.getElementById('update-current-ver').textContent = info.currentVersion ? `v${info.currentVersion}` : 'v1.1.1';
-    document.getElementById('update-new-ver').textContent = `v${info.version}`;
+    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.2.0';
+    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.2.0';
+    document.getElementById('update-current-ver').textContent = curVer;
+    document.getElementById('update-new-ver').textContent = newVer;
     
     if (info.releaseDate) {
       try {
@@ -2682,18 +3439,10 @@ function initAppUpdater() {
       document.getElementById('update-rel-date').textContent = '';
     }
 
-    // Format Release Notes (simple markdown clean up)
+    // Format Release Notes (clean markdown and HTML formatting)
     const notesEl = document.getElementById('update-notes-content');
-    if (info.releaseNotes && info.releaseNotes.trim()) {
-      let notesHtml = esc(info.releaseNotes)
-        .replace(/^### (.*$)/gim, '<strong style="display:block;margin-top:6px;color:#fff;">$1</strong>')
-        .replace(/^## (.*$)/gim, '<strong style="display:block;margin-top:8px;color:#fff;">$1</strong>')
-        .replace(/^# (.*$)/gim, '<strong style="display:block;margin-top:10px;color:#fff;">$1</strong>')
-        .replace(/^\* (.*$)/gim, '• $1')
-        .replace(/^- (.*$)/gim, '• $1');
-      notesEl.innerHTML = notesHtml;
-    } else {
-      notesEl.innerHTML = '<span style="color:var(--text-muted)">Performance enhancements, bug fixes, and general improvements.</span>';
+    if (notesEl) {
+      notesEl.innerHTML = formatReleaseNotes(info.releaseNotes);
     }
 
     // Reset view states
@@ -2711,7 +3460,7 @@ function initAppUpdater() {
     if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
-    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.1.1'}).`;
+    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.2.0'}).`;
     if (isManualUpdateCheck) {
       toast('You are already using the latest version of GameVault');
       isManualUpdateCheck = false;

@@ -232,11 +232,69 @@
 
 <!-- Context Menu -->
 <div class="ctx-menu" id="ctx-menu" style="display:none">
-  <button class="ctx-item" id="ctx-launch">▶ Launch</button>
-  <button class="ctx-item" id="ctx-edit">✏ Edit</button>
-  <button class="ctx-item" id="ctx-page">📄 View Details</button>
+  <!-- Game Mini Header Preview -->
+  <div class="ctx-header" id="ctx-header">
+    <div class="ctx-thumb-wrap">
+      <img class="ctx-thumb" id="ctx-thumb" src="" alt="" style="display:none;" />
+      <div class="ctx-thumb-fallback" id="ctx-thumb-fallback">🎮</div>
+    </div>
+    <div class="ctx-header-info">
+      <div class="ctx-title" id="ctx-title">Game Title</div>
+      <div class="ctx-meta" id="ctx-meta">
+        <span class="ctx-meta-badge" id="ctx-meta-badge">Playing</span>
+        <span class="ctx-meta-hours" id="ctx-meta-hours">0 hrs</span>
+      </div>
+    </div>
+  </div>
+
   <div class="ctx-divider"></div>
-  <button class="ctx-item ctx-danger" id="ctx-delete">✕ Remove</button>
+
+  <!-- Action Items -->
+  <button class="ctx-item ctx-item-play" id="ctx-launch">
+    <span class="ctx-icon" id="ctx-launch-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>
+    </span>
+    <span class="ctx-label" id="ctx-launch-text">Launch Game</span>
+    <span class="ctx-badge-live" id="ctx-live-badge" style="display:none"><span class="ctx-pulse-dot"></span> RUNNING</span>
+  </button>
+
+  <button class="ctx-item" id="ctx-page">
+    <span class="ctx-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+    </span>
+    <span class="ctx-label">Game Details</span>
+  </button>
+
+  <button class="ctx-item" id="ctx-edit">
+    <span class="ctx-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+    </span>
+    <span class="ctx-label">Edit Game</span>
+  </button>
+
+  <button class="ctx-item" id="ctx-folder">
+    <span class="ctx-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+    </span>
+    <span class="ctx-label">Open File Location</span>
+  </button>
+
+  <button class="ctx-item" id="ctx-toggle-status">
+    <span class="ctx-icon" id="ctx-toggle-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    </span>
+    <span class="ctx-label" id="ctx-toggle-status-text">Mark as Finished</span>
+  </button>
+
+  <div class="ctx-divider"></div>
+
+  <button class="ctx-item ctx-danger" id="ctx-delete">
+    <span class="ctx-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+    </span>
+    <span class="ctx-label">Remove from Vault</span>
+    <span class="ctx-hint">Del</span>
+  </button>
 </div>
 
 <!-- Wishlist Modal -->
@@ -324,80 +382,215 @@
 </div>
 
 <!-- Add/Edit Modal -->
+<!-- Add / Edit Game Modal (Modernized) -->
 <div class="modal-overlay" id="modal-overlay" style="display:none">
-  <div class="modal modal-wide">
-    <div class="modal-header">
-      <h2 class="modal-title" id="modal-title">Add Game</h2>
-      <button class="modal-close" id="modal-close">✕</button>
-    </div>
-    <div class="modal-body">
+  <div class="modal modal-game-editor">
+    <!-- Dynamic Ambient Backdrop Glow -->
+    <div class="modal-hero-glow" id="modal-hero-glow"></div>
 
-      <!-- RAWG search -->
-      <div class="field" id="sgdb-search-field">
-        <label class="field-label">Search game database</label>
-        <div class="sgdb-search-wrap">
-          <div class="search-wrap sgdb-wrap">
-            <span class="search-icon">⌕</span>
-            <input type="text" class="field-input" id="sgdb-search" placeholder="Type to search 500,000+ games..." autocomplete="off" />
-            <span class="sgdb-spinner" id="sgdb-spinner" style="display:none">⟳</span>
-          </div>
-          <div class="sgdb-results" id="sgdb-results" style="display:none"></div>
+    <div class="modal-header modal-header-editor">
+      <div class="modal-header-left">
+        <div class="modal-badge-pill" id="modal-badge-pill">
+          <span class="badge-sparkle">✦</span>
+          <span id="modal-badge-text">GAME VAULT ENTRY</span>
         </div>
+        <h2 class="modal-title" id="modal-title">Edit Game</h2>
       </div>
+      <button class="modal-close" id="modal-close" title="Close (Esc)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
 
-      <div class="modal-divider"><span>or fill manually</span></div>
+    <div class="modal-body modal-editor-body">
+      <!-- Main Two-Column Layout -->
+      <div class="modal-editor-layout">
 
-      <div class="modal-columns">
-        <!-- Cover preview -->
-        <div class="cover-col">
-          <div class="cover-preview" id="cover-preview">
-            <span class="cover-placeholder">No cover</span>
+        <!-- Left Column: Poster Showcase & Artwork Actions -->
+        <div class="editor-poster-col">
+          <div class="editor-poster-card" id="cover-preview-card">
+            <div class="cover-preview" id="cover-preview">
+              <span class="cover-placeholder">No cover</span>
+            </div>
+            <div class="editor-poster-overlay">
+              <button type="button" class="poster-overlay-btn" id="cover-pick-btn" title="Choose image from PC">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                <span>Upload Art</span>
+              </button>
+              <button type="button" class="poster-overlay-btn secondary" id="cover-clear-btn" style="display:none;" title="Remove cover">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                <span>Remove</span>
+              </button>
+            </div>
           </div>
-          <button class="exe-pick-btn" id="cover-pick-btn" style="width:100%;margin-top:4px">📁 Browse</button>
+          <div class="editor-poster-hint">
+            <span class="poster-dim-hint">Poster Format (2:3)</span>
+          </div>
           <input type="hidden" id="field-cover" />
         </div>
 
-        <!-- Fields -->
-        <div class="fields-col">
-          <div class="field">
-            <label class="field-label">Game name <span class="required">*</span></label>
-            <input type="text" class="field-input" id="field-name" placeholder="e.g. Red Dead Redemption 2" />
-          </div>
-          <div class="field-row">
+        <!-- Right Column: Clean, Categorized Fields -->
+        <div class="editor-fields-col">
+
+          <!-- Game Title & SGDB Auto-Fetch Header -->
+          <div class="editor-title-block">
             <div class="field">
-              <label class="field-label">Status</label>
-              <select class="field-input" id="field-status">
-                <option value="Playing">▶ Playing</option>
-                <option value="Finished">★ Finished</option>
-                <option value="Dropped">✕ Dropped</option>
+              <div class="field-label-row">
+                <label class="field-label" for="field-name">GAME TITLE <span class="required">*</span></label>
+                <!-- SteamGridDB Search Auto-Fill Bar -->
+                <div class="sgdb-search-inline-wrap" id="sgdb-search-field">
+                  <div class="sgdb-search-pill">
+                    <svg class="sgdb-pill-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text" class="sgdb-search-input" id="sgdb-search" placeholder="Auto-fill title & cover..." autocomplete="off" />
+                    <span class="sgdb-spinner" id="sgdb-spinner" style="display:none">⟳</span>
+                  </div>
+                  <div class="sgdb-results" id="sgdb-results" style="display:none"></div>
+                </div>
+              </div>
+              <div class="field-input-icon-wrap">
+                <svg class="field-lead-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <input type="text" class="field-input editor-input-name" id="field-name" placeholder="e.g. Cyberpunk 2077" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Status Segmented Control & Hours Row -->
+          <div class="editor-row-split">
+            <!-- Status Segmented Pills -->
+            <div class="field editor-status-field">
+              <label class="field-label">VAULT STATUS</label>
+              <!-- Hidden select for full backwards compatibility -->
+              <select class="field-input" id="field-status" style="display:none">
+                <option value="Playing">Playing</option>
+                <option value="Finished">Finished</option>
+                <option value="Dropped">Dropped</option>
               </select>
+              <!-- Modern Segmented Pill Selector -->
+              <div class="status-segmented-picker" id="status-segmented-picker">
+                <button type="button" class="status-segment-pill playing active" data-status="Playing">
+                  <span class="status-dot green"></span>
+                  <span>Playing</span>
+                </button>
+                <button type="button" class="status-segment-pill finished" data-status="Finished">
+                  <span class="status-dot gold"></span>
+                  <span>Finished</span>
+                </button>
+                <button type="button" class="status-segment-pill dropped" data-status="Dropped">
+                  <span class="status-dot muted"></span>
+                  <span>Dropped</span>
+                </button>
+              </div>
             </div>
+
+            <!-- Hours Played -->
+            <div class="field editor-hours-field">
+              <label class="field-label">HOURS LOGGED</label>
+              <div class="hours-input-wrap">
+                <svg class="hours-lead-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <input type="number" class="field-input hours-input" id="field-hours" placeholder="0.0" min="0" step="0.5" />
+                <span class="hours-suffix-tag">HRS</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Platform / Source with Quick Click Chips -->
+          <div class="field editor-source-field">
+            <div class="field-label-row">
+              <label class="field-label">SOURCE / PLATFORM</label>
+              <div class="platform-chips">
+                <button type="button" class="platform-chip" data-val="Steam">Steam</button>
+                <button type="button" class="platform-chip" data-val="Other">Other</button>
+                <button type="button" class="platform-chip" data-val="Epic Games">Epic</button>
+                <button type="button" class="platform-chip" data-val="GOG">GOG</button>
+                <button type="button" class="platform-chip" data-val="Xbox">Xbox</button>
+                <button type="button" class="platform-chip" data-val="Emulated">Emulated</button>
+              </div>
+            </div>
+            <input type="text" class="field-input" id="field-source" placeholder="Steam, Epic, GOG, Other, Custom..." />
+          </div>
+
+          <!-- Executable & Launch Configuration Card -->
+          <div class="editor-launch-card">
+            <div class="launch-card-header">
+              <div class="launch-card-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                <span>LAUNCH & PROCESS TRACKING</span>
+              </div>
+            </div>
+
+            <!-- Primary Executable -->
             <div class="field">
-              <label class="field-label">Hours played</label>
-              <input type="number" class="field-input" id="field-hours" placeholder="0" min="0" step="0.5" />
+              <label class="field-label">GAME EXECUTABLE <span class="field-hint">(Monitored for playtime)</span></label>
+              <div class="exe-input-wrap">
+                <svg class="exe-lead-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                <input type="text" class="field-input exe-path-input" id="field-exe" placeholder="Select or browse game .exe..." readonly />
+                <div class="exe-actions">
+                  <button type="button" class="btn-exe-browse" id="exe-pick-btn" title="Browse executable">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    <span>Browse</span>
+                  </button>
+                  <button type="button" class="btn-exe-clear" id="exe-clear-btn" style="display:none;" title="Clear executable">✕</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Harmonized Launcher Toggle -->
+            <div class="custom-launcher-card">
+              <label class="launcher-switch-label" for="field-has-launcher">
+                <div class="launcher-switch-text">
+                  <div class="launcher-switch-heading">Secondary Launcher / Mod Loader</div>
+                  <div class="launcher-switch-desc">Optional launcher executed on Play (SKSE, F4SE, or custom frontends)</div>
+                </div>
+                <div class="modern-toggle">
+                  <input type="checkbox" id="field-has-launcher" />
+                  <span class="modern-slider"></span>
+                </div>
+              </label>
+
+              <!-- Conditional Launcher Field (Same Clean Layout) -->
+              <div class="launcher-field-wrap" id="launcher-field-wrap" style="display:none">
+                <div class="field launcher-sub-field">
+                  <label class="field-label">LAUNCHER EXECUTABLE <span class="field-hint">(Executed on Play, not tracked)</span></label>
+                  <div class="exe-input-wrap">
+                    <svg class="exe-lead-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                    <input type="text" class="field-input exe-path-input" id="field-launcher" placeholder="Select launcher .exe (Play.exe, ModOrganizer.exe)..." readonly />
+                    <div class="exe-actions">
+                      <button type="button" class="btn-exe-browse" id="launcher-pick-btn" title="Browse launcher">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                        <span>Browse</span>
+                      </button>
+                      <button type="button" class="btn-exe-clear" id="launcher-clear-btn" style="display:none;" title="Clear launcher">✕</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+
+          <!-- Personal Notes -->
           <div class="field">
-            <label class="field-label">Source / Platform</label>
-            <input type="text" class="field-input" id="field-source" placeholder="Steam, Cracked, Xbox, Deleted..." />
+            <label class="field-label">NOTES & THOUGHTS</label>
+            <textarea class="field-input field-textarea editor-textarea" id="field-notes" placeholder="Personal thoughts, completion date, mod setup..."></textarea>
           </div>
-          <div class="field exe-field">
-            <label class="field-label">Game .exe <span class="field-hint">(for hour tracking)</span></label>
-            <div class="exe-row">
-              <input type="text" class="field-input exe-input" id="field-exe" placeholder="Path to .exe..." readonly />
-              <button class="exe-pick-btn" id="exe-pick-btn">Browse</button>
-            </div>
-          </div>
-          <div class="field">
-            <label class="field-label">Notes</label>
-            <textarea class="field-input field-textarea" id="field-notes" placeholder="Thoughts, rating, anything..."></textarea>
-          </div>
+
         </div>
       </div>
     </div>
-    <div class="modal-footer">
-      <button class="btn-secondary" id="modal-cancel">Cancel</button>
-      <button class="btn-primary" id="modal-save">Save Game</button>
+
+    <!-- Modal Footer -->
+    <div class="modal-footer modal-editor-footer">
+      <div class="modal-footer-left">
+        <button type="button" class="btn-modal-delete" id="modal-delete-btn" style="display:none">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          <span>Remove Game</span>
+        </button>
+      </div>
+      <div class="modal-footer-right">
+        <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+        <button type="button" class="btn-primary editor-save-btn" id="modal-save">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          <span id="modal-save-text">Save Game</span>
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -713,7 +906,7 @@
           <div class="settings-section about-section">
             <div class="about-logo">⬡</div>
             <div class="about-name">GameVault</div>
-            <div class="about-version" id="settings-app-version">Version 1.1.1</div>
+            <div class="about-version" id="settings-app-version">Version 1.2.0</div>
             <div class="about-desc">Track every game you have played, want, or finished. Built with care.</div>
           </div>
           
@@ -841,9 +1034,9 @@
     </div>
     <div class="modal-body update-modal-body">
       <div class="update-version-row">
-        <div class="update-ver-tag">Current: <span id="update-current-ver">v1.1.1</span></div>
+        <div class="update-ver-tag">Current: <span id="update-current-ver">v1.2.0</span></div>
         <span class="update-ver-arrow">→</span>
-        <div class="update-ver-tag new">Latest: <span id="update-new-ver">v1.1.0</span></div>
+        <div class="update-ver-tag new">Latest: <span id="update-new-ver">v1.2.0</span></div>
         <span class="update-date" id="update-rel-date"></span>
       </div>
       

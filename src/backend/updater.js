@@ -249,7 +249,7 @@ function simulateDevDownload() {
         });
         setTimeout(() => {
           isDownloading = false;
-          mainWindow.webContents.send('updater:downloaded', { version: '1.1.0' });
+          mainWindow.webContents.send('updater:downloaded', { version: '1.2.0' });
         }, 500);
       }
     } else {

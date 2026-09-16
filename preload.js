@@ -1,4 +1,4 @@
-// GameVault v1.1.1 - Preload Bridge
+// GameVault v1.2.0 - Preload Bridge
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
@@ -22,9 +22,9 @@ contextBridge.exposeInMainWorld('api', {
   detectFolder: () => ipcRenderer.invoke('detect:folder'),
 
   // Exe tracking
-  trackingStart: (gameId, exePath) => ipcRenderer.send('tracking:start', { gameId, exePath }),
-  trackingStop:  (gameId)          => ipcRenderer.send('tracking:stop',  { gameId }),
-  trackingActive: ()               => ipcRenderer.invoke('tracking:active'),
+  trackingStart: (gameId, exePath, installDir, steamAppId) => ipcRenderer.send('tracking:start', { gameId, exePath, installDir, steamAppId }),
+  trackingStop:  (gameId)                                  => ipcRenderer.send('tracking:stop',  { gameId }),
+  trackingActive: ()                                       => ipcRenderer.invoke('tracking:active'),
   onTrackingTick:       (cb) => ipcRenderer.on('tracking:tick',        (_, d) => cb(d)),
   onTrackingSessionEnd: (cb) => ipcRenderer.on('tracking:session-end', (_, d) => cb(d)),
   onTrackingStarted:    (cb) => ipcRenderer.on('tracking:started',     (_, d) => cb(d)),
@@ -32,8 +32,8 @@ contextBridge.exposeInMainWorld('api', {
   // Pick image file for custom cover
   pickImage: () => ipcRenderer.invoke('pick:image'),
 
-  launchGame: (exePath, steamAppId, gameId) => ipcRenderer.send('game:launch', { exePath, steamAppId, gameId }),
-  killGame: (gameId, exePath, installDir) => ipcRenderer.invoke('game:kill', { gameId, exePath, installDir }),
+  launchGame: (exePath, steamAppId, gameId, installDir, launcherPath) => ipcRenderer.send('game:launch', { exePath, steamAppId, gameId, installDir, launcherPath }),
+  killGame: (gameId, exePath, installDir, steamAppId, launcherPath) => ipcRenderer.invoke('game:kill', { gameId, exePath, installDir, steamAppId, launcherPath }),
 
   // Tracking detected (game launched outside app)
   onTrackingDetected: (cb) => ipcRenderer.on('tracking:detected', (_, d) => cb(d)),
@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Pick exe file
   pickExe: () => ipcRenderer.invoke('pick:exe'),
+  showInFolder: (path) => ipcRenderer.send('game:show-in-folder', path),
 
   // SteamGridDB search
   sgdbSearch: (q) => ipcRenderer.invoke('sgdb:search', q),

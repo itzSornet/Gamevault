@@ -27,38 +27,97 @@ function getSteamLibraries() {
   return [...new Set(libs)];
 }
 
+// Resolve install directory for a specific Steam App ID
+function resolveSteamInstallDir(steamAppId) {
+  if (!steamAppId) return '';
+  const libs = getSteamLibraries();
+  for (const lib of libs) {
+    const manifestPath = path.join(lib, 'steamapps', `appmanifest_${steamAppId}.acf`);
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const content = fs.readFileSync(manifestPath, 'utf-8');
+      const installDirMatch = content.match(/"installdir"\s+"([^"]+)"/i);
+      if (installDirMatch) {
+        const fullDir = path.join(lib, 'steamapps', 'common', installDirMatch[1]);
+        if (fs.existsSync(fullDir)) return fullDir;
+      }
+    } catch (e) {}
+  }
+  return '';
+}
 
 function findMainExe(dirPath) {
-  const SKIP = ['unins', 'setup', 'crash', 'redist', 'dxsetup', 'vcredist', 'directx', 'vc_redist', 'unarc', 'install', '_commonredist', 'easyanticheat', 'battleye', 'touchup', 'dotnet', 'physx'];
+  if (!dirPath || !fs.existsSync(dirPath)) return '';
+
+  const SKIP_FILES = [
+    'unins', 'setup', 'crash', 'redist', 'dxsetup', 'vcredist', 'directx', 'vc_redist',
+    'unarc', 'install', 'uninstall', '_commonredist', 'easyanticheat', 'battleye', 'touchup',
+    'dotnet', 'physx', 'epicwebhelper', 'unitycrashhandler', 'crashreport', 'support',
+    'prerequisites', 'launcher_helper'
+  ];
+
+  const SKIP_DIRS = [
+    '__pycache__', 'node_modules', '.git', '_commonredist', 'redist', 'directx',
+    'support', 'installer', 'install', 'prerequisites', 'crashpad', 'easyanticheat',
+    'battleye', 'touchup'
+  ];
+
+  const folderName = path.basename(dirPath).toLowerCase();
+  const candidates = [];
 
   function scanDir(dir, depth) {
-    let best = '', bestSize = 0;
+    if (depth > 4) return;
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
-      // Check exes in this dir
       for (const e of entries) {
-        if (!e.isFile()) continue;
-        const fl = e.name.toLowerCase();
-        if (!fl.endsWith('.exe') || SKIP.some(s => fl.includes(s))) continue;
-        try {
-          const stat = fs.statSync(path.join(dir, e.name));
-          if (stat.size > bestSize) { bestSize = stat.size; best = path.join(dir, e.name); }
-        } catch (e2) {}
-      }
-      // Recurse into subdirs up to depth 2
-      if (depth < 2) {
-        for (const e of entries) {
-          if (!e.isDirectory()) continue;
-          const sub = scanDir(path.join(dir, e.name), depth + 1);
-          if (sub.size > bestSize) { bestSize = sub.size; best = sub.path; }
+        if (e.isFile()) {
+          const fl = e.name.toLowerCase();
+          if (!fl.endsWith('.exe') || SKIP_FILES.some(s => fl.includes(s))) continue;
+          try {
+            const stat = fs.statSync(path.join(dir, e.name));
+            if (stat.size >= 10 * 1024) { // at least 10KB
+              candidates.push({
+                path: path.join(dir, e.name),
+                name: fl,
+                size: stat.size,
+                depth,
+              });
+            }
+          } catch (e2) {}
+        } else if (e.isDirectory() && depth < 4) {
+          const dl = e.name.toLowerCase();
+          if (!SKIP_DIRS.some(d => dl.includes(d))) {
+            scanDir(path.join(dir, e.name), depth + 1);
+          }
         }
       }
     } catch (e) {}
-    return { path: best, size: bestSize };
   }
 
-  const result = scanDir(dirPath, 0);
-  return result.size > 1024 * 1024 ? result.path : '';
+  scanDir(dirPath, 0);
+  if (!candidates.length) return '';
+
+  // Score candidate executables:
+  // 1. Matches folder name (e.g. Brawlhalla.exe in Brawlhalla folder)
+  // 2. Shipping or 64-bit binaries (e.g. -Win64-Shipping.exe)
+  // 3. Lower directory depth preferred
+  // 4. Larger size
+  candidates.sort((a, b) => {
+    const aMatch = a.name.replace('.exe', '') === folderName;
+    const bMatch = b.name.replace('.exe', '') === folderName;
+    if (aMatch && !bMatch) return -1;
+    if (!aMatch && bMatch) return 1;
+
+    const aShip = a.name.includes('shipping') || a.name.includes('win64');
+    const bShip = b.name.includes('shipping') || b.name.includes('win64');
+    if (aShip && !bShip) return -1;
+    if (!aShip && bShip) return 1;
+
+    if (a.depth !== b.depth) return a.depth - b.depth;
+    return b.size - a.size;
+  });
+
+  return candidates[0].path;
 }
 
 function detectSteamGames() {
@@ -77,6 +136,8 @@ function detectSteamGames() {
           const installDirMatch = content.match(/"installdir"\s+"([^"]+)"/i);
           if (nameMatch && appIdMatch) {
             const appId = appIdMatch[1];
+            // Skip Steamworks Common Redistributables
+            if (appId === '228980') continue;
             const installDir = installDirMatch ? path.join(appsDir, 'common', installDirMatch[1]) : '';
             const exePath = installDir ? findMainExe(installDir) : '';
             games.push({
@@ -493,4 +554,4 @@ async function autoFetchCovers(games, sgdbKey) {
 
 
 
-module.exports = { detectSteamGames, detectEpicGames, scanFolder, smartScan };
+module.exports = { detectSteamGames, detectEpicGames, scanFolder, smartScan, findMainExe, resolveSteamInstallDir, getSteamLibraries };

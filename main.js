@@ -1,4 +1,4 @@
-// GameVault v1.1.1 - Main Process
+// GameVault v1.2.0 - Main Process
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -7,8 +7,8 @@ const https = require('https');
 const crypto = require('crypto');
 
 const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, loadConfig, saveConfig, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
-const { detectSteamGames, detectEpicGames, scanFolder, smartScan } = require('./src/backend/scanner.js');
-const { setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes } = require('./src/backend/tracker.js');
+const { detectSteamGames, detectEpicGames, scanFolder, smartScan, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
+const { setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses } = require('./src/backend/tracker.js');
 const { searchSteamGridDB, httpsGet } = require('./src/backend/api.js');
 const { initUpdater } = require('./src/backend/updater.js');
 
@@ -277,7 +277,33 @@ function createWindow() {
     shell.showItemInFolder(filePath);
   });
 
-  ipcMain.handle('games:load', () => loadGames());
+  ipcMain.on('game:show-in-folder', (_, targetPath) => {
+    if (!targetPath || typeof targetPath !== 'string') return;
+    try {
+      if (fs.existsSync(targetPath)) {
+        shell.showItemInFolder(targetPath);
+      }
+    } catch (_) {}
+  });
+
+  ipcMain.handle('games:load', () => {
+    const games = loadGames();
+    let updated = false;
+    for (const g of games) {
+      if (g.steamAppId) {
+        if (!g.installDir) {
+          const resolved = resolveSteamInstallDir(g.steamAppId);
+          if (resolved) { g.installDir = resolved; updated = true; }
+        }
+        if (!g.exePath && g.installDir) {
+          const exe = findMainExe(g.installDir);
+          if (exe) { g.exePath = exe; updated = true; }
+        }
+      }
+    }
+    if (updated) saveGames(games);
+    return games;
+  });
   ipcMain.handle('games:save', async (_, games) => {
     await cacheGameImages(games);
     saveGames(games);
@@ -300,7 +326,7 @@ function createWindow() {
     return scanFolder(result.filePaths[0]);
   });
 
-  ipcMain.on('tracking:start', (_, { gameId, exePath }) => startTracking(String(gameId), exePath));
+  ipcMain.on('tracking:start', (_, { gameId, exePath, installDir, steamAppId }) => startTracking(String(gameId), exePath, installDir, steamAppId));
   ipcMain.on('tracking:stop', (_, { gameId }) => stopTracking(String(gameId)));
   ipcMain.handle('tracking:active', () => Object.keys(trackedProcesses));
 
@@ -328,18 +354,23 @@ function createWindow() {
     return `data:image/${mime};base64,${data}`;
   });
 
-  ipcMain.on('game:launch', (_, { exePath, steamAppId, gameId }) => {
-    if (steamAppId) {
+  ipcMain.on('game:launch', (_, { exePath, steamAppId, gameId, installDir, launcherPath }) => {
+    // 1. Immediately initiate tracking on the actual game exePath
+    startTracking(String(gameId), exePath, installDir, steamAppId);
+
+    // 2. Launch game: execute launcherPath if provided, otherwise exePath or steam
+    const pathToLaunch = launcherPath || exePath;
+    if (steamAppId && !launcherPath) {
       shell.openExternal(`steam://rungameid/${steamAppId}`);
-    } else if (exePath) {
-      if (!fs.existsSync(exePath)) {
-        win && win.webContents.send('game:launch-error', { gameId, error: `Game executable not found:\n${exePath}\n\nThe file may have been moved, deleted, or the drive is disconnected.` });
+    } else if (pathToLaunch) {
+      if (!fs.existsSync(pathToLaunch)) {
+        win && win.webContents.send('game:launch-error', { gameId, error: `Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.` });
         return;
       }
       try {
         const { spawn } = require('child_process');
-        const gameDir = path.dirname(exePath);
-        const child = spawn(exePath, [], { cwd: gameDir, detached: true, stdio: 'ignore' });
+        const gameDir = installDir || path.dirname(pathToLaunch);
+        const child = spawn(pathToLaunch, [], { cwd: gameDir, detached: true, stdio: 'ignore' });
         child.on('error', (err) => {
           win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
         });
@@ -349,27 +380,25 @@ function createWindow() {
         return;
       }
     }
-    // Update lastPlayed
+
+    // 3. Update lastPlayed and backfill any missing exePath / installDir
     const games = loadGames();
     const g = games.find(x => String(x.id) === String(gameId));
-    if (g) { g.lastPlayed = Date.now(); saveGames(games); refreshTray(); }
+    if (g) {
+      g.lastPlayed = Date.now();
+      const tp = trackedProcesses[String(gameId)];
+      if (tp) {
+        if (!g.installDir && tp.installDir) g.installDir = tp.installDir;
+        if (!g.exePath && tp.exePath) g.exePath = tp.exePath;
+      }
+      saveGames(games);
+      refreshTray();
+    }
   });
 
   // Kill a running game
-  ipcMain.handle('game:kill', async (_, { gameId, exePath, installDir }) => {
-    const dir = installDir || path.dirname(exePath || '');
-    const gameExes = collectGameExes(dir);
-    // Kill each game exe that's running
-    for (const exeName of gameExes) {
-      try {
-        await new Promise(resolve => {
-          exec(`taskkill /IM "${exeName}" /F`, { timeout: 5000 }, () => resolve());
-        });
-      } catch (e) { }
-    }
-    // Stop tracking
-    stopTracking(String(gameId));
-    return true;
+  ipcMain.handle('game:kill', async (_, { gameId, exePath, installDir, steamAppId, launcherPath }) => {
+    return await killGameProcesses(gameId, exePath, installDir, steamAppId, launcherPath);
   });
 
   ipcMain.handle('detect:disk', () => scanAllDisks());
@@ -421,14 +450,7 @@ function createWindow() {
 
   ipcMain.handle('games:scan-running', async (_, gamesList) => {
     try {
-      const result = await new Promise((resolve) => {
-        exec('tasklist /NH /FO CSV', { encoding: 'utf-8', timeout: 5000 }, (error, stdout) => resolve(stdout || ''));
-      });
-      const running = result.toLowerCase();
-      return gamesList
-        .filter(g => g.exePath && g.status === 'Playing')
-        .filter(g => running.includes(path.basename(g.exePath).toLowerCase()))
-        .map(g => g.id);
+      return await initLibraryTracking(gamesList);
     } catch (e) {
       console.warn('Scan running failed', e);
       return [];
