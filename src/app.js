@@ -2583,6 +2583,18 @@ function initAppUpdater() {
   const btnText = document.getElementById('update-check-btn-text');
   const statusEl = document.getElementById('settings-update-status');
 
+  // Dynamically load installed app version on startup
+  if (window.api.getAppVersion) {
+    window.api.getAppVersion().then(ver => {
+      if (ver) {
+        const aboutVerEl = document.getElementById('settings-app-version');
+        if (aboutVerEl) aboutVerEl.textContent = `Version ${ver}`;
+        const curVerEl = document.getElementById('update-current-ver');
+        if (curVerEl) curVerEl.textContent = `v${ver}`;
+      }
+    }).catch(() => {});
+  }
+
   // GitHub repo external links
   const repoLink = document.getElementById('link-github-repo');
   if (repoLink) repoLink.onclick = (e) => { e.preventDefault(); window.api.openExternal('https://github.com/itzSornet/Gamevault'); };
@@ -2655,7 +2667,7 @@ function initAppUpdater() {
 
     // Populate and open update modal
     document.getElementById('update-modal-title').textContent = info.releaseName || `GameVault v${info.version}`;
-    document.getElementById('update-current-ver').textContent = info.currentVersion ? `v${info.currentVersion}` : 'v1.0.0';
+    document.getElementById('update-current-ver').textContent = info.currentVersion ? `v${info.currentVersion}` : 'v1.1.0';
     document.getElementById('update-new-ver').textContent = `v${info.version}`;
     
     if (info.releaseDate) {
@@ -2698,7 +2710,7 @@ function initAppUpdater() {
     if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
-    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.0.0'}).`;
+    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.1.0'}).`;
     if (isManualUpdateCheck) {
       toast('You are already using the latest version of GameVault');
       isManualUpdateCheck = false;

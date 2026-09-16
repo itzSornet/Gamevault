@@ -168,7 +168,7 @@ async function checkGitHubReleasesDev(isManual) {
         try {
           if (res.statusCode === 200) {
             const release = JSON.parse(data);
-            const latestVer = release.tag_name ? release.tag_name.replace(/^v/, '') : '1.0.0';
+            const latestVer = release.tag_name ? release.tag_name.replace(/^v/, '') : app.getVersion();
             const currentVer = app.getVersion();
 
             if (latestVer !== currentVer && isVersionNewer(latestVer, currentVer)) {

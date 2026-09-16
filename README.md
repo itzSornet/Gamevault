@@ -4,7 +4,7 @@
   <p><strong>A modern, privacy-first personal game library manager, launcher, and playtime tracker.</strong></p>
 
   <p>
-    <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.0.0-blue.svg?style=flat-square" alt="Version 1.0.0" /></a>
+    <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.1.0-blue.svg?style=flat-square" alt="Version 1.1.0" /></a>
     <img src="https://img.shields.io/badge/platform-Windows-0078d7.svg?style=flat-square" alt="Platform: Windows" />
     <img src="https://img.shields.io/badge/electron-v29-47848f.svg?style=flat-square" alt="Electron" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License: MIT" />
