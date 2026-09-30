@@ -1,4 +1,4 @@
-// GameVault v1.2.1 - Main Process
+// GameVault v1.3.0 - Main Process
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage } = require('electron');
 app.name = 'GameVault';
 if (app.setName) app.setName('GameVault');

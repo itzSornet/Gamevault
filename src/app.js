@@ -1,4 +1,4 @@
-// GameVault v1.2.1 - Renderer Application
+// GameVault v1.3.0 - Renderer Application
 // Handles UI interactions, state management, and IPC communication
 'use strict';
 
@@ -3456,8 +3456,8 @@ function initAppUpdater() {
 
     // Populate and open update modal
     document.getElementById('update-modal-title').textContent = info.releaseName || `GameVault v${info.version}`;
-    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.2.1';
-    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.2.1';
+    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.3.0';
+    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.3.0';
     document.getElementById('update-current-ver').textContent = curVer;
     document.getElementById('update-new-ver').textContent = newVer;
     
@@ -3493,7 +3493,7 @@ function initAppUpdater() {
     if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
-    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.2.1'}).`;
+    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.3.0'}).`;
     if (isManualUpdateCheck) {
       toast('You are already using the latest version of GameVault');
       isManualUpdateCheck = false;

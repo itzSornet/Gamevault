@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=GameVault
+GenericName=Game Library & Tracker
+Comment=Modern personal game library manager, playtime tracker, and launcher
+Exec=/usr/bin/gamevault %U
+Terminal=false
+Type=Application
+Icon=gamevault
+StartupWMClass=GameVault
+Categories=Game;Utility;
+Keywords=game;launcher;steam;tracker;library;
+MimeType=x-scheme-handler/gamevault;

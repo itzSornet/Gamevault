@@ -1,6 +1,6 @@
 {
   "name": "gamevault",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Modern personal game library manager, playtime tracker, and launcher.",
   "main": "main.js",
   "author": "itzSornet",
@@ -20,9 +20,13 @@
   ],
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win --x64",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --x64",
+    "build:linux": "electron-builder --linux",
     "build:portable": "electron-builder --win portable",
-    "release": "electron-builder --win --x64 --publish always"
+    "release": "electron-builder --publish always",
+    "release:win": "electron-builder --win --x64 --publish always",
+    "release:linux": "electron-builder --linux --publish always"
   },
   "build": {
     "appId": "com.gamevault.app",
@@ -47,6 +51,17 @@
         }
       ],
       "icon": "src/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "pacman",
+        "tar.gz"
+      ],
+      "category": "Game",
+      "icon": "src/icon.png",
+      "synopsis": "Modern personal game library manager and playtime tracker",
+      "description": "GameVault is a sleek, modern personal game library manager, playtime tracker, and launcher."
     },
     "nsis": {
       "oneClick": false,

@@ -4,8 +4,8 @@
   <p><strong>A modern, privacy-first personal game library manager, launcher, and playtime tracker.</strong></p>
 
   <p>
-    <a href="https://github.com/itzSornet/Gamevault/releases"><img src="https://img.shields.io/badge/version-1.2.1-blue.svg?style=flat-square" alt="Version 1.2.1" /></a>
-    <img src="https://img.shields.io/badge/platform-Windows-0078d7.svg?style=flat-square" alt="Platform: Windows" />
+    <a href="https://github.com/itzSornet/Gamevault/releases"><img src="https://img.shields.io/badge/version-1.3.0-blue.svg?style=flat-square" alt="Version 1.3.0" /></a>
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blueviolet.svg?style=flat-square" alt="Platform: Windows | Linux" />
     <img src="https://img.shields.io/badge/electron-v29-47848f.svg?style=flat-square" alt="Electron" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License: MIT" />
   </p>
