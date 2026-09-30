@@ -9,23 +9,31 @@ const { httpsGet } = require('./api.js');
 // Steam library detection
 function getSteamLibraries() {
   const libs = [];
-  const roots = [
+  const home = process.env.HOME || '';
+  const roots = process.platform === 'win32' ? [
     'C:\\Program Files (x86)\\Steam',
     'C:\\Program Files\\Steam',
     'D:\\Steam',
     'E:\\Steam',
+  ] : [
+    path.join(home, '.local', 'share', 'Steam'),
+    path.join(home, '.steam', 'steam'),
+    path.join(home, '.steam', 'root'),
+    path.join(home, '.var', 'app', 'com.valvesoftware.Steam', 'data', 'Steam'),
   ];
 
-  try {
-    const reg = execSync('reg query "HKCU\\Software\\Valve\\Steam" /v SteamPath', { encoding: 'utf-8', timeout: 2000 });
-    const match = reg.match(/SteamPath\s+REG_SZ\s+(.+)/i);
-    if (match && match[1]) {
-      const regPath = path.normalize(match[1].trim());
-      if (fs.existsSync(regPath) && !roots.includes(regPath)) {
-        roots.unshift(regPath);
+  if (process.platform === 'win32') {
+    try {
+      const reg = execSync('reg query "HKCU\\Software\\Valve\\Steam" /v SteamPath', { encoding: 'utf-8', timeout: 2000 });
+      const match = reg.match(/SteamPath\s+REG_SZ\s+(.+)/i);
+      if (match && match[1]) {
+        const regPath = path.normalize(match[1].trim());
+        if (fs.existsSync(regPath) && !roots.includes(regPath)) {
+          roots.unshift(regPath);
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
@@ -250,24 +258,33 @@ function scanFolder(folderPath) {
 // Drive filesystem scan
 function getAllDrives() {
   const drives = [];
-  try {
-    const stdout = execSync('powershell -NoProfile -Command "[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq \'Fixed\' -or $_.DriveType -eq \'Removable\' } | Select-Object -ExpandProperty Name"', { encoding: 'utf-8', timeout: 3000 });
-    const lines = stdout.split(/\r?\n/).map(l => l.trim().replace(/\\$/, '')).filter(l => /^[A-Z]:$/i.test(l));
-    if (lines.length > 0) {
-      return [...new Set(lines.map(l => l.toUpperCase()))];
-    }
-  } catch (e) {}
-
-  // Fallback: probe drive letters with fs.existsSync
-  const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  for (const letter of letters) {
+  if (process.platform === 'win32') {
     try {
-      if (fs.existsSync(`${letter}:\\`)) {
-        drives.push(`${letter}:`);
+      const stdout = execSync('powershell -NoProfile -Command "[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq \'Fixed\' -or $_.DriveType -eq \'Removable\' } | Select-Object -ExpandProperty Name"', { encoding: 'utf-8', timeout: 3000 });
+      const lines = stdout.split(/\r?\n/).map(l => l.trim().replace(/\\$/, '')).filter(l => /^[A-Z]:$/i.test(l));
+      if (lines.length > 0) {
+        return [...new Set(lines.map(l => l.toUpperCase()))];
       }
     } catch (e) {}
+
+    // Fallback: probe drive letters with fs.existsSync
+    const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    for (const letter of letters) {
+      try {
+        if (fs.existsSync(`${letter}:\\`)) {
+          drives.push(`${letter}:`);
+        }
+      } catch (e) {}
+    }
+    return drives.length > 0 ? drives : ['C:'];
+  } else {
+    drives.push('/');
+    const checkDirs = ['/mnt', '/media', path.join(process.env.HOME || '', 'Games')];
+    for (const d of checkDirs) {
+      if (fs.existsSync(d)) drives.push(d);
+    }
+    return [...new Set(drives)];
   }
-  return drives.length > 0 ? drives : ['C:'];
 }
 
 const GAME_FOLDER_HINTS = ['games', 'game', 'steam', 'steamapps', 'common', 'epic games', 'ubisoft', 'origin games', 'gog games', 'program files'];

@@ -113,10 +113,11 @@ function refreshTray() {
 // Background polling — detect games launched outside app every 30s
 function startBgPoll() {
   if (bgPollInterval) return;
+  const pollCmd = process.platform === 'win32' ? 'tasklist /NH /FO CSV' : 'ps -eo comm=,args=';
   bgPollInterval = setInterval(async () => {
     try {
       const result = await new Promise(resolve => {
-        exec('tasklist /NH /FO CSV', { encoding: 'utf-8', timeout: 5000 }, (err, stdout) => {
+        exec(pollCmd, { encoding: 'utf-8', timeout: 5000 }, (err, stdout) => {
           resolve(err ? '' : stdout.toLowerCase());
         });
       });
@@ -204,6 +205,7 @@ function createOverlayWindow() {
 function toggleOverlay() {
   if (!overlayWin) { console.log('[Overlay] No overlayWin'); return; }
   if (overlayWin.isVisible()) {
+    overlayWin.setIgnoreMouseEvents(true);
     overlayWin.hide();
   } else {
     overlayWin.showOverlay();

@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 const { resolveSteamInstallDir, findMainExe } = require('./scanner.js');
 
 let trackerWin = null;
@@ -56,10 +56,11 @@ async function checkAllTrackedProcesses() {
   const gameIds = Object.keys(trackedProcesses);
   if (gameIds.length === 0) return;
 
+  const pollCmd = process.platform === 'win32' ? 'tasklist /NH /FO CSV' : 'ps -eo comm=,args=';
   isChecking = true;
   try {
     const stdout = await new Promise(resolve => {
-      exec('tasklist /NH /FO CSV', { encoding: 'utf-8', timeout: 5000 }, (err, out) => {
+      exec(pollCmd, { encoding: 'utf-8', timeout: 5000 }, (err, out) => {
         resolve(err ? '' : (out || '').toLowerCase());
       });
     });
@@ -217,7 +218,10 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
   for (const exeName of cleanExes) {
     try {
       await new Promise(resolve => {
-        exec(`taskkill /F /IM "${exeName}" /T`, { timeout: 5000 }, () => resolve());
+        const killCmd = process.platform === 'win32'
+          ? `taskkill /F /IM "${exeName}" /T`
+          : `pkill -9 -f "${exeName}" 2>/dev/null || killall -9 "${exeName}" 2>/dev/null || true`;
+        exec(killCmd, { timeout: 5000 }, () => resolve());
       });
     } catch (e) {}
   }
@@ -226,10 +230,66 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
   return true;
 }
 
+function detectLinuxSpecs() {
+  let cpu = 'Unknown';
+  try {
+    const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf-8');
+    const m = cpuInfo.match(/model name\s*:\s*(.+)/i);
+    if (m) cpu = m[1].trim();
+  } catch (e) {}
+
+  let ram = 'Unknown';
+  try {
+    const memInfo = fs.readFileSync('/proc/meminfo', 'utf-8');
+    const m = memInfo.match(/MemTotal:\s*(\d+)/i);
+    if (m) ram = Math.round(parseInt(m[1], 10) / (1024 * 1024)) + ' GB';
+  } catch (e) {}
+
+  let os = 'Linux';
+  try {
+    const osRel = fs.readFileSync('/etc/os-release', 'utf-8');
+    const m = osRel.match(/PRETTY_NAME="?([^"\n]+)"?/i);
+    if (m) os = m[1].trim();
+  } catch (e) {}
+
+  let gpus = [];
+  try {
+    const pci = execSync("lspci | grep -i -E 'vga|3d|display'", { encoding: 'utf-8', timeout: 3000 });
+    const lines = pci.split('\n').map(l => l.trim()).filter(Boolean);
+    gpus = lines.map(line => {
+      const colonIdx = line.indexOf(': ');
+      const name = colonIdx !== -1 ? line.slice(colonIdx + 2).trim() : line;
+      return { name, vram: 'Unknown' };
+    });
+  } catch (e) {}
+
+  const iGpuKeywords = ['intel', 'uhd', 'iris', 'integrated'];
+  const discrete = gpus.find(g => !iGpuKeywords.some(k => g.name.toLowerCase().includes(k)));
+  const primary = discrete || gpus[0] || { name: 'Unknown', vram: 'Unknown' };
+
+  return {
+    cpu,
+    gpu: primary.name,
+    vram: primary.vram,
+    ram,
+    os,
+    allGpus: gpus,
+  };
+}
+
 // Hardware detection
 let cachedSpecs = null;
 async function detectPCSpecs() {
   if (cachedSpecs) return cachedSpecs;
+  if (process.platform !== 'win32') {
+    try {
+      cachedSpecs = detectLinuxSpecs();
+      return cachedSpecs;
+    } catch (e) {
+      console.error('Linux specs detection error:', e.message);
+      return { cpu: 'Unknown', gpu: 'Unknown', vram: 'Unknown', ram: 'Unknown', os: 'Linux', allGpus: [] };
+    }
+  }
   try {
     // Single async PowerShell call to get ALL specs at once (no UI freeze)
     const psScript = '$cpu = (Get-CimInstance Win32_Processor | Select -First 1).Name; $ram = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory; $os = (Get-CimInstance Win32_OperatingSystem).Caption; $gpus = Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM; @{ cpu=$cpu; ram=$ram; os=$os; gpus=@($gpus) } | ConvertTo-Json -Depth 3';
