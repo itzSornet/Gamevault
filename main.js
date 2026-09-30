@@ -1,5 +1,8 @@
-// GameVault v1.2.0 - Main Process
+// GameVault v1.2.1 - Main Process
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage } = require('electron');
+app.name = 'GameVault';
+if (app.setName) app.setName('GameVault');
+
 const path = require('path');
 const fs = require('fs');
 const { execSync, exec } = require('child_process');
@@ -12,21 +15,67 @@ const { setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPC
 const { searchSteamGridDB, httpsGet } = require('./src/backend/api.js');
 const { initUpdater } = require('./src/backend/updater.js');
 
+let win = null;
+let overlayWin = null;
 let tray = null;
 let forceQuit = false;
 let bgPollInterval = null;
 
+function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
+  const sid = String(gameId);
+  // 1. Immediately initiate tracking on the actual game exePath
+  startTracking(sid, exePath, installDir, steamAppId);
+
+  // 2. Launch game: execute launcherPath if provided, otherwise exePath or steam
+  const pathToLaunch = launcherPath || exePath;
+  if (steamAppId && !launcherPath) {
+    shell.openExternal(`steam://rungameid/${steamAppId}`);
+  } else if (pathToLaunch) {
+    if (!fs.existsSync(pathToLaunch)) {
+      win && win.webContents.send('game:launch-error', { gameId, error: `Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.` });
+      return;
+    }
+    try {
+      const { spawn } = require('child_process');
+      const gameDir = installDir || path.dirname(pathToLaunch);
+      const child = spawn(pathToLaunch, [], { cwd: gameDir, detached: true, stdio: 'ignore' });
+      child.on('error', (err) => {
+        win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
+      });
+      child.unref();
+    } catch (err) {
+      win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
+      return;
+    }
+  }
+
+  // 3. Update lastPlayed and backfill any missing exePath / installDir
+  const games = loadGames();
+  const g = games.find(x => String(x.id) === sid);
+  if (g) {
+    g.lastPlayed = Date.now();
+    const tp = trackedProcesses[sid];
+    if (tp) {
+      if (!g.installDir && tp.installDir) g.installDir = tp.installDir;
+      if (!g.exePath && tp.exePath) g.exePath = tp.exePath;
+    }
+    saveGames(games);
+    refreshTray();
+    win && win.webContents.send('games:updated');
+  }
+}
+
 function buildTrayMenu() {
   const games = loadGames();
   const recent = games
-    .filter(g => g.exePath && g.lastPlayed)
+    .filter(g => (g.exePath || g.steamAppId) && g.lastPlayed)
     .sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))
     .slice(0, 3);
 
   const recentItems = recent.length
     ? recent.map(g => ({
       label: g.name.length > 28 ? g.name.slice(0, 28) + '…' : g.name,
-      click: () => exec(`"${g.exePath}"`, () => { }),
+      click: () => launchGame(g.id, g.exePath, g.installDir, g.steamAppId, g.launcherPath),
     }))
     : [{ label: 'No recent games', enabled: false }];
 
@@ -108,8 +157,20 @@ function createOverlayWindow() {
     },
   });
 
-  overlayWin.setIgnoreMouseEvents(false);
+  overlayWin.setIgnoreMouseEvents(true);
   overlayWin.loadFile(path.join(__dirname, 'src', 'overlay.html'));
+
+  overlayWin.on('hide', () => {
+    if (overlayWin && !overlayWin.isDestroyed()) {
+      overlayWin.setIgnoreMouseEvents(true);
+    }
+  });
+
+  overlayWin.on('show', () => {
+    if (overlayWin && !overlayWin.isDestroyed()) {
+      overlayWin.setIgnoreMouseEvents(false);
+    }
+  });
 
   // Guard: don't hide immediately after showing (blur fires on show sometimes)
   let showTime = 0;
@@ -135,6 +196,7 @@ function createOverlayWindow() {
     showTime = Date.now();
     overlayWin.show();
     overlayWin.focus();
+    overlayWin.setIgnoreMouseEvents(false);
     overlayWin.webContents.send('overlay:opened');
   };
 }
@@ -185,7 +247,7 @@ function createWindow() {
     },
   });
   setTrackerWindow(win);
-  initUpdater(win);
+  initUpdater(win, () => { forceQuit = true; });
 
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
 
@@ -198,9 +260,30 @@ function createWindow() {
     }
   });
 
-  ipcMain.on('win-minimize', () => win.minimize());
-  ipcMain.on('win-maximize', () => win.isMaximized() ? win.unmaximize() : win.maximize());
-  ipcMain.on('win-close', () => win.hide());
+  // Window maximize state sync
+  win.on('maximize', () => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('win:maximized', true);
+    }
+  });
+
+  win.on('unmaximize', () => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('win:maximized', false);
+    }
+  });
+
+  ipcMain.on('win-minimize', () => win && win.minimize());
+  ipcMain.on('win-maximize', () => {
+    if (!win) return;
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+  });
+  ipcMain.on('win-close', () => win && win.hide());
+  ipcMain.handle('win:is-maximized', () => win ? win.isMaximized() : false);
   ipcMain.on('overlay:update-hotkey', (_, hotkey) => registerOverlayShortcut(hotkey));
   ipcMain.on('overlay:hide', () => { if (overlayWin) overlayWin.hide(); });
   ipcMain.on('overlay:toggle', () => toggleOverlay());
@@ -355,45 +438,7 @@ function createWindow() {
   });
 
   ipcMain.on('game:launch', (_, { exePath, steamAppId, gameId, installDir, launcherPath }) => {
-    // 1. Immediately initiate tracking on the actual game exePath
-    startTracking(String(gameId), exePath, installDir, steamAppId);
-
-    // 2. Launch game: execute launcherPath if provided, otherwise exePath or steam
-    const pathToLaunch = launcherPath || exePath;
-    if (steamAppId && !launcherPath) {
-      shell.openExternal(`steam://rungameid/${steamAppId}`);
-    } else if (pathToLaunch) {
-      if (!fs.existsSync(pathToLaunch)) {
-        win && win.webContents.send('game:launch-error', { gameId, error: `Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.` });
-        return;
-      }
-      try {
-        const { spawn } = require('child_process');
-        const gameDir = installDir || path.dirname(pathToLaunch);
-        const child = spawn(pathToLaunch, [], { cwd: gameDir, detached: true, stdio: 'ignore' });
-        child.on('error', (err) => {
-          win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
-        });
-        child.unref();
-      } catch (err) {
-        win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
-        return;
-      }
-    }
-
-    // 3. Update lastPlayed and backfill any missing exePath / installDir
-    const games = loadGames();
-    const g = games.find(x => String(x.id) === String(gameId));
-    if (g) {
-      g.lastPlayed = Date.now();
-      const tp = trackedProcesses[String(gameId)];
-      if (tp) {
-        if (!g.installDir && tp.installDir) g.installDir = tp.installDir;
-        if (!g.exePath && tp.exePath) g.exePath = tp.exePath;
-      }
-      saveGames(games);
-      refreshTray();
-    }
+    launchGame(gameId, exePath, installDir, steamAppId, launcherPath);
   });
 
   // Kill a running game

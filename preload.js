@@ -1,4 +1,4 @@
-// GameVault v1.2.0 - Preload Bridge
+// GameVault v1.2.1 - Preload Bridge
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('api', {
   minimize: () => ipcRenderer.send('win-minimize'),
   maximize: () => ipcRenderer.send('win-maximize'),
   close:    () => ipcRenderer.send('win-close'),
+  isMaximized: () => ipcRenderer.invoke('win:is-maximized'),
+  onMaximizedChange: (cb) => ipcRenderer.on('win:maximized', (_, isMax) => cb(isMax)),
 
   // Games data
   loadGames:   () => ipcRenderer.invoke('games:load'),

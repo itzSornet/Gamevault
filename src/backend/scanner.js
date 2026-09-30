@@ -12,9 +12,23 @@ function getSteamLibraries() {
   const roots = [
     'C:\\Program Files (x86)\\Steam',
     'C:\\Program Files\\Steam',
-  ].filter(Boolean);
+    'D:\\Steam',
+    'E:\\Steam',
+  ];
+
+  try {
+    const reg = execSync('reg query "HKCU\\Software\\Valve\\Steam" /v SteamPath', { encoding: 'utf-8', timeout: 2000 });
+    const match = reg.match(/SteamPath\s+REG_SZ\s+(.+)/i);
+    if (match && match[1]) {
+      const regPath = path.normalize(match[1].trim());
+      if (fs.existsSync(regPath) && !roots.includes(regPath)) {
+        roots.unshift(regPath);
+      }
+    }
+  } catch (e) {}
 
   for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
     const vdf = path.join(root, 'steamapps', 'libraryfolders.vdf');
     if (!fs.existsSync(vdf)) continue;
     try {
@@ -164,7 +178,8 @@ function detectSteamGames() {
 // Epic Games detection
 function detectEpicGames() {
   const games = [];
-  const dir = 'C:\\ProgramData\\Epic\\EpicGamesLauncher\\Data\\Manifests';
+  const programData = process.env.ProgramData || 'C:\\ProgramData';
+  const dir = path.join(programData, 'Epic', 'EpicGamesLauncher', 'Data', 'Manifests');
   if (!fs.existsSync(dir)) return games;
   try {
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.item'));
@@ -236,13 +251,23 @@ function scanFolder(folderPath) {
 function getAllDrives() {
   const drives = [];
   try {
-    const result = execSync('wmic logicaldisk get caption', { encoding: 'utf-8', timeout: 5000 });
-    const lines = result.split('\n').map(l => l.trim()).filter(l => /^[A-Z]:$/.test(l));
-    drives.push(...lines);
-  } catch (e) {
-    drives.push('C:', 'D:', 'E:');
+    const stdout = execSync('powershell -NoProfile -Command "[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq \'Fixed\' -or $_.DriveType -eq \'Removable\' } | Select-Object -ExpandProperty Name"', { encoding: 'utf-8', timeout: 3000 });
+    const lines = stdout.split(/\r?\n/).map(l => l.trim().replace(/\\$/, '')).filter(l => /^[A-Z]:$/i.test(l));
+    if (lines.length > 0) {
+      return [...new Set(lines.map(l => l.toUpperCase()))];
+    }
+  } catch (e) {}
+
+  // Fallback: probe drive letters with fs.existsSync
+  const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  for (const letter of letters) {
+    try {
+      if (fs.existsSync(`${letter}:\\`)) {
+        drives.push(`${letter}:`);
+      }
+    } catch (e) {}
   }
-  return drives;
+  return drives.length > 0 ? drives : ['C:'];
 }
 
 const GAME_FOLDER_HINTS = ['games', 'game', 'steam', 'steamapps', 'common', 'epic games', 'ubisoft', 'origin games', 'gog games', 'program files'];

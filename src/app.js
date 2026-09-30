@@ -1,4 +1,4 @@
-// GameVault v1.2.0 - Renderer Application
+// GameVault v1.2.1 - Renderer Application
 // Handles UI interactions, state management, and IPC communication
 'use strict';
 
@@ -91,10 +91,43 @@ async function boot() {
   });
   if (dataChanged) await window.api.saveGames(games);
 
-  // Titlebar
-  document.getElementById('btn-min').onclick  = () => window.api.minimize();
-  document.getElementById('btn-max').onclick  = () => window.api.maximize();
-  document.getElementById('btn-close').onclick = () => window.api.close();
+  // Titlebar controls & maximize/restore synchronization
+  const btnMin = document.getElementById('btn-min');
+  const btnMax = document.getElementById('btn-max');
+  const btnClose = document.getElementById('btn-close');
+
+  if (btnMin) btnMin.onclick = () => window.api.minimize();
+  if (btnMax) btnMax.onclick = () => window.api.maximize();
+  if (btnClose) btnClose.onclick = () => window.api.close();
+
+  function updateMaximizeButton(isMax) {
+    if (!btnMax) return;
+    if (isMax) {
+      btnMax.title = 'Restore';
+      btnMax.setAttribute('aria-label', 'Restore');
+      btnMax.innerHTML = `
+        <svg class="tb-icon" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2">
+          <path d="M3.5 3.5V1.5H10.5V8.5H8.5" stroke-linejoin="round" />
+          <rect x="1.5" y="3.5" width="7" height="7" rx="1" />
+        </svg>
+      `;
+    } else {
+      btnMax.title = 'Maximize';
+      btnMax.setAttribute('aria-label', 'Maximize');
+      btnMax.innerHTML = `
+        <svg class="tb-icon" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="2" y="2" width="8" height="8" rx="1.5" />
+        </svg>
+      `;
+    }
+  }
+
+  if (window.api.isMaximized) {
+    window.api.isMaximized().then(updateMaximizeButton).catch(() => {});
+  }
+  if (window.api.onMaximizedChange) {
+    window.api.onMaximizedChange(updateMaximizeButton);
+  }
 
   // Nav
   document.querySelectorAll('.nav-item').forEach(btn => {
@@ -3423,8 +3456,8 @@ function initAppUpdater() {
 
     // Populate and open update modal
     document.getElementById('update-modal-title').textContent = info.releaseName || `GameVault v${info.version}`;
-    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.2.0';
-    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.2.0';
+    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.2.1';
+    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.2.1';
     document.getElementById('update-current-ver').textContent = curVer;
     document.getElementById('update-new-ver').textContent = newVer;
     
@@ -3460,7 +3493,7 @@ function initAppUpdater() {
     if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
-    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.2.0'}).`;
+    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.2.1'}).`;
     if (isManualUpdateCheck) {
       toast('You are already using the latest version of GameVault');
       isManualUpdateCheck = false;

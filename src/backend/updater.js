@@ -7,13 +7,17 @@ let mainWindow = null;
 let updateAvailableInfo = null;
 let isDownloading = false;
 
-function initUpdater(win) {
+function initUpdater(win, onBeforeQuit) {
   mainWindow = win;
 
   // Configure autoUpdater
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowPrerelease = false;
+
+  autoUpdater.on('before-quit-for-update', () => {
+    if (typeof onBeforeQuit === 'function') onBeforeQuit();
+  });
 
   // Wire autoUpdater events
   autoUpdater.on('checking-for-update', () => {
@@ -125,6 +129,7 @@ function initUpdater(win) {
   });
 
   ipcMain.handle('updater:install', () => {
+    if (typeof onBeforeQuit === 'function') onBeforeQuit();
     if (app.isPackaged) {
       autoUpdater.quitAndInstall(false, true);
     } else {
@@ -249,7 +254,7 @@ function simulateDevDownload() {
         });
         setTimeout(() => {
           isDownloading = false;
-          mainWindow.webContents.send('updater:downloaded', { version: '1.2.0' });
+          mainWindow.webContents.send('updater:downloaded', { version: '1.2.1' });
         }, 500);
       }
     } else {

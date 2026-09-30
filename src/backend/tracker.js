@@ -212,7 +212,9 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
     if (!exesToKill.includes(lbn)) exesToKill.push(lbn);
   }
 
-  for (const exeName of exesToKill) {
+  const cleanExes = [...new Set(exesToKill.map(e => path.basename(e).trim()).filter(Boolean))];
+
+  for (const exeName of cleanExes) {
     try {
       await new Promise(resolve => {
         exec(`taskkill /F /IM "${exeName}" /T`, { timeout: 5000 }, () => resolve());
@@ -242,10 +244,16 @@ async function detectPCSpecs() {
 
     // Parse GPUs
     const gpuArr = Array.isArray(data.gpus) ? data.gpus : [data.gpus];
-    const gpus = gpuArr.filter(Boolean).map(g => ({
-      name: g.Name || 'Unknown',
-      vram: g.AdapterRAM ? (parseInt(g.AdapterRAM) / (1024 ** 3)).toFixed(1) + ' GB' : 'Unknown',
-    }));
+    const gpus = gpuArr.filter(Boolean).map(g => {
+      const adapterBytes = parseInt(g.AdapterRAM);
+      const vram = (adapterBytes && adapterBytes > 0)
+        ? (adapterBytes / (1024 ** 3)).toFixed(1) + ' GB'
+        : 'Unknown';
+      return {
+        name: g.Name || 'Unknown',
+        vram,
+      };
+    });
 
     // Pick discrete GPU over integrated
     const iGpuKeywords = ['intel', 'uhd', 'iris', 'integrated'];
