@@ -3,7 +3,10 @@
   "version": "1.3.0",
   "description": "Modern personal game library manager, playtime tracker, and launcher.",
   "main": "main.js",
-  "author": "itzSornet",
+  "author": {
+    "name": "itzSornet",
+    "email": "itzsornet@users.noreply.github.com"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -53,6 +56,7 @@
       "icon": "src/icon.ico"
     },
     "linux": {
+      "maintainer": "itzSornet <itzsornet@users.noreply.github.com>",
       "target": [
         "AppImage",
         "pacman",
