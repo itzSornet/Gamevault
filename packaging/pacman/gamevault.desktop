@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=GameVault
+GenericName=Game Library & Tracker
+Comment=Modern personal game library manager, playtime tracker, and launcher
+Exec=gamevault %U
+Icon=gamevault
+Terminal=false
+StartupNotify=true
+StartupWMClass=GameVault
+Categories=Game;Utility;
+Keywords=game;launcher;steam;epic;tracker;library;
