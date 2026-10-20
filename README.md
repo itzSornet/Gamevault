@@ -75,18 +75,40 @@ Build artifacts are generated directly in the `dist/` directory.
 
 ### Arch Linux (pacman)
 
-GameVault is distributed from a self-hosted pacman repository:
+One command:
 
 ```bash
-echo -e '\n[gamevault]\nServer = https://itzsornet.github.io/Gamevault/x86_64\nSigLevel = Optional TrustAll' | sudo tee -a /etc/pacman.conf
+curl -fsSL https://itzsornet.github.io/Gamevault/install.sh | sudo bash
+```
+
+It adds the `[gamevault]` repository once, then installs and upgrades normally
+through `pacman -Syu`.
+
+<details>
+<summary>Prefer to do it manually?</summary>
+
+```bash
+printf '[gamevault]\nServer = https://itzsornet.github.io/Gamevault/x86_64\nSigLevel = Optional TrustAll\n' | sudo tee /etc/pacman.d/gamevault.conf
+echo 'Include = /etc/pacman.d/gamevault.conf' | sudo tee -a /etc/pacman.conf
 sudo pacman -Syu
 sudo pacman -S gamevault
 ```
+</details>
+
+### Any distro (AppImage)
+
+No root, no setup:
+
+```bash
+curl -LO https://github.com/itzSornet/Gamevault/releases/latest/download/GameVault-1.3.1.AppImage
+chmod +x GameVault-1.3.1.AppImage
+./GameVault-1.3.1.AppImage
+```
 
 Package recipe: [`packaging/pacman/PKGBUILD`](packaging/pacman/PKGBUILD).
-Installs to `/opt/gamevault` with `/usr/bin/gamevault`, a desktop entry and a
-hicolor icon. The in-app updater detects new releases on these installs but
-leaves the upgrade to `pacman`.
+The pacman package installs to `/opt/gamevault` with `/usr/bin/gamevault`, a
+desktop entry and a hicolor icon. The in-app updater detects new releases on
+those installs but leaves the upgrade to `pacman`.
 
 ---
 
