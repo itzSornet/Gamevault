@@ -33,11 +33,23 @@
   <h1>Game<span>Vault</span> <span style="color:#6b7280;font-weight:400">· pacman repo</span></h1>
   <p class="lead">Modern personal game library manager, playtime tracker, and launcher.</p>
 
-  <h2>Install</h2>
-  <pre><code><span class="c"># 1. append the repo to pacman.conf</span>
-echo -e '\n[gamevault]\nServer = https://itzsornet.github.io/Gamevault/x86_64\nSigLevel = Optional TrustAll' | sudo tee -a /etc/pacman.conf
+  <h2>Arch Linux — one command</h2>
+  <pre><code>curl -fsSL https://itzsornet.github.io/Gamevault/install.sh | sudo bash</code></pre>
 
-<span class="c"># 2. sync and install</span>
+  <div class="note">
+    That's it: it adds the repository (once) and installs the package. Prefer to read it first?
+    <a href="/Gamevault/install.sh">install.sh</a> is ~40 lines. Or use the
+    <a href="#manual">manual setup</a> below.
+  </div>
+
+  <h2>Any distro — no root, no setup</h2>
+  <pre><code>curl -LO https://github.com/itzSornet/Gamevault/releases/latest/download/GameVault-1.3.1.AppImage
+chmod +x GameVault-1.3.1.AppImage
+./GameVault-1.3.1.AppImage</code></pre>
+
+  <h2 id="manual">Manual setup (Arch)</h2>
+  <pre><code>printf '[gamevault]\nServer = https://itzsornet.github.io/Gamevault/x86_64\nSigLevel = Optional TrustAll\n' | sudo tee /etc/pacman.d/gamevault.conf
+echo 'Include = /etc/pacman.d/gamevault.conf' | sudo tee -a /etc/pacman.conf
 sudo pacman -Syu
 sudo pacman -S gamevault</code></pre>
 
@@ -55,10 +67,6 @@ sudo pacman -S gamevault</code></pre>
     <tr><th>Depends</th><td>gtk3, nss, libcups, mesa, alsa-lib, xdg-utils, …</td></tr>
     <tr><th>Signed</th><td>No — this repo is not GPG-signed; it is served over HTTPS from this repository</td></tr>
   </table>
-
-  <h2>Prefer AppImage?</h2>
-  <pre><code>curl -LO https://github.com/itzSornet/Gamevault/releases/latest/download/GameVault-1.3.1.AppImage
-chmod +x GameVault-1.3.1.AppImage</code></pre>
 
   <h2>Source</h2>
   <p><a href="https://github.com/itzSornet/Gamevault">github.com/itzSornet/Gamevault</a> · MIT</p>
