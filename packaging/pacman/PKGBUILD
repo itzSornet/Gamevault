@@ -1,6 +1,6 @@
 # Maintainer: itzSornet <itzsornet@users.noreply.github.com>
 pkgname=gamevault
-pkgver=1.3.0
+pkgver=1.3.1
 pkgrel=1
 pkgdesc="Modern personal game library manager, playtime tracker, and launcher"
 arch=('x86_64')
@@ -39,7 +39,7 @@ options=('!strip' '!debug' '!emptydirs')
 
 source=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/GameVault-${pkgver}.AppImage"
         "gamevault.desktop")
-sha256sums=('aaee7e85c95a5f7486e69ee00177b052e77ab8e0a9a4b1c65e53e8a26bd20960'
+sha256sums=('99030f599439afc418405d40904980fa4bec592288846694e3c6cd6d3e623823'
             '39975cd807a11a86578a54d48c35e396591390686ec3f1ea4ddc8d806092bf9c')
 
 prepare() {
