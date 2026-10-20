@@ -3,6 +3,14 @@ const { autoUpdater } = require('electron-updater');
 const https = require('https');
 const { loadConfig, saveConfig } = require('./data.js');
 
+// Self-update requires the app to be able to replace its own bundle.
+// Windows (NSIS) and Linux AppImages can; a package-manager install
+// (pacman / tar.gz in root-owned /opt) cannot. Those installs stay
+// update-aware but hand the actual upgrade to the package manager.
+const CAN_SELF_UPDATE = process.platform !== 'linux' || !!process.env.APPIMAGE;
+const MANUAL_UPDATE = app.isPackaged && !CAN_SELF_UPDATE;
+const MANUAL_UPDATE_COMMAND = 'sudo pacman -Syu';
+
 let mainWindow = null;
 let updateAvailableInfo = null;
 let isDownloading = false;
@@ -97,8 +105,9 @@ function initUpdater(win, onBeforeQuit) {
 
   ipcMain.handle('updater:check', async (_, isManual = false) => {
     try {
-      if (!app.isPackaged) {
-        // Fallback check against GitHub API during local development
+      if (!app.isPackaged || !CAN_SELF_UPDATE) {
+        // Fallback check against GitHub API during local development,
+        // and for installs that cannot self-update (package manager).
         return await checkGitHubReleasesDev(isManual);
       }
       return await autoUpdater.checkForUpdates();
@@ -111,6 +120,10 @@ function initUpdater(win, onBeforeQuit) {
   });
 
   ipcMain.handle('updater:download', async () => {
+    if (MANUAL_UPDATE) {
+      // Package-manager install: there is nothing this process may overwrite.
+      return { manual: true, command: MANUAL_UPDATE_COMMAND };
+    }
     if (isDownloading) return;
     isDownloading = true;
     try {
@@ -129,6 +142,7 @@ function initUpdater(win, onBeforeQuit) {
   });
 
   ipcMain.handle('updater:install', () => {
+    if (MANUAL_UPDATE) return false;
     if (typeof onBeforeQuit === 'function') onBeforeQuit();
     if (app.isPackaged) {
       autoUpdater.quitAndInstall(false, true);
@@ -183,7 +197,10 @@ async function checkGitHubReleasesDev(isManual) {
                   currentVersion: currentVer,
                   releaseDate: release.published_at,
                   releaseNotes: release.body || '',
-                  releaseName: release.name || `GameVault v${latestVer}`
+                  releaseName: release.name || `GameVault v${latestVer}`,
+                  manual: MANUAL_UPDATE,
+                  installCommand: MANUAL_UPDATE ? MANUAL_UPDATE_COMMAND : '',
+                  releaseUrl: release.html_url || ''
                 });
               }
             } else {
@@ -254,7 +271,7 @@ function simulateDevDownload() {
         });
         setTimeout(() => {
           isDownloading = false;
-          mainWindow.webContents.send('updater:downloaded', { version: '1.3.0' });
+          mainWindow.webContents.send('updater:downloaded', { version: '1.3.1' });
         }, 500);
       }
     } else {

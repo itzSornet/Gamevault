@@ -1,4 +1,4 @@
-// GameVault v1.3.0 - Renderer Application
+// GameVault v1.3.1 - Renderer Application
 // Handles UI interactions, state management, and IPC communication
 'use strict';
 
@@ -3425,6 +3425,18 @@ function initAppUpdater() {
   };
 
   document.getElementById('update-now-btn').onclick = () => {
+    // Package-manager installs cannot replace themselves — hand over the command.
+    if (currentAvailableUpdate && currentAvailableUpdate.manual) {
+      const cmd = currentAvailableUpdate.installCommand || 'sudo pacman -Syu';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cmd)
+          .then(() => toast(`Copied — run: ${cmd}`))
+          .catch(() => toast(cmd));
+      } else {
+        toast(cmd);
+      }
+      return;
+    }
     document.getElementById('update-now-btn').disabled = true;
     document.getElementById('update-now-btn').textContent = 'Starting download...';
     document.getElementById('update-progress-wrap').style.display = 'flex';
@@ -3456,8 +3468,8 @@ function initAppUpdater() {
 
     // Populate and open update modal
     document.getElementById('update-modal-title').textContent = info.releaseName || `GameVault v${info.version}`;
-    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.3.0';
-    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.3.0';
+    const curVer = info.currentVersion ? (info.currentVersion.startsWith('v') ? info.currentVersion : `v${info.currentVersion}`) : 'v1.3.1';
+    const newVer = info.version ? (info.version.startsWith('v') ? info.version : `v${info.version}`) : 'v1.3.1';
     document.getElementById('update-current-ver').textContent = curVer;
     document.getElementById('update-new-ver').textContent = newVer;
     
@@ -3483,8 +3495,17 @@ function initAppUpdater() {
     document.getElementById('update-ready-wrap').style.display = 'none';
     document.getElementById('update-actions-default').style.display = 'flex';
     document.getElementById('update-actions-ready').style.display = 'none';
+
+    // Package-manager install (pacman / tarball): notify, but the upgrade
+    // itself belongs to the package manager.
+    const isManualUpdate = !!info.manual;
+    const hintEl = document.getElementById('update-manual-hint');
+    if (hintEl) hintEl.style.display = isManualUpdate ? 'flex' : 'none';
+    const cmdEl = document.getElementById('update-manual-cmd');
+    if (cmdEl && info.installCommand) cmdEl.textContent = info.installCommand;
+
     document.getElementById('update-now-btn').disabled = false;
-    document.getElementById('update-now-btn').textContent = 'Update Now ⬇';
+    document.getElementById('update-now-btn').textContent = isManualUpdate ? 'Copy command' : 'Update Now ⬇';
 
     updateModal.style.display = 'flex';
   });
@@ -3493,7 +3514,7 @@ function initAppUpdater() {
     if (checkBtn) { checkBtn.style.pointerEvents = ''; checkBtn.style.opacity = ''; }
     if (spinner) spinner.style.display = 'none';
     if (btnText) btnText.textContent = 'Check Now';
-    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.3.0'}).`;
+    if (statusEl) statusEl.textContent = `You are on the latest version (v${info.version || '1.3.1'}).`;
     if (isManualUpdateCheck) {
       toast('You are already using the latest version of GameVault');
       isManualUpdateCheck = false;

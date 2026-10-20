@@ -3144,6 +3144,13 @@ body{font-family:'Inter',sans-serif;color:var(--text-primary);font-size:14px;lin
 .update-progress-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent), #10b981); border-radius: 4px; transition: width 0.25s ease; }
 .update-progress-footer { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
 
+/* Package-manager install notice (no in-app self-update) */
+.update-manual-hint { display: flex; flex-direction: column; gap: 6px; background: rgba(139, 92, 246, 0.10); border: 1px solid rgba(139, 92, 246, 0.35); border-radius: 8px; padding: 12px 14px; }
+.update-manual-hint-title { font-size: 12px; font-weight: 700; color: #fff; }
+.update-manual-hint-text { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.update-manual-hint-text code { font-size: 11px; color: var(--accent); }
+.update-manual-cmd { display: block; margin-top: 2px; padding: 8px 10px; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: #10b981; user-select: all; }
+
 /* Ready to Install Banner */
 .update-ready-wrap { display: flex; align-items: center; gap: 12px; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 8px; padding: 12px 14px; }
 .update-ready-icon { width: 28px; height: 28px; border-radius: 50%; background: #10b981; color: #000; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; flex-shrink: 0; }

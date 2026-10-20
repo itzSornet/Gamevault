@@ -4,7 +4,7 @@
   <p><strong>A modern, privacy-first personal game library manager, launcher, and playtime tracker.</strong></p>
 
   <p>
-    <a href="https://github.com/itzSornet/Gamevault/releases"><img src="https://img.shields.io/badge/version-1.3.0-blue.svg?style=flat-square" alt="Version 1.3.0" /></a>
+    <a href="https://github.com/itzSornet/Gamevault/releases"><img src="https://img.shields.io/badge/version-1.3.1-blue.svg?style=flat-square" alt="Version 1.3.1" /></a>
     <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blueviolet.svg?style=flat-square" alt="Platform: Windows | Linux" />
     <img src="https://img.shields.io/badge/electron-v29-47848f.svg?style=flat-square" alt="Electron" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License: MIT" />
@@ -72,6 +72,21 @@ GameVault is packaged using `electron-builder`:
   ```
 
 Build artifacts are generated directly in the `dist/` directory.
+
+### Arch Linux (pacman)
+
+GameVault is distributed from a self-hosted pacman repository:
+
+```bash
+echo -e '\n[gamevault]\nServer = https://itzsornet.github.io/Gamevault/x86_64\nSigLevel = Optional TrustAll' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu
+sudo pacman -S gamevault
+```
+
+Package recipe: [`packaging/pacman/PKGBUILD`](packaging/pacman/PKGBUILD).
+Installs to `/opt/gamevault` with `/usr/bin/gamevault`, a desktop entry and a
+hicolor icon. The in-app updater detects new releases on these installs but
+leaves the upgrade to `pacman`.
 
 ---
 
