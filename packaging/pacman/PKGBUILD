@@ -1,7 +1,7 @@
 # Maintainer: itzSornet <itzsornet@users.noreply.github.com>
 pkgname=gamevault
 pkgver=1.3.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Modern personal game library manager, playtime tracker, and launcher"
 arch=('x86_64')
 url="https://github.com/itzSornet/Gamevault"
@@ -49,14 +49,19 @@ prepare() {
 
 package() {
   # Prebuilt Electron bundle in /opt/gamevault
-  install -d "${pkgdir}/opt/gamevault"
+  install -dm755 "${pkgdir}/opt/gamevault"
   cp -a "${srcdir}/squashfs-root/." "${pkgdir}/opt/gamevault/"
 
   # AppImage runtime wrapper is not used when installed system-wide
   rm -f "${pkgdir}/opt/gamevault/AppRun" "${pkgdir}/opt/gamevault/gamevault.desktop"
 
+  # The extracted image can carry restrictive modes; normalise the tree so
+  # regular users can traverse it and run the launcher.
+  chmod -R a+rX "${pkgdir}/opt/gamevault"
+  chmod 755 "${pkgdir}/opt/gamevault"
+
   # Executable on PATH
-  install -d "${pkgdir}/usr/bin"
+  install -dm755 "${pkgdir}/usr/bin"
   ln -sf /opt/gamevault/gamevault "${pkgdir}/usr/bin/gamevault"
 
   # Desktop entry
