@@ -2,6 +2,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage } = require('electron');
 app.name = 'GameVault Experimental';
 if (app.setName) app.setName('GameVault Experimental');
+// Cap Chromium's disk caches: headless capture runs used to inflate them to GBs.
+app.commandLine.appendSwitch('disk-cache-size', String(150 * 1024 * 1024));
 
 const path = require('path');
 const fs = require('fs');
