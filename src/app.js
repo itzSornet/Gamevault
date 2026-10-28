@@ -437,6 +437,7 @@
       strip.innerHTML = '';
       shelfDom.built = false;
       state._shelfKey = '';
+      state._stageVisual = '';
       const railEl = document.querySelector('.shelf-rail');
       if (railEl) railEl.hidden = true;
       const imp = stage.querySelector('[data-onboard-import]');
@@ -670,26 +671,32 @@
     const artBack = shelfDom.arts[back];
     const posterBack = shelfDom.posters[back];
 
-    artBack.style.backgroundImage = art ? `url('${art}')` : '';
-    artBack.classList.toggle('is-fallback', !heroArt && !!art);
     const posterSrc = g._cover || g.coverUrl;
-    posterBack.style.backgroundImage = posterSrc ? `url('${posterSrc}')` : '';
-    posterBack.innerHTML = posterSrc ? '' : coverFallbackMarkup();
-    posterBack.classList.toggle('is-empty', !posterSrc);
-    posterBack.style.display = '';
+    const visualKey = `${art}|${posterSrc}`;
+    if (state._stageVisual !== visualKey) {
+      state._stageVisual = visualKey;
+      artBack.style.backgroundImage = art ? `url('${art}')` : '';
+      artBack.classList.toggle('is-fallback', !heroArt && !!art);
+      posterBack.style.backgroundImage = posterSrc ? `url('${posterSrc}')` : '';
+      posterBack.innerHTML = posterSrc ? '' : coverFallbackMarkup();
+      posterBack.classList.toggle('is-empty', !posterSrc);
+      posterBack.style.display = '';
 
-    // swap with a crossfade
-    shelfDom.arts[shelfDom.front].classList.remove('is-on');
-    shelfDom.posters[shelfDom.front].classList.remove('is-on');
-    void artBack.offsetWidth;
-    artBack.classList.add('is-on');
-    posterBack.classList.add('is-on');
-    shelfDom.front = back;
+      // swap with a crossfade
+      shelfDom.arts[shelfDom.front].classList.remove('is-on');
+      shelfDom.posters[shelfDom.front].classList.remove('is-on');
+      void artBack.offsetWidth;
+      artBack.classList.add('is-on');
+      posterBack.classList.add('is-on');
+      shelfDom.front = back;
+      if (!prefersReducedMotion()) {
+        artBack.animate(
+          [{ transform: 'scale(1.035)' }, { transform: 'scale(1)' }],
+          { duration: 520, easing: 'cubic-bezier(.32,.72,0,1)' }
+        );
+      }
+    }
     if (!prefersReducedMotion()) {
-      artBack.animate(
-        [{ transform: 'scale(1.035)' }, { transform: 'scale(1)' }],
-        { duration: 520, easing: 'cubic-bezier(.32,.72,0,1)' }
-      );
       const content = $('#shelf-stage .shelf-content');
       if (content && state._heroShown !== id) {
         state._heroShown = id;
@@ -1060,6 +1067,18 @@
     else paintRail(g);
   }
 
+  function animateDetailIn(view, g) {
+    if (prefersReducedMotion() || state._detailAnimated === String(g.id)) return;
+    state._detailAnimated = String(g.id);
+    const root = view.firstElementChild;
+    if (root) {
+      root.animate(
+        [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 420, easing: 'cubic-bezier(.32,.72,0,1)' }
+      );
+    }
+  }
+
   function renderDetail() {
     const g = state.games.find((x) => String(x.id) === state.selectedId);
     if (!g) return;
@@ -1151,6 +1170,7 @@
         `}
       </div>
     `;
+    animateDetailIn(view, g);
 
     const heroImg = view.querySelector('.gvx-hero-art');
     if (heroImg && heroImg.tagName === 'IMG') heroImg.addEventListener('error', () => heroImg.classList.add('is-empty'));
@@ -2196,6 +2216,7 @@
       return bits.join(' · ') || 'Game';
     };
 
+    let reviewAnimated = false;
     const paintReview = () => {
       const total = candidates.length;
       if (busy) { listEl.innerHTML = `<div class="imp3-empty">Reading ${esc(labelOf(activeId))}…</div>`; return; }
@@ -2228,6 +2249,15 @@
             .then(() => toast(`Updated ${existing.name}`, 'ok'))
             .finally(() => { upd.textContent = 'Update art'; upd.disabled = false; delete upd.dataset.busy; });
         };
+      }
+      if (!reviewAnimated && !prefersReducedMotion()) {
+        reviewAnimated = true;
+        Array.from(listEl.querySelectorAll('.imp3-item')).slice(0, 18).forEach((row, i) => {
+          row.animate(
+            [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+            { duration: 300, delay: i * 18, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'backwards' }
+          );
+        });
       }
     };
 
@@ -2282,6 +2312,7 @@
 
     card.querySelector('[data-back]').onclick = () => {
       inReview = false;
+      reviewAnimated = false;
       reviewStep.hidden = true;
       optionsStep.hidden = false;
       syncPick();
@@ -2882,7 +2913,6 @@
       if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
-      fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
     };
     apply();
   }

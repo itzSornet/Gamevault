@@ -51,3 +51,11 @@ Derived from Apple's *Designing Fluid Interfaces* (WWDC 2018) via the distilled 
 - [x] Glass materializes (blur + scale + opacity)
 - [x] Input never locked; transitions are interruptible
 - [x] Reduced motion / transparency / contrast handled
+
+## Round 2 (flicker + more surfaces)
+
+- **Filter changes no longer fade the whole shelf.** `fadeIn()` on every filter was the hero flash. It is now only used for view switches.
+- **Hero crossfade only when the artwork actually changes.** `renderShelfStage()` keys on `art|poster`; switching filters with the same current game updates text only, so nothing re-decodes or re-crossfades.
+- **Search moved to a real footer bar** — no more capsule sitting on top of covers.
+- **Detail page entrance**: content rises 14 px + fades over 420 ms once per game.
+- **Import review**: rows stagger in at 18 ms intervals (first paint only, never on checkbox changes).
