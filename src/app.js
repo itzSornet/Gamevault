@@ -196,6 +196,13 @@
     }
     state.counts = c;
     for (const el of $$('[data-count]')) el.textContent = String(c[el.dataset.count] ?? 0);
+    const totalEl = $('#side-total');
+    const hoursEl = $('#side-hours');
+    if (totalEl) totalEl.textContent = `${c.All} game${c.All === 1 ? '' : 's'}`;
+    if (hoursEl) {
+      const hours = Math.round(state.games.filter((g) => !gvIsWishlisted(g)).reduce((sum, g) => sum + (Number(g.hours) || 0), 0));
+      hoursEl.textContent = `${hours.toLocaleString()} h`;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -869,7 +876,7 @@
     state.selectedId = String(id);
     renderDetail();
     $('#topbar').hidden = false;
-    $('#filterbar').hidden = true;
+    const fb = $('#filterbar'); if (fb) fb.hidden = true;
     $('#library').hidden = true;
     $('#shelf').hidden = true;
     const dock = document.querySelector('.bottombar');
@@ -889,7 +896,7 @@
     view.hidden = true;
     view.innerHTML = '';
     $('#topbar').hidden = false;
-    $('#filterbar').hidden = false;
+    const fb = $('#filterbar'); if (fb) fb.hidden = false;
     const dock = document.querySelector('.bottombar');
     if (dock) dock.hidden = false;
     renderLibrary();
@@ -2772,6 +2779,8 @@
   }
 
   function applyView() {
+    const lib = $('#library');
+    if (lib) lib.scrollTop = 0;
     const grid = $('#grid');
     grid.classList.remove('view-compact', 'view-list');
     if (state.view === 'compact') grid.classList.add('view-compact');
@@ -2782,8 +2791,12 @@
     if (state.selectedId) closeDetail();
     state.filter = filter;
     for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === filter);
+    const title = $('#filter-title');
+    if (title) title.textContent = filter === 'Want' ? 'Wishlist' : filter;
     transition(() => {
       renderLibrary();
+      const lib = $('#library');
+      if (lib) lib.scrollTop = 0;
       fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
     });
   }
@@ -3633,6 +3646,7 @@
       state.view = 'poster';
       applyView();
       renderLibrary();
+      setTimeout(() => { const l = $('#library'); if (l) l.scrollTop = 0; }, 60);
     }
     if (name === 'importlutris') {
       openImportModal();
@@ -3643,6 +3657,10 @@
     }
     if (name === 'add') openGameModal(null);
   };
+
+  for (const b of $$('[data-rail]')) {
+    b.onclick = () => { const target = document.getElementById(b.dataset.rail); if (target) target.click(); };
+  }
 
   boot();
 })();
