@@ -472,7 +472,8 @@ html, body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 24px 28px;
+  padding: 16px 24px 28px;
+  scroll-padding-top: 16px;
 }
 
 .grid {
@@ -2645,3 +2646,103 @@ input[type='checkbox'] { width: 15px; height: 15px; accent-color: var(--accent);
 .shelf-tile > .cover-fallback svg { max-width: 64px; }
 .shelf-poster.is-empty { background: none !important; }
 .shelf-poster .cover-fallback { border-radius: 10px; }
+
+/* ============================================================================
+   Theme pass — structure, density, type
+   ========================================================================= */
+
+.app { display: flex; }
+
+.sidebar {
+  width: 216px;
+  flex: 0 0 216px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 10px 12px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+}
+.side-brand { display: flex; align-items: center; gap: 10px; padding: 0 6px 16px; }
+.side-name {
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.side-sec {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding: 14px 8px 6px;
+}
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.side-item:hover { background: var(--surface); color: var(--text); }
+.side-item.is-active { background: var(--surface-2); color: var(--text); }
+.side-item b {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mute);
+  background: var(--surface-3);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.side-item.is-active b { color: var(--accent); background: var(--accent-dim); }
+.side-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.side-btn { font-size: 12.5px; color: var(--text-mute); justify-content: flex-start; }
+
+.filterbar { height: 42px; padding: 0 18px; }
+.filter-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* density: more covers above the fold, tighter rhythm */
+.grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
+.card { border-radius: 9px; }
+.card:hover { transform: translateY(-2px); }
+body { font-size: 13.5px; }
+.btn { height: 32px; font-size: 13px; }
+.topbar { justify-content: space-between; gap: 18px; padding: 0 16px 0 20px; }
+.topbar .filter-title { flex: 1; min-width: 0; }
+.side-stats {
+  margin-top: auto;
+  padding: 10px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.side-ver { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); padding-top: 6px; }

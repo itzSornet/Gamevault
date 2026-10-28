@@ -15,15 +15,50 @@
   <div id="grain" aria-hidden="true"></div>
 
   <div id="app" class="app">
+    <aside class="sidebar" aria-label="Library">
+      <div class="side-brand">
+        <span class="brand" title="GameVault"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v9a2 2 0 0 1-2 2h-3l-3 3-3-3H6a2 2 0 0 1-2-2z" /></svg></span>
+        <span class="side-name">GameVault</span>
+      </div>
+      <div class="side-sec">Library</div>
+      <nav class="side-nav" aria-label="Filters">
+        <button class="tab side-item is-active" data-filter="All"><span>All</span><b data-count="All">0</b></button>
+        <button class="tab side-item" data-filter="Playing"><span>Playing</span><b data-count="Playing">0</b></button>
+        <button class="tab side-item" data-filter="Finished"><span>Finished</span><b data-count="Finished">0</b></button>
+      </nav>
+      <div class="side-sec">Saved</div>
+      <nav class="side-nav" aria-label="Saved">
+        <button class="tab side-item" data-filter="Want"><span>Wishlist</span><b data-count="Want">0</b></button>
+      </nav>
+      <div class="side-stats">
+        <span id="side-total">0 games</span>
+        <span id="side-hours">0 h</span>
+        <span class="side-ver">2.0 experimental</span>
+      </div>
+      <div class="side-foot">
+        <button class="side-item side-btn" data-rail="btn-import">Import games</button>
+        <button class="side-item side-btn" data-rail="btn-settings">Settings</button>
+      </div>
+    </aside>
     <div id="main" class="main">
       <header id="topbar" class="topbar">
-        <div class="brand" title="GameVault">
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 5h16v9a2 2 0 0 1-2 2h-3l-3 3-3-3H6a2 2 0 0 1-2-2z" />
-          </svg>
-        </div>
+        <div class="filter-title" id="filter-title">Library</div>
 
         <div class="top-actions">
+          <div class="sort-wrap" id="sort-wrap">
+            <button id="sort-btn" class="sort-btn" aria-haspopup="listbox" aria-expanded="false">
+              <span id="sort-label">Last played</span>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="sort-menu" class="sort-menu" role="listbox" hidden>
+              <div class="sort-head">Sort by</div>
+              <button class="sort-item" role="option" data-sort="lastPlayed">Last played</button>
+              <button class="sort-item" role="option" data-sort="added">Recently added</button>
+              <button class="sort-item" role="option" data-sort="name">Name</button>
+              <button class="sort-item" role="option" data-sort="hours">Hours played</button>
+              <button class="sort-item" role="option" data-sort="status">Status</button>
+            </div>
+          </div>
           <button id="btn-view" class="icon-btn" title="Switch layout">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="18" rx="2"/><rect x="14" y="3" width="7" height="8" rx="2"/><rect x="14" y="15" width="7" height="6" rx="2"/></svg>
           </button>
@@ -39,35 +74,6 @@
           </button>
         </div>
       </header>
-
-      <div id="filterbar" class="filterbar">
-        <nav id="tabs" class="tabs" aria-label="Library filters">
-          <button class="tab is-active" data-filter="All">All<b data-count="All">0</b></button>
-          <button class="tab" data-filter="Playing">Playing<b data-count="Playing">0</b></button>
-          <button class="tab" data-filter="Finished">Finished<b data-count="Finished">0</b></button>
-        </nav>
-
-        <div class="filter-right">
-          <button class="tab tab-wish" data-filter="Want" title="Wishlist">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.8 2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z"/></svg>
-            Wishlist<b data-count="Want">0</b>
-          </button>
-          <div class="sort-wrap" id="sort-wrap">
-            <button id="sort-btn" class="sort-btn" aria-haspopup="listbox" aria-expanded="false">
-              <span id="sort-label">Last played</span>
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-            <div id="sort-menu" class="sort-menu" role="listbox" hidden>
-              <div class="sort-head">Sort by</div>
-              <button class="sort-item" role="option" data-sort="lastPlayed">Last played</button>
-              <button class="sort-item" role="option" data-sort="added">Recently added</button>
-              <button class="sort-item" role="option" data-sort="name">Name</button>
-              <button class="sort-item" role="option" data-sort="hours">Hours played</button>
-              <button class="sort-item" role="option" data-sort="status">Status</button>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <section id="shelf" class="shelf" hidden>
         <div id="shelf-stage" class="shelf-hero"></div>
