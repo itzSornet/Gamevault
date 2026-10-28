@@ -1,0 +1,63 @@
+{
+  "name": "gamevault-experimental",
+  "version": "2.0.0-experimental.1",
+  "description": "GameVault 2.0 \u2014 experimental UI overhaul",
+  "main": "main.js",
+  "author": "itzSornet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itzSornet/Gamevault.git"
+  },
+  "keywords": [
+    "electron",
+    "game-launcher",
+    "game-library",
+    "playtime-tracker",
+    "steam",
+    "epic-games",
+    "steamgriddb"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:portable": "electron-builder --win portable",
+    "test": "node --test tests/"
+  },
+  "build": {
+    "appId": "com.gamevault.experimental",
+    "productName": "GameVault Experimental",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "itzSornet",
+        "repo": "Gamevault"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^29.4.6",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

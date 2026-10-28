@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en" data-tier="standard">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src * data: blob: file:; media-src * data: blob: file:; connect-src *;" />
+  <title>GameVault</title>
+  <link rel="icon" href="icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="grain" aria-hidden="true"></div>
+
+  <div id="app" class="app">
+    <div id="main" class="main">
+      <header id="topbar" class="topbar">
+        <div class="brand" title="GameVault">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 5h16v9a2 2 0 0 1-2 2h-3l-3 3-3-3H6a2 2 0 0 1-2-2z" />
+          </svg>
+        </div>
+
+        <div class="top-actions">
+          <button id="btn-view" class="icon-btn" title="Switch layout">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="18" rx="2"/><rect x="14" y="3" width="7" height="8" rx="2"/><rect x="14" y="15" width="7" height="6" rx="2"/></svg>
+          </button>
+          <button id="btn-import" class="icon-btn" title="Import games">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v10M8 10l4 4 4-4M4 18h16"/></svg>
+          </button>
+          <button id="btn-settings" class="icon-btn" title="Settings">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+          </button>
+          <button id="btn-add" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            Add game
+          </button>
+        </div>
+      </header>
+
+      <div id="filterbar" class="filterbar">
+        <nav id="tabs" class="tabs" aria-label="Library filters">
+          <button class="tab is-active" data-filter="All">All<b data-count="All">0</b></button>
+          <button class="tab" data-filter="Playing">Playing<b data-count="Playing">0</b></button>
+          <button class="tab" data-filter="Finished">Finished<b data-count="Finished">0</b></button>
+        </nav>
+
+        <div class="filter-right">
+          <button class="tab tab-wish" data-filter="Want" title="Wishlist">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.8 2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z"/></svg>
+            Wishlist<b data-count="Want">0</b>
+          </button>
+          <div class="sort-wrap" id="sort-wrap">
+            <button id="sort-btn" class="sort-btn" aria-haspopup="listbox" aria-expanded="false">
+              <span id="sort-label">Last played</span>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="sort-menu" class="sort-menu" role="listbox" hidden>
+              <div class="sort-head">Sort by</div>
+              <button class="sort-item" role="option" data-sort="lastPlayed">Last played</button>
+              <button class="sort-item" role="option" data-sort="added">Recently added</button>
+              <button class="sort-item" role="option" data-sort="name">Name</button>
+              <button class="sort-item" role="option" data-sort="hours">Hours played</button>
+              <button class="sort-item" role="option" data-sort="status">Status</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section id="shelf" class="shelf" hidden>
+        <div id="shelf-stage" class="shelf-hero"></div>
+        <div class="shelf-rail">
+          <button class="strip-nav prev" id="strip-prev" aria-label="Previous games">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+          </button>
+          <div id="shelf-strip" class="shelf-strip" role="listbox" aria-label="Games"></div>
+          <button class="strip-nav next" id="strip-next" aria-label="More games">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <section id="library" class="library">
+        <div id="grid" class="grid"></div>
+        <div id="empty" class="empty" hidden>
+          <div class="empty-mark"></div>
+          <h2 id="empty-title">Your vault is empty</h2>
+          <p id="empty-sub">Import a Steam library, scan Lutris, or add a game by hand.</p>
+          <button id="empty-cta" class="btn btn-primary">Import games</button>
+        </div>
+      </section>
+
+      <section id="game-view" class="game-view" hidden></section>
+
+      <footer class="bottombar">
+        <div id="search-dock" class="search-dock" tabindex="0">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input id="dock-input" type="text" placeholder="Search your vault" autocomplete="off" spellcheck="false" aria-label="Search your vault" />
+          <kbd>Ctrl K</kbd>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <div id="modal" class="modal-wrap" hidden></div>
+  <div id="toasts" class="toasts"></div>
+
+  <div id="cmd" class="cmd" hidden>
+    <div class="cmd-bg" id="cmd-bg"></div>
+    <div class="cmd-bar">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+      <input id="cmd-input" type="text" placeholder="Search games or run a command" aria-label="Search games or run a command"
+             autocomplete="off" spellcheck="false" role="combobox"
+             aria-expanded="true" aria-controls="cmd-list" aria-autocomplete="list" />
+      <kbd id="cmd-hint">Esc</kbd>
+    </div>
+    <div id="cmd-list" class="cmd-list" role="listbox" aria-label="Results"></div>
+    <div class="cmd-foot">
+      <span><b>↑↓</b> navigate</span>
+      <span><b>↵</b> open</span>
+      <span><b>esc</b> close</span>
+      <span id="cmd-count" class="cmd-count" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <script src="lib/fuzzy.js"></script>
+  <script src="lib/sessions.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
