@@ -2773,11 +2773,11 @@ body { font-size: 13.5px; }
 :root[data-palette='paper'] #ambient { background: #f0ece2; }
 #ambient i {
   position: absolute; display: block; border-radius: 50%;
-  filter: blur(90px); opacity: 0.55; will-change: transform;
+  opacity: 0.55; will-change: auto;
 }
-#ambient i:nth-child(1) { width: 46vw; height: 46vw; left: -8vw; top: -6vw; background: #2f5bff; }
-#ambient i:nth-child(2) { width: 38vw; height: 38vw; right: -6vw; top: 8vh; background: #6b3bff; opacity: 0.35; }
-#ambient i:nth-child(3) { width: 40vw; height: 40vw; left: 28vw; bottom: -18vw; background: #0f8a7a; opacity: 0.28; }
+#ambient i:nth-child(1) { width: 70vw; height: 70vw; left: -20vw; top: -22vw; background: radial-gradient(circle at 50% 50%, rgba(47,91,255,0.55), rgba(47,91,255,0) 62%); }
+#ambient i:nth-child(2) { width: 58vw; height: 58vw; right: -16vw; top: -4vh; background: radial-gradient(circle at 50% 50%, rgba(107,59,255,0.45), rgba(107,59,255,0) 64%); opacity: 0.35; }
+#ambient i:nth-child(3) { width: 66vw; height: 66vw; left: 18vw; bottom: -34vw; background: radial-gradient(circle at 50% 50%, rgba(15,138,122,0.4), rgba(15,138,122,0) 66%); opacity: 0.28; }
 
 .app { position: relative; z-index: 2; display: flex; gap: 12px; padding: 12px; height: 100vh; background: transparent; }
 
@@ -2885,9 +2885,9 @@ body { font-size: 13.5px; }
 
 @keyframes drift-a { from { transform: translate3d(0,0,0) scale(1); } to { transform: translate3d(6vw,4vh,0) scale(1.12); } }
 @keyframes drift-b { from { transform: translate3d(0,0,0) scale(1.05); } to { transform: translate3d(-5vw,6vh,0) scale(0.95); } }
-#ambient i:nth-child(1) { animation: drift-a 46s ease-in-out infinite alternate; }
-#ambient i:nth-child(2) { animation: drift-b 58s ease-in-out infinite alternate; }
-#ambient i:nth-child(3) { animation: drift-a 64s ease-in-out infinite alternate-reverse; }
+
+
+
 @media (prefers-reduced-motion: reduce) {
   #ambient i { animation: none; }
   * { scroll-behavior: auto; }
@@ -2991,4 +2991,80 @@ body { font-size: 13.5px; }
 }
 @media (prefers-contrast: more) {
   .sidebar, .topbar, .search-dock, .modal-card { border-color: var(--line-2); }
+}
+
+/* perf: cheaper glass + no backdrop blur while scrolling */
+.sidebar { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+.topbar { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+.search-dock { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+.modal-card.is-open { -webkit-backdrop-filter: blur(24px) saturate(150%); backdrop-filter: blur(24px) saturate(150%); }
+.topbar.is-scrolled {
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  background: rgba(8, 9, 14, 0.94);
+}
+[data-tier='lite'] .sidebar, [data-tier='lite'] .topbar, [data-tier='lite'] .search-dock { box-shadow: none; }
+
+/* entrance choreography (transform/opacity only) */
+@keyframes shell-in { from { opacity: 0; transform: translateY(8px) scale(0.995); } to { opacity: 1; transform: none; } }
+.sidebar { animation: shell-in 0.5s var(--ease-spring) both; }
+.main { animation: shell-in 0.5s var(--ease-spring) 0.04s both; }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar, .main { animation: none; }
+}
+
+/* ============================================================================
+   Performance tiering — default standard: glass by tint, not by blur.
+   Blur on large surfaces only in cinematic.
+   ========================================================================= */
+.sidebar {
+  background: linear-gradient(180deg, rgba(24, 26, 38, 0.86), rgba(12, 14, 22, 0.9));
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+.topbar {
+  background: linear-gradient(to bottom, rgba(12, 13, 20, 0.88), rgba(8, 9, 14, 0.94));
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.search-dock {
+  background: rgba(16, 18, 27, 0.92);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+:root[data-palette='paper'] .sidebar { background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,244,237,0.96)); }
+:root[data-palette='paper'] .topbar { background: rgba(252, 250, 245, 0.94); }
+:root[data-palette='paper'] .search-dock { background: rgba(255, 255, 255, 0.95); }
+
+[data-tier='cinematic'] .sidebar {
+  background: rgba(20, 22, 32, 0.55);
+  -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+}
+[data-tier='cinematic'] .topbar {
+  background: linear-gradient(to bottom, rgba(8, 9, 14, 0.5), rgba(8, 9, 14, 0.75));
+  -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+}
+[data-tier='cinematic'] .search-dock {
+  background: rgba(18, 20, 28, 0.6);
+  -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+}
+.card { box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34); }
+.modal-card.is-open { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+#grain { opacity: 0.015; }
+
+/* software rasterizer: strip paint-heavy effects */
+[data-software='1'] #grain { display: none; }
+[data-software='1'] #ambient { opacity: 0.65; }
+[data-software='1'] .card { box-shadow: none; }
+[data-software='1'] .sidebar { box-shadow: none; }
+[data-software='1'] .main { box-shadow: none; }
+[data-software='1'] .modal-card { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
+
+.fps-hud {
+  position: fixed; right: 12px; bottom: 12px; z-index: 9999;
+  padding: 4px 8px; border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7); color: #3dd68c;
+  font: 11px/1.2 monospace; letter-spacing: 0.04em;
+  pointer-events: none;
 }
