@@ -1324,6 +1324,7 @@
     const card = wrap.firstElementChild;
     void card.offsetWidth;
     card.classList.add('is-open');
+    enableSheetDrag(card);
     requestAnimationFrame(() => {
       const target = card.querySelector('[autofocus], input, select, textarea, button, [href]');
       (target || card).focus({ preventScroll: true });
@@ -1363,7 +1364,57 @@
       wrap.innerHTML = '';
       if (app) app.inert = false;
       if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
-    }, 200);
+    }, 320);
+  }
+
+  function prefersReducedMotion() {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  // iOS sheet: drag down from the header; velocity decides commit vs. spring back.
+  function enableSheetDrag(card) {
+    if (prefersReducedMotion()) return;
+    const head = card.querySelector('.modal-head');
+    if (!head || head.dataset.drag) return;
+    head.dataset.drag = '1';
+    head.style.touchAction = 'none';
+    let startY = 0, dy = 0, lastY = 0, lastT = 0, vel = 0, active = false;
+    head.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('button, a, input, select, textarea')) return;
+      active = true; startY = e.clientY; dy = 0; lastY = e.clientY; lastT = performance.now(); vel = 0;
+      try { head.setPointerCapture(e.pointerId); } catch (_) {}
+      card.style.transition = 'none';
+    });
+    head.addEventListener('pointermove', (e) => {
+      if (!active) return;
+      dy = Math.max(0, e.clientY - startY);
+      const now = performance.now();
+      if (now - lastT > 16) { vel = (e.clientY - lastY) / (now - lastT); lastY = e.clientY; lastT = now; }
+      card.style.transform = `translateY(${dy}px) scale(${Math.max(0.94, 1 - dy / 4000)})`;
+      card.style.opacity = String(Math.max(0.35, 1 - dy / 700));
+    });
+    const end = () => {
+      if (!active) return;
+      active = false;
+      const close = dy > 120 || vel > 0.9;
+      card.style.transition = '';
+      card.style.transform = '';
+      card.style.opacity = '';
+      if (close) closeModal();
+    };
+    head.addEventListener('pointerup', end);
+    head.addEventListener('pointercancel', end);
+  }
+
+  function syncSidePill() {
+    const pill = document.querySelector('.side-pill');
+    const side = document.querySelector('.sidebar');
+    const active = side && side.querySelector('.side-item.is-active');
+    if (!pill || !side || !active) return;
+    const s = side.getBoundingClientRect();
+    const r = active.getBoundingClientRect();
+    pill.style.height = `${Math.round(r.height)}px`;
+    pill.style.transform = `translateY(${Math.round(r.top - s.top)}px)`;
   }
 
   function openGameModal(game) {
@@ -2798,12 +2849,14 @@
     for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === filter);
     const title = $('#filter-title');
     if (title) title.textContent = filter === 'Want' ? 'Wishlist' : filter;
-    transition(() => {
+    syncSidePill();
+    const apply = () => {
       renderLibrary();
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
       fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
-    });
+    };
+    apply();
   }
 
   function togglePlay(id) {
@@ -3647,6 +3700,9 @@
         if (t) { t.scrollIntoView({ block: 'nearest', inline: 'center' }); t.click(); }
       }, 900);
     }
+    if (name === 'playing') {
+      setTimeout(() => { setFilter('Playing'); }, 400);
+    }
     if (name === 'gridview') {
       state.view = 'poster';
       applyView();
@@ -3662,6 +3718,16 @@
     }
     if (name === 'add') openGameModal(null);
   };
+
+  syncSidePill();
+  window.addEventListener('resize', syncSidePill);
+  const libScroll = $('#library');
+  if (libScroll) {
+    libScroll.addEventListener('scroll', () => {
+      const tb = $('#topbar');
+      if (tb) tb.classList.toggle('is-scrolled', libScroll.scrollTop > 4);
+    }, { passive: true });
+  }
 
   for (const b of $$('[data-rail]')) {
     b.onclick = () => { const target = document.getElementById(b.dataset.rail); if (target) target.click(); };
