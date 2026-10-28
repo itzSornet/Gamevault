@@ -689,12 +689,6 @@
       artBack.classList.add('is-on');
       posterBack.classList.add('is-on');
       shelfDom.front = back;
-      if (!prefersReducedMotion()) {
-        artBack.animate(
-          [{ transform: 'scale(1.035)' }, { transform: 'scale(1)' }],
-          { duration: 520, easing: 'cubic-bezier(.32,.72,0,1)' }
-        );
-      }
     }
     if (!prefersReducedMotion()) {
       const content = $('#shelf-stage .shelf-content');
@@ -3770,6 +3764,9 @@
         requestAnimationFrame(step);
       }, 1800);
     }
+    if (name === 'sidesmall') {
+      setTimeout(() => { const t = document.getElementById('side-toggle'); if (t) t.click(); }, 500);
+    }
     if (name === 'perf') {
       setTimeout(() => {
         let frames = 0; const t0 = performance.now(); let last = t0; let worst = 0;
@@ -3835,6 +3832,18 @@
     requestAnimationFrame(fpsLoop);
   };
   requestAnimationFrame(fpsLoop);
+
+  const sideEl = document.querySelector('.sidebar');
+  const sideToggle = $('#side-toggle');
+  const applySidebar = (open) => {
+    if (!sideEl) return;
+    sideEl.classList.toggle('is-collapsed', !open);
+    try { localStorage.setItem('gv.sidebar', open ? 'open' : 'closed'); } catch (_) {}
+    if (sideToggle) sideToggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
+    setTimeout(syncSidePill, 340);
+  };
+  applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
+  if (sideToggle) sideToggle.onclick = () => applySidebar(sideEl.classList.contains('is-collapsed'));
 
   syncSidePill();
   window.addEventListener('resize', syncSidePill);

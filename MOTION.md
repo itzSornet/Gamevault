@@ -59,3 +59,8 @@ Derived from Apple's *Designing Fluid Interfaces* (WWDC 2018) via the distilled 
 - **Search moved to a real footer bar** — no more capsule sitting on top of covers.
 - **Detail page entrance**: content rises 14 px + fades over 420 ms once per game.
 - **Import review**: rows stagger in at 18 ms intervals (first paint only, never on checkbox changes).
+
+## Round 3 (snap fix + collapsible rail)
+
+- **Hero settle no longer snaps.** The WAAPI zoom ended at `scale(1)` while the CSS rest state is `scale(1.03)`, so the last frame jumped. Replaced with a CSS keyframe that starts at 1.055 and lands exactly on 1.03.
+- **Sidebar collapses** to a 62 px icon rail (grid / play / check / star, import, settings) with a spring width transition; state persists in `localStorage['gv.sidebar']`.
