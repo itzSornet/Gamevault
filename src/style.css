@@ -3068,3 +3068,16 @@ body { font-size: 13.5px; }
   font: 11px/1.2 monospace; letter-spacing: 0.04em;
   pointer-events: none;
 }
+
+/* search dock is a real footer now — never sits on top of covers */
+.bottombar {
+  position: relative; left: auto; right: auto; bottom: auto;
+  flex-shrink: 0;
+  height: 62px;
+  display: flex; align-items: center; justify-content: center;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  padding: 0 16px;
+}
+.search-dock { width: min(560px, 72%); height: 42px; }
+.library { padding-bottom: 24px; }
