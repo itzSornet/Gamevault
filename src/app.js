@@ -385,6 +385,17 @@
 
   window.__gvState = state;
 
+  function animateGridIn() {
+    if (prefersReducedMotion()) return;
+    const cards = Array.from($('#grid').children).slice(0, 14);
+    cards.forEach((card, i) => {
+      card.animate(
+        [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 320, delay: Math.min(i, 11) * 26, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'backwards' }
+      );
+    });
+  }
+
   function renderLibrary() {
     // While a game page is open the library must stay hidden; otherwise it
     // reappears stacked above the detail view.
@@ -674,6 +685,20 @@
     artBack.classList.add('is-on');
     posterBack.classList.add('is-on');
     shelfDom.front = back;
+    if (!prefersReducedMotion()) {
+      artBack.animate(
+        [{ transform: 'scale(1.035)' }, { transform: 'scale(1)' }],
+        { duration: 520, easing: 'cubic-bezier(.32,.72,0,1)' }
+      );
+      const content = $('#shelf-stage .shelf-content');
+      if (content && state._heroShown !== id) {
+        state._heroShown = id;
+        content.animate(
+          [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }],
+          { duration: 360, easing: 'cubic-bezier(.32,.72,0,1)' }
+        );
+      }
+    }
     clearTimeout(shelfDom.cleanup);
     shelfDom.cleanup = setTimeout(() => {
       const old = shelfDom.arts[back === 0 ? 1 : 0];
@@ -2850,8 +2875,11 @@
     const title = $('#filter-title');
     if (title) title.textContent = filter === 'Want' ? 'Wishlist' : filter;
     syncSidePill();
+    state._gridAnimate = true;
     const apply = () => {
       renderLibrary();
+      if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
+      if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
       fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
@@ -3700,6 +3728,29 @@
         if (t) { t.scrollIntoView({ block: 'nearest', inline: 'center' }); t.click(); }
       }, 900);
     }
+    if (name === 'perflite') {
+      document.documentElement.dataset.tier = 'lite';
+      setTimeout(() => {
+        let frames = 0; const t0 = performance.now(); let last = t0; let worst = 0;
+        const step = (now) => {
+          frames += 1; worst = Math.max(worst, now - last); last = now;
+          if (now - t0 < 2000) requestAnimationFrame(step);
+          else console.warn('[perf]', JSON.stringify({ tier: 'lite', fps: Math.round(frames / ((now - t0) / 1000)), worstFrameMs: Math.round(worst) }));
+        };
+        requestAnimationFrame(step);
+      }, 1800);
+    }
+    if (name === 'perf') {
+      setTimeout(() => {
+        let frames = 0; const t0 = performance.now(); let last = t0; let worst = 0;
+        const step = (now) => {
+          frames += 1; worst = Math.max(worst, now - last); last = now;
+          if (now - t0 < 2000) requestAnimationFrame(step);
+          else console.warn('[perf]', JSON.stringify({ fps: Math.round(frames / ((now - t0) / 1000)), worstFrameMs: Math.round(worst) }));
+        };
+        requestAnimationFrame(step);
+      }, 1800);
+    }
     if (name === 'playing') {
       setTimeout(() => { setFilter('Playing'); }, 400);
     }
@@ -3718,6 +3769,42 @@
     }
     if (name === 'add') openGameModal(null);
   };
+
+  // Software rendering (no GPU compositing) cannot afford glass: drop to lite.
+  if (api.gpuStatus) {
+    api.gpuStatus().then((s) => {
+      const soft = String((s && s.gpu_compositing) || '').includes('disabled');
+      if (soft) {
+        document.documentElement.dataset.software = '1';
+        if (state.tier !== 'cinematic') applyTier('lite');
+      }
+    }).catch(() => {});
+  }
+
+  // Ctrl+Shift+F toggles a frame-rate HUD for reporting jank.
+  let fpsOn = false;
+  let fpsEl = null;
+  let fpsFrames = 0;
+  let fpsStart = 0;
+  window.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f')) return;
+    e.preventDefault();
+    fpsOn = !fpsOn;
+    if (!fpsEl) { fpsEl = document.createElement('div'); fpsEl.className = 'fps-hud'; document.body.appendChild(fpsEl); }
+    fpsEl.hidden = !fpsOn;
+  });
+  const fpsLoop = (now) => {
+    if (fpsOn && fpsEl) {
+      fpsFrames += 1;
+      if (!fpsStart) fpsStart = now;
+      if (now - fpsStart > 500) {
+        fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsStart))} fps`;
+        fpsFrames = 0; fpsStart = now;
+      }
+    }
+    requestAnimationFrame(fpsLoop);
+  };
+  requestAnimationFrame(fpsLoop);
 
   syncSidePill();
   window.addEventListener('resize', syncSidePill);

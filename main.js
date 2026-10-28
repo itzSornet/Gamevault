@@ -899,6 +899,10 @@ function createWindow() {
     });
   });
 
+  ipcMain.handle('app:gpu', () => {
+    try { return app.getGPUFeatureStatus(); } catch (e) { return {}; }
+  });
+
   ipcMain.handle('steam:owned', async (_, payload = {}) => {
     const cfg = loadConfig() || {};
     return steamSource.scanOwned({ key: payload.key || cfg.steamKey, steamId: payload.steamId || cfg.steamId || steamSource.activeSteamId() });
@@ -1398,6 +1402,13 @@ Already recommended (DO NOT suggest these again): ${alreadyRecommended}
 }
 
 app.whenReady().then(() => {
+  if (process.argv.includes('--gpu-info')) {
+    try {
+      console.log('[gpu-features]', JSON.stringify(app.getGPUFeatureStatus()));
+      app.getGPUInfo('basic').then((info) => console.log('[gpu-info]', JSON.stringify(info))).finally(() => app.exit(0));
+    } catch (e) { console.log('[gpu-info] error', e.message); app.exit(1); }
+    return;
+  }
   if (!hasSingleInstanceLock) return;
   createWindow();
   createOverlayWindow();
