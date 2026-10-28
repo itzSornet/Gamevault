@@ -21,16 +21,19 @@
       <div class="side-brand">
         <span class="brand" title="GameVault"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v9a2 2 0 0 1-2 2h-3l-3 3-3-3H6a2 2 0 0 1-2-2z" /></svg></span>
         <span class="side-name">GameVault</span>
+        <button id="side-toggle" class="side-toggle" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"/></svg>
+        </button>
       </div>
       <div class="side-sec">Library</div>
       <nav class="side-nav" aria-label="Filters">
-        <button class="tab side-item is-active" data-filter="All"><span>All</span><b data-count="All">0</b></button>
-        <button class="tab side-item" data-filter="Playing"><span>Playing</span><b data-count="Playing">0</b></button>
-        <button class="tab side-item" data-filter="Finished"><span>Finished</span><b data-count="Finished">0</b></button>
+        <button class="tab side-item is-active" data-filter="All"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>All</span><b data-count="All">0</b></button>
+        <button class="tab side-item" data-filter="Playing"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z"/></svg><span>Playing</span><b data-count="Playing">0</b></button>
+        <button class="tab side-item" data-filter="Finished"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4 12.5 5.5 5.5L20 6.5"/></svg><span>Finished</span><b data-count="Finished">0</b></button>
       </nav>
       <div class="side-sec">Saved</div>
       <nav class="side-nav" aria-label="Saved">
-        <button class="tab side-item" data-filter="Want"><span>Wishlist</span><b data-count="Want">0</b></button>
+        <button class="tab side-item" data-filter="Want"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/></svg><span>Wishlist</span><b data-count="Want">0</b></button>
       </nav>
       <div class="side-stats">
         <span id="side-total">0 games</span>
@@ -38,8 +41,8 @@
         <span class="side-ver">2.0 experimental</span>
       </div>
       <div class="side-foot">
-        <button class="side-item side-btn" data-rail="btn-import">Import games</button>
-        <button class="side-item side-btn" data-rail="btn-settings">Settings</button>
+        <button class="side-item side-btn" data-rail="btn-import" title="Import games"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v10M8 10l4 4 4-4M4 18h16"/></svg><span>Import games</span></button>
+        <button class="side-item side-btn" data-rail="btn-settings" title="Settings"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
       </div>
     </aside>
     <div id="main" class="main">
