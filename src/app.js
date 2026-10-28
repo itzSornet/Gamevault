@@ -196,6 +196,11 @@
     }
     state.counts = c;
     for (const el of $$('[data-count]')) el.textContent = String(c[el.dataset.count] ?? 0);
+    const libSub = $('#lib-sub');
+    if (libSub) {
+      const hrs = Math.round(state.games.filter((g) => !gvIsWishlisted(g)).reduce((sum, g) => sum + (Number(g.hours) || 0), 0));
+      libSub.textContent = `${c.All} game${c.All === 1 ? '' : 's'} · ${hrs.toLocaleString()} h`;
+    }
     const totalEl = $('#side-total');
     const hoursEl = $('#side-hours');
     if (totalEl) totalEl.textContent = `${c.All} game${c.All === 1 ? '' : 's'}`;
