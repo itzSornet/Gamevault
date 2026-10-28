@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Game Vault Overlay</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 10px;
+      height: 100vh;
+      box-sizing: border-box;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow: hidden;
+      /* Background must be completely transparent so the panel can float inside the window */
+      background: transparent;
+      color: #fff;
+    }
+    
+    .panel {
+      background: rgba(15, 16, 20, 0.7);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+      overflow: hidden;
+    }
+
+    @keyframes overlayPopIn {
+      0% { opacity: 0; transform: scale(0.95) translateY(10px) translateX(20px); }
+      100% { opacity: 1; transform: scale(1) translateY(0) translateX(0); }
+    }
+
+    .header {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      -webkit-app-region: drag;
+    }
+
+    .title-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo {
+      width: 20px;
+      height: 20px;
+      background: linear-gradient(135deg, #00ff88, #00b8ff);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 12px;
+      color: #000;
+    }
+
+    .title {
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+    }
+
+    .hotkey-hint {
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      background: rgba(255,255,255,0.05);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    
+    .tab {
+      flex: 1;
+      text-align: center;
+      padding: 12px 0;
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.5);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .tab:hover {
+      color: rgba(255,255,255,0.8);
+      background: rgba(255,255,255,0.02);
+    }
+    
+    .tab.active {
+      color: #5865F2;
+      border-bottom: 2px solid #5865F2;
+      background: linear-gradient(to top, rgba(88,101,242,0.1), transparent);
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255,255,255,0.2);
+    }
+
+    .content {
+      padding: 20px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow-y: auto;
+    }
+
+    /* Redesigned Capture buttons */
+    .capture-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .capture-btn {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid transparent;
+      border-radius: 12px;
+      padding: 24px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      color: rgba(255,255,255,0.8);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .capture-btn:hover {
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+    }
+    
+    .capture-btn.active {
+      border-color: #ff3366;
+      background: rgba(255, 51, 102, 0.1);
+      color: #ff3366;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255,51,102,0.4); }
+      70% { box-shadow: 0 0 0 10px rgba(255,51,102,0); }
+      100% { box-shadow: 0 0 0 0 rgba(255,51,102,0); }
+    }
+
+    .capture-icon { font-size: 28px; }
+    .capture-label { font-size: 13px; font-weight: 600; }
+
+    /* Audio Toggles */
+    .audio-toggles {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    
+    .audio-btn {
+      flex: 1;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: rgba(255,255,255,0.7);
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+
+    .audio-btn:hover { background: rgba(255,255,255,0.08); }
+    .audio-btn.muted { opacity: 0.5; color: #ff4444; border-color: rgba(255,68,68,0.2); }
+
+    /* AI Chat basic styles */
+    .chat-box {
+      flex: 1;
+      background: rgba(0,0,0,0.3);
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.05);
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+    
+    .msg {
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.4;
+      max-width: 85%;
+      word-wrap: break-word;
+    }
+    
+    .msg-ai {
+      background: rgba(255,255,255,0.05);
+      align-self: flex-start;
+      border-bottom-left-radius: 2px;
+    }
+    
+    .msg-user {
+      background: #5865F2;
+      color: #fff;
+      align-self: flex-end;
+      border-bottom-right-radius: 2px;
+    }
+
+    .chat-input-area {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .chat-input {
+      flex: 1;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: white;
+      font-family: inherit;
+      outline: none;
+    }
+    
+    .chat-input:focus {
+      border-color: #5865F2;
+    }
+    
+    .chat-send {
+      background: #5865F2;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      width: 40px;
+      cursor: pointer;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chat-send svg { width: 16px; height: 16px; fill: currentColor; }
+
+    /* Lock Button */
+    .lock-btn {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+      color: rgba(255,255,255,0.4);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-app-region: no-drag;
+      padding: 6px;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    .lock-btn:hover {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+    }
+    .lock-btn.locked {
+      background: rgba(255,51,102,0.15);
+      border-color: rgba(255,51,102,0.3);
+      color: #ff3366;
+      box-shadow: 0 0 15px rgba(255,51,102,0.4);
+      -webkit-app-region: no-drag;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="header" id="overlay-header">
+      <div class="title-area">
+        <img src="icon.ico" class="logo" style="background:none; border-radius:0;" alt="V"/>
+        <div class="title">Game Vault</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button id="btn-lock" class="lock-btn" title="Lock Position">
+          <svg id="icon-unlock" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11V7a5 5 0 0 1 9.9-1"></path><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><line x1="3" y1="3" x2="21" y2="21"></line></svg>
+          <svg id="icon-lock" style="display:none;" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        </button>
+        <div class="hotkey-hint" style="-webkit-app-region: no-drag;">ESC to close</div>
+      </div>
+    </div>
+    
+    <div class="tabs">
+      <div class="tab active" id="tab-capture" onclick="switchTab('capture')">Capture</div>
+      <div class="tab" id="tab-ai" onclick="switchTab('ai')">AI Advisor</div>
+    </div>
+
+    <!-- Capture View -->
+    <div class="content" id="view-capture">
+      <div style="font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Quick Actions</div>
+      <div class="capture-grid">
+        <div class="capture-btn" id="btn-screenshot">
+          <div class="capture-icon"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg></div>
+          <div class="capture-label">Screenshot</div>
+        </div>
+        <div class="capture-btn" id="btn-record">
+          <div class="capture-icon"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"></circle></svg></div>
+          <div class="capture-label">Record Clip</div>
+        </div>
+      </div>
+      
+      <div class="audio-toggles">
+        <div class="audio-btn" id="toggle-mic" onclick="toggleAudio('mic')">
+          <span id="icon-mic"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg></span> <span id="label-mic">Mic On</span>
+        </div>
+        <div class="audio-btn" id="toggle-pc" onclick="toggleAudio('pc')">
+          <span id="icon-pc"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg></span> <span id="label-pc">PC Audio On</span>
+        </div>
+      </div>
+      
+      <div style="font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-top: 10px;">Recent Captures</div>
+      <div id="recent-media-container" style="flex: 1; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.3); font-size: 13px; text-align: center; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px; overflow-y: auto;">
+        No media captured yet.<br>Click a button above to start!
+      </div>
+    </div>
+
+    <!-- AI View -->
+    <div class="content" id="view-ai" style="display: none; position: relative;">
+      <button id="ai-clear-btn" style="position: absolute; top: -38px; right: 0; background: transparent; border: none; color: rgba(255,255,255,0.5); cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px; z-index: 10;">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+        Clear
+      </button>
+      <div class="chat-box" id="chat-box">
+        <!-- Messages will load here -->
+      </div>
+      <div class="chat-input-area">
+        <input type="text" class="chat-input" id="chat-input" placeholder="Ask something..." />
+        <button class="chat-send" id="chat-send"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Tab state memory
+    function switchTab(tabName) {
+      localStorage.setItem('overlay-active-tab', tabName);
+      if (tabName === 'capture') {
+        document.getElementById('tab-capture').classList.add('active');
+        document.getElementById('tab-ai').classList.remove('active');
+        document.getElementById('view-capture').style.display = 'flex';
+        document.getElementById('view-ai').style.display = 'none';
+      } else {
+        document.getElementById('tab-ai').classList.add('active');
+        document.getElementById('tab-capture').classList.remove('active');
+        document.getElementById('view-ai').style.display = 'flex';
+        document.getElementById('view-capture').style.display = 'none';
+        document.getElementById('chat-input').focus();
+        const chatBox = document.getElementById('chat-box');
+        if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+      }
+    }
+    
+    const savedTab = localStorage.getItem('overlay-active-tab') || 'capture';
+    switchTab(savedTab);
+
+    // Audio settings
+    let micEnabled = true;
+    let pcAudioEnabled = true;
+    function toggleAudio(type) {
+      if (type === 'mic') {
+        micEnabled = !micEnabled;
+        const btn = document.getElementById('toggle-mic');
+        btn.classList.toggle('muted', !micEnabled);
+        document.getElementById('label-mic').innerText = micEnabled ? 'Mic On' : 'Mic Muted';
+      } else {
+        pcAudioEnabled = !pcAudioEnabled;
+        const btn = document.getElementById('toggle-pc');
+        btn.classList.toggle('muted', !pcAudioEnabled);
+        document.getElementById('label-pc').innerText = pcAudioEnabled ? 'PC Audio On' : 'PC Muted';
+      }
+    }
+
+    // Hotkeys and shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && window.api) {
+        window.api.hideOverlay();
+      }
+    });
+
+    // Position lock
+    let isLocked = false;
+    document.getElementById('btn-lock').onclick = () => {
+      isLocked = !isLocked;
+      const btn = document.getElementById('btn-lock');
+      document.getElementById('icon-unlock').style.display = isLocked ? 'none' : 'block';
+      document.getElementById('icon-lock').style.display = isLocked ? 'block' : 'none';
+      
+      if (isLocked) {
+        btn.classList.add('locked');
+      } else {
+        btn.classList.remove('locked');
+      }
+      
+      document.getElementById('overlay-header').style.webkitAppRegion = isLocked ? 'no-drag' : 'drag';
+    };
+
+    // AI Advisor chat sync
+    const chatBox = document.getElementById('chat-box');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+    let aiProfile = null;
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+
+    function formatAIText(text) {
+      let html = esc(text);
+      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      html = html.replace(/\n/g, '<br>');
+      html = html.replace(/(⚡[^<]*(?:FPS|fps)[^<]*)/g, '<span style="color:#a855f7;font-weight:600">$1</span>');
+      return html;
+    }
+
+    function typewriterEffect(el, text) {
+      const formatted = formatAIText(text);
+      const words = [];
+      let current = '';
+      let inTag = false;
+      for (let i = 0; i < formatted.length; i++) {
+        const ch = formatted[i];
+        if (ch === '<') { inTag = true; current += ch; continue; }
+        if (ch === '>') { inTag = false; current += ch; continue; }
+        if (inTag) { current += ch; continue; }
+        current += ch;
+        if (ch === ' ' || ch === '\n') {
+          words.push(current);
+          current = '';
+        }
+      }
+      if (current) words.push(current);
+
+      let idx = 0;
+      let revealed = '';
+      const interval = setInterval(() => {
+        if (idx >= words.length) {
+          clearInterval(interval);
+          return;
+        }
+        const chunk = words.slice(idx, idx + 2).join('');
+        revealed += chunk;
+        el.innerHTML = revealed;
+        idx += 2;
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }, 30);
+    }
+
+    function addMessage(text, isAi, typewriter = false) {
+      const d = document.createElement('div');
+      d.className = `msg ${isAi ? 'msg-ai' : 'msg-user'}`;
+      
+      if (isAi) {
+        if (typewriter) {
+          d.innerHTML = `<span class="ai-msg-text"></span>`;
+          chatBox.appendChild(d);
+          chatBox.scrollTop = chatBox.scrollHeight;
+          typewriterEffect(d.querySelector('.ai-msg-text'), text);
+        } else {
+          d.innerHTML = formatAIText(text);
+          chatBox.appendChild(d);
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }
+      } else {
+        d.textContent = text;
+        chatBox.appendChild(d);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+    }
+
+    async function loadChat() {
+      if (!window.api) return;
+      const cfg = await window.api.loadConfig();
+      if (!cfg.aiEnabled) {
+        document.getElementById('tab-ai').style.display = 'none';
+        if (savedTab === 'ai') switchTab('capture');
+      } else {
+        document.getElementById('tab-ai').style.display = 'block';
+      }
+      aiProfile = await window.api.aiLoadProfile();
+      renderChat();
+    }
+
+    function renderChat() {
+      chatBox.innerHTML = '';
+      if (aiProfile && aiProfile.chatHistory) {
+        aiProfile.chatHistory.forEach(m => addMessage(m.text, m.role === 'ai'));
+      }
+      if (!chatBox.innerHTML) {
+        addMessage("Hey! I'm your AI Game Advisor. Stuck on a puzzle or need a quick tip? Just ask!", true);
+      }
+      // Guarantee scroll to bottom after DOM paints
+      setTimeout(() => { chatBox.scrollTop = chatBox.scrollHeight; }, 10);
+    }
+
+    async function sendChat() {
+      const text = chatInput.value.trim();
+      if (!text || !window.api) return;
+      chatInput.value = '';
+      addMessage(text, false);
+      
+      const aiResponse = await window.api.aiChat({
+        message: text,
+        history: aiProfile ? aiProfile.chatHistory : [],
+        specs: aiProfile ? aiProfile.pcSpecs : null,
+        games: [], // Can't easily pass full game list from overlay context yet
+        profile: aiProfile
+      });
+      
+      if (aiResponse.error) {
+        addMessage(`*Error:* ${aiResponse.error}`, true);
+      } else {
+        const replyText = aiResponse.reply || JSON.stringify(aiResponse);
+        addMessage(replyText, true, true);
+        
+        // Save history
+        if (aiProfile) {
+          aiProfile.chatHistory.push({ role: 'user', text: text, ts: Date.now() });
+          aiProfile.chatHistory.push({ role: 'ai', text: replyText, ts: Date.now() });
+          if (aiProfile.chatHistory.length > 50) aiProfile.chatHistory = aiProfile.chatHistory.slice(-50);
+          window.api.aiSaveProfile(aiProfile);
+        }
+      }
+    }
+
+    document.getElementById('ai-clear-btn').onclick = () => {
+      if (!aiProfile) return;
+      if (confirm('Are you sure you want to clear your AI chat history?')) {
+        aiProfile.chatHistory = [];
+        window.api.aiSaveProfile(aiProfile);
+        renderChat();
+      }
+    };
+
+    if (window.api && window.api.onProfileUpdated) {
+      window.api.onProfileUpdated(profile => {
+        const oldLen = aiProfile && aiProfile.chatHistory ? aiProfile.chatHistory.length : 0;
+        const newLen = profile && profile.chatHistory ? profile.chatHistory.length : 0;
+        aiProfile = profile;
+        if (oldLen !== newLen && document.getElementById('view-ai').style.display !== 'none') {
+          renderChat();
+        }
+      });
+    }
+
+    chatSend.onclick = sendChat;
+    chatInput.onkeydown = (e) => { if (e.key === 'Enter') sendChat(); };
+
+    // AI tab visibility is now handled dynamically in loadChat()
+    
+    // Performance analysis
+    let isRecording = false;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let currentStream = null;
+
+    function getFormattedTimestamp() {
+      const d = new Date();
+      const pad = n => n.toString().padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+    }
+
+    document.getElementById('btn-screenshot').onclick = async () => {
+      try {
+        const sourceId = await window.api.getScreenSourceId();
+        if (!sourceId) return alert('Failed to get screen source');
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } }
+        });
+
+        // Hide overlay briefly to not capture it
+        window.api.hideOverlay();
+        await new Promise(r => setTimeout(r, 200));
+
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        await new Promise(resolve => video.onloadedmetadata = resolve);
+        video.play();
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        stream.getTracks().forEach(t => t.stop());
+
+        // Convert to array buffer
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        const buffer = await blob.arrayBuffer();
+        
+        await window.api.saveMedia({
+          type: 'image',
+          buffer: buffer,
+          filename: `GameVault_Screenshot_${getFormattedTimestamp()}.png`
+        });
+        
+        loadRecentMedia();
+      } catch (err) {
+        console.error('Screenshot failed:', err);
+      }
+    };
+
+    document.getElementById('btn-record').onclick = async () => {
+      const btn = document.getElementById('btn-record');
+      
+      if (isRecording) {
+        // Stop recording
+        isRecording = false;
+        btn.classList.remove('active');
+        btn.querySelector('.capture-label').innerText = 'Record Clip';
+        
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
+      } else {
+        // Start recording
+        try {
+          const sourceId = await window.api.getScreenSourceId();
+          if (!sourceId) return alert('Failed to get screen source');
+
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: pcAudioEnabled ? { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } } : false,
+            video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId } }
+          });
+          currentStream = stream;
+
+          if (micEnabled) {
+            try {
+              const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+              micStream.getAudioTracks().forEach(track => stream.addTrack(track));
+            } catch (e) {
+              console.log('Failed to get mic', e);
+            }
+          }
+
+          recordedChunks = [];
+          mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+          
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) recordedChunks.push(e.data);
+          };
+          
+          mediaRecorder.onstop = async () => {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            recordedChunks = [];
+            currentStream.getTracks().forEach(t => t.stop());
+            
+            const buffer = await blob.arrayBuffer();
+            await window.api.saveMedia({
+              type: 'video',
+              buffer: buffer,
+              filename: `GameVault_Clip_${getFormattedTimestamp()}.webm`
+            });
+            loadRecentMedia();
+          };
+          
+          mediaRecorder.start();
+          isRecording = true;
+          btn.classList.add('active');
+          btn.querySelector('.capture-label').innerText = 'Stop Recording';
+          
+          // Hide overlay to show game
+          window.api.hideOverlay();
+        } catch (err) {
+          console.error('Recording failed:', err);
+        }
+      }
+    };
+
+    // Initialization and data load
+    if (window.api && window.api.onOverlayOpened) {
+      window.api.onOverlayOpened(() => {
+        const panel = document.querySelector('.panel');
+        panel.style.animation = 'none';
+        void panel.offsetWidth; // trigger reflow
+        panel.style.animation = 'overlayPopIn 0.3s cubic-bezier(0.19, 1, 0.22, 1) forwards';
+        loadRecentMedia();
+        loadChat();
+      });
+    }
+
+    // Load recent media captures
+    async function loadRecentMedia() {
+      if (!window.api) return;
+      const recent = await window.api.getRecentMedia();
+      const container = document.getElementById('recent-media-container');
+      if (!recent || recent.length === 0) {
+        container.innerHTML = 'No media captured yet.<br>Click a button above to start!';
+        container.style.border = '1px dashed rgba(255,255,255,0.1)';
+        container.style.justifyContent = 'center';
+      } else {
+        container.innerHTML = '';
+        container.style.border = 'none';
+        container.style.justifyContent = 'flex-start';
+        container.style.flexDirection = 'column';
+        container.style.gap = '10px';
+        container.style.alignItems = 'stretch';
+        
+        recent.forEach(file => {
+          const isVideo = file.name.endsWith('.webm');
+          
+          const d = document.createElement('div');
+          d.style.padding = '8px 10px';
+          d.style.borderRadius = '6px';
+          d.style.fontSize = '12px';
+          d.style.color = 'rgba(255,255,255,0.8)';
+          d.style.cursor = 'pointer';
+          d.style.background = 'rgba(255,255,255,0.03)';
+          d.style.whiteSpace = 'nowrap';
+          d.style.overflow = 'hidden';
+          d.style.textOverflow = 'ellipsis';
+          d.style.position = 'relative';
+          d.innerText = file.name;
+          
+          const tooltip = document.createElement('div');
+          tooltip.style.position = 'absolute';
+          tooltip.style.bottom = '100%';
+          tooltip.style.left = '50%';
+          tooltip.style.transform = 'translateX(-50%)';
+          tooltip.style.marginBottom = '8px';
+          tooltip.style.background = '#000';
+          tooltip.style.padding = '4px';
+          tooltip.style.borderRadius = '8px';
+          tooltip.style.border = '1px solid rgba(255,255,255,0.1)';
+          tooltip.style.boxShadow = '0 10px 30px rgba(0,0,0,0.8)';
+          tooltip.style.display = 'none';
+          tooltip.style.zIndex = '100';
+          tooltip.style.width = '240px';
+          
+          tooltip.innerHTML = isVideo 
+            ? `<video src="file://${file.path}" style="width:100%; height:auto; border-radius:4px;" muted autoplay loop></video>`
+            : `<img src="file://${file.path}" style="width:100%; height:auto; border-radius:4px;" />`;
+            
+          d.appendChild(tooltip);
+          
+          d.onmouseenter = () => { 
+            d.style.background = 'rgba(255,255,255,0.08)'; 
+            tooltip.style.display = 'block';
+          };
+          d.onmouseleave = () => { 
+            d.style.background = 'rgba(255,255,255,0.03)'; 
+            tooltip.style.display = 'none';
+          };
+          
+          d.onclick = () => window.api.showMediaInFolder(file.path);
+          
+          container.appendChild(d);
+        });
+      }
+    }
+    loadRecentMedia();
+  </script>
+</body>
+</html>
