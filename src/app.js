@@ -3845,15 +3845,13 @@
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
   if (sideToggle) sideToggle.onclick = () => {
     const open = sideEl.classList.contains('is-collapsed');
-    const run = () => applySidebar(open);
-    const canVT = document.startViewTransition
-      && document.visibilityState === 'visible'
-      && !document.documentElement.classList.contains('shot-mode')
-      && !prefersReducedMotion();
-    if (!canVT) { run(); return; }
-    const vt = document.startViewTransition(run);
-    const guard = setTimeout(() => { try { vt.skipTransition(); } catch (_) {} }, 700);
-    vt.finished.finally(() => clearTimeout(guard));
+    if (prefersReducedMotion()) { applySidebar(open); return; }
+    // Fade content out, swap layout once (no per-frame reflow), fade back in.
+    sideEl.classList.add('is-collapsing');
+    setTimeout(() => {
+      applySidebar(open);
+      requestAnimationFrame(() => sideEl.classList.remove('is-collapsing'));
+    }, 100);
   };
 
   const gridEl = $('#grid');

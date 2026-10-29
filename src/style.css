@@ -3243,3 +3243,23 @@ body { font-size: 13.5px; }
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(gv-side), ::view-transition-group(gv-main) { animation: none; }
 }
+
+/* collapse without layout animation or ghosting: fade out → one reflow → fade in */
+.sidebar.is-collapsing > * { opacity: 0; transition: opacity 90ms linear; }
+.sidebar > * { transition: opacity 140ms var(--ease-out-quart); }
+@media (prefers-reduced-motion: reduce) { .sidebar > *, .sidebar.is-collapsing > * { transition: none; } }
+
+/* short windows: sidebar scrolls, stats step aside */
+@media (max-height: 620px) {
+  .side-stats { display: none; }
+  .sidebar { overflow-y: auto; scrollbar-width: none; }
+  .sidebar::-webkit-scrollbar { width: 0; }
+  .side-brand { padding-bottom: 10px; }
+  .side-sec { padding-top: 10px; }
+}
+
+/* narrow: auto-collapsed rail has no toggle (resize decides) */
+@media (max-width: 900px) {
+  .side-toggle { display: none; }
+  .gvx-card { flex: 1 1 100%; }
+}
