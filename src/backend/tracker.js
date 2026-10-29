@@ -53,7 +53,7 @@ async function checkAllTrackedProcesses() {
       // exact process/executable basenames (no false positives).
       const running = process.platform === 'win32'
         ? t.allExeNames.some(name => stdout.includes(name))
-        : processMatchesAny(procList, t.allExeNames);
+        : (procList || []).some((p) => platform.matchesGameProcess(p, t.allExeNames));
 
       if (running && !t.running) {
         t.running = true;
@@ -63,6 +63,8 @@ async function checkAllTrackedProcesses() {
         const sessionEnd = Date.now();
         const sessionHours = (sessionEnd - t.sessionStart) / 3600000;
         t.running = false;
+        t.pid = 0;
+        t.pgid = 0;
         win && win.webContents.send('tracking:session-end', { gameId, sessionHours, sessionStart: t.sessionStart, sessionEnd });
       }
 
@@ -71,7 +73,7 @@ async function checkAllTrackedProcesses() {
         win && win.webContents.send('tracking:tick', { gameId, sessionMins });
       }
     }
-  } catch (e) {}
+  } catch (e) { console.warn('[tracker]', e.message); }
   isChecking = false;
 }
 
@@ -116,7 +118,7 @@ function registerTrackedGame(gameId, exePath, installDir, steamAppId, pid) {
     if (steamAppId) trackedProcesses[sid].steamAppId = steamAppId;
     // A freshly launched child becomes the process-group leader on Linux
     // (spawn is detached), which is what lets us stop its whole tree.
-    if (pid && !trackedProcesses[sid].pid) {
+    if (pid) {
       trackedProcesses[sid].pid = pid;
       trackedProcesses[sid].pgid = pid;
     }
@@ -154,7 +156,7 @@ function enrichTrackedGame(sid) {
 function startTracking(gameId, exePath, installDir, steamAppId, pid) {
   const sid = String(gameId);
   registerTrackedGame(sid, exePath, installDir, steamAppId, pid);
-  if (pid) enrichTrackedGame(sid);
+  enrichTrackedGame(sid);
   ensureTrackingLoop();
   // Immediate check so we don't wait up to 3s
   setTimeout(checkAllTrackedProcesses, 300);

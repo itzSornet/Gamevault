@@ -45,7 +45,8 @@ const shotDelay = delayIdx !== -1 ? Number(process.argv[delayIdx + 1]) || 900 : 
 
 // A second launch must never create a second library window or overlay.
 // It hands its flags to the running instance instead.
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const shotMode = process.argv.includes('--shot');
+const hasSingleInstanceLock = shotMode ? true : app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 // Wayland has no X11-style screen grab; Electron needs the PipeWire path.
@@ -119,15 +120,14 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
     }
 
     const kind = platform.classifyExecutable(pathToLaunch);
+    const detectedProton = (protonPath && fs.existsSync(protonPath)) ? protonPath : platform.findProton();
     const runner = platform.pickRunner(requestedRunner, {
       kind,
       hasWine: commandExists('wine'),
-      hasProton: !!protonPath && fs.existsSync(protonPath),
+      hasProton: !!detectedProton,
     });
 
-    const effectiveProton = runner === 'proton'
-      ? (protonPath || platform.findProton())
-      : '';
+    const effectiveProton = runner === 'proton' ? detectedProton : '';
     if (runner === 'proton' && !effectiveProton) {
       win && win.webContents.send('game:launch-error', {
         gameId,
@@ -575,7 +575,7 @@ function createWindow() {
       if (!src) return null;
       let file = String(src);
       if (file.startsWith('file://')) {
-        try { file = decodeURIComponent(new URL(file).pathname); } catch (_) { file = file.replace('file://', ''); }
+        try { file = require('url').fileURLToPath(file); } catch (_) { file = file.replace('file://', ''); }
       }
       if (!fs.existsSync(file)) return null;
       const crypto = require('crypto');

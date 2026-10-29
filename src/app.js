@@ -67,7 +67,10 @@
     el.className = 'toast' + (kind === 'error' ? ' is-error' : kind === 'ok' ? ' is-ok' : '');
     el.textContent = message;
     wrap.appendChild(el);
+    void el.offsetWidth;
+    el.classList.add('is-on');
     setTimeout(() => {
+      el.classList.remove('is-on');
       el.style.opacity = '0';
       el.style.transform = 'translateY(6px)';
       setTimeout(() => el.remove(), 250);
@@ -509,8 +512,7 @@
     const next = $('#strip-next');
     if (!strip || !prev || !next) return;
 
-    const max = strip._max != null ? strip._max : Math.max(0, strip.scrollWidth - strip.clientWidth);
-    strip._max = max;
+    const max = Math.max(0, strip.scrollWidth - strip.clientWidth);
     if (max <= 2) {                 // nothing to scroll: hide both, don't lock
       prev.disabled = true;
       next.disabled = true;
@@ -534,8 +536,7 @@
   // Critically-damped spring on scrollLeft. Retargetable, no fixed duration,
   // and it never fights the wheel because the wheel calls stopSpring first.
   function springTo(el, target) {
-    if (el._max == null) el._max = Math.max(0, el.scrollWidth - el.clientWidth);
-    const max = el._max;
+    const max = Math.max(0, el.scrollWidth - el.clientWidth);
     target = Math.max(0, Math.min(max, target));
     const st = el._spring || (el._spring = { x: el.scrollLeft, v: 0, raf: null, target });
     st.target = target;
@@ -693,6 +694,7 @@
     const posterSrc = g._cover || g.coverUrl;
     const visualKey = `${art}|${posterSrc}`;
     if (state._stageVisual !== visualKey) {
+      const oldArt = shelfDom.arts[shelfDom.front];
       state._stageVisual = visualKey;
       artBack.style.backgroundImage = art ? `url('${art}')` : '';
       artBack.classList.toggle('is-fallback', !heroArt && !!art);
@@ -708,6 +710,10 @@
       artBack.classList.add('is-on');
       posterBack.classList.add('is-on');
       shelfDom.front = back;
+      clearTimeout(shelfDom.cleanup);
+      shelfDom.cleanup = setTimeout(() => {
+        if (oldArt) oldArt.style.backgroundImage = '';
+      }, 700);
     }
     if (!prefersReducedMotion()) {
       const content = $('#shelf-stage .shelf-content');
@@ -719,11 +725,6 @@
         );
       }
     }
-    clearTimeout(shelfDom.cleanup);
-    shelfDom.cleanup = setTimeout(() => {
-      const old = shelfDom.arts[back === 0 ? 1 : 0];
-      if (old) old.style.backgroundImage = '';
-    }, 700);
 
     shelfDom.kicker.textContent = `${running ? 'Now playing' : statusLabel(g)} · ${fmtHours(running ? (g.hours || 0) + live / 60 : g.hours)}`;
     shelfDom.title.textContent = g.name || '';
@@ -1120,7 +1121,7 @@
     const status = gvStatusOf(g);
     const sessions = gvSessions(g);
     const stats = Sessions.sessionStats(sessions);
-    const hero = g.heroUrl || '';
+    const hero = heroUrlOf(g);
     const logo = g.logoUrl || '';
 
     view.innerHTML = `
@@ -1296,9 +1297,10 @@
       const icon = playBtn.querySelector('svg');
       if (icon && !busy) icon.innerHTML = running ? '<rect x="6" y="6" width="12" height="12" rx="2"/>' : '<path d="M8 5v14l11-7z"/>';
     }
-    paintLedger(g);
-    paintRail(g);
-    startDetailTick(g);
+    const liveValue = view.querySelector('[data-timer-value]');
+    if (liveValue && typeof state.live[String(g.id)] === 'number') {
+      liveValue.textContent = Sessions.formatClock(state.live[String(g.id)] * 60000);
+    }
   }
 
   function setFinished(g, value) {
@@ -1320,7 +1322,6 @@
 
   function toggleDetailWish(g) {
     g.wishlisted = !gvIsWishlisted(g);
-    if (g.wishlisted) g.status = 'Playing';
     saveGamesSoon();
     state._shelfKey = '';
     renderDetail();
@@ -1363,7 +1364,14 @@
         else if (item.hasAttribute('data-edit')) openGameModal(g);
         else if (item.hasAttribute('data-refresh')) { refreshArt(g, { focus: false }); toast('Artwork refreshed', 'ok'); }
       });
-      view.addEventListener('pointerdown', (e) => { if (!e.target.closest('.gvx-more-wrap')) closeMenu(); });
+      view.onpointerdown = (e) => { if (!e.target.closest('.gvx-more-wrap')) closeMenu(); };
+      menu.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu();
+        menuBtn.focus();
+      });
     }
 
     const wishBtn = view.querySelector('[data-wish]');
@@ -1373,11 +1381,6 @@
 
     const playBtn = view.querySelector('[data-play]');
     if (playBtn) playBtn.onclick = () => togglePlay(g.id);
-
-    const editBtn = view.querySelector('[data-edit]');
-    if (editBtn) editBtn.onclick = () => openGameModal(g);
-    const folderBtn = view.querySelector('[data-folder]');
-    if (folderBtn) folderBtn.onclick = () => api.showInFolder(g.exePath);
 
     const finishBtn = view.querySelector('[data-finish]');
     if (finishBtn) finishBtn.onclick = () => setFinished(g, !(g.status === 'Finished'));
@@ -1398,6 +1401,11 @@
     wrap.hidden = false;
     wrap.innerHTML = `<div class="modal-card ${className}" role="dialog" aria-modal="true" tabindex="-1">${html}</div>`;
     const card = wrap.firstElementChild;
+    const head = card.querySelector('.modal-head h2');
+    if (head) {
+      head.id = head.id || 'modal-title';
+      card.setAttribute('aria-labelledby', head.id);
+    }
     void card.offsetWidth;
     card.classList.add('is-open');
     enableSheetDrag(card);
@@ -2144,6 +2152,7 @@
     let activeId = null;
     let candidates = [];
     let busy = false;
+    let scanSeq = 0;
     let scanError = null;
     let pickedNothing = false;
     let inReview = false;
@@ -2152,8 +2161,7 @@
 
     const keyOf = (c) => c.sourceId || (c.exePath ? 'exe:' + c.exePath.toLowerCase() : 'name:' + String(c.name || '').toLowerCase());
     const existingFor = (c) => state.games.find((g) => keyOf(g) === keyOf(c))
-      || (c.exePath && state.games.find((g) => g.exePath && g.exePath.toLowerCase() === c.exePath.toLowerCase()))
-      || (c.name && state.games.find((g) => g.name && g.name.toLowerCase() === String(c.name).toLowerCase()));
+      || (c.exePath && state.games.find((g) => g.exePath && g.exePath.toLowerCase() === c.exePath.toLowerCase()));
     const isNew = (c) => !existingFor(c);
     const picked = () => candidates.filter((c) => c._checked && isNew(c));
     const labelOf = (id) => (sources.find((s) => s.id === id) || {}).label || id;
@@ -2161,6 +2169,10 @@
     let steamUser = null;
 
     const loadOwned = (games) => {
+      scanSeq += 1;
+      busy = false;
+      scanError = null;
+      pickedNothing = false;
       candidates = (games || []).map((g) => ({ ...g, _checked: true }));
       activeId = 'steam-owned';
       inReview = true;
@@ -2343,6 +2355,7 @@
     };
 
     async function runScan(id) {
+      const seq = ++scanSeq;
       busy = true;
       scanError = null;
       pickedNothing = false;
@@ -2359,23 +2372,29 @@
         else if (id === 'file') found = await api.importFile();
         else found = await api.importScan(id);
         if (found === null) { inReview = false; optionsStep.hidden = false; reviewStep.hidden = true; busy = false; paintSummary(); return; }
+        if (seq !== scanSeq) return;
         if (found && found.error) throw new Error(found.error);
+        if (seq !== scanSeq) return;
         candidates = (found || []).filter((c) => c && c.name).map((c) => ({ ...c, _checked: true }));
         pickedNothing = candidates.length === 0 && (id === 'folder' || id === 'file');
         const src = sources.find((s) => s.id === id);
         if (src && !src.action) src.count = candidates.length;
       } catch (e) {
-        scanError = String(e.message || e);
+        if (seq === scanSeq) scanError = String(e.message || e);
       } finally {
-        busy = false;
-        paintReview();
-        paintSummary();
+        if (seq === scanSeq) {
+          busy = false;
+          paintReview();
+          paintSummary();
+        }
       }
     }
 
     folderBtn.onclick = () => { activeId = 'folder'; syncPick(); runScan('folder'); };
 
     card.querySelector('[data-back]').onclick = () => {
+      scanSeq += 1;
+      busy = false;
       inReview = false;
       reviewAnimated = false;
       reviewStep.hidden = true;
@@ -2703,8 +2722,9 @@
     cmd.navigating = false;
 
     root.hidden = false;
-    root.classList.remove('is-bar', 'is-full');
+    root.classList.remove('is-bar', 'is-full', 'is-closing');
     document.querySelector('.bottombar')?.classList.add('is-hidden');
+    setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
     renderCmd(input.value || '');
 
     const d = $('#search-dock').getBoundingClientRect();
@@ -2744,7 +2764,6 @@
     setTimeout(() => { if (cmd.open) root.classList.add('is-full'); }, 530);
     setTimeout(() => { if (cmd.open) input.focus(); }, 120);
 
-    setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
   }
 
   function closeCmd() {
@@ -2767,7 +2786,7 @@
       dock.classList.remove('is-expanded');
       const dockInput = $('#dock-input');
       if (dockInput) dockInput.blur();
-      if (!cmd.navigating && dock) dock.focus({ preventScroll: true });
+      if (!cmd.navigating && dockInput) dockInput.focus({ preventScroll: true });
       cmd.navigating = false;
     };
 
