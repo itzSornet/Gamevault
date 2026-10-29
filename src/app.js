@@ -2503,6 +2503,10 @@
             <button class="btn btn-ghost" type="button" data-perf-reveal>Reveal log</button>
           </div>
           <div class="hint" id="s-perf-gpu">GPU: checking…</div>
+          <div class="field-row" style="align-items:center;margin-top:6px">
+            <button class="btn" type="button" data-perf-bench>Run 20s benchmark</button>
+            <span class="hint" style="flex:1">Don't touch the window until it says done</span>
+          </div>
           <div class="hint" id="s-perf-path">Stats are written every second to perf.log</div>
         </div>
 
@@ -2544,6 +2548,25 @@
     }
     const perfPathEl = card.querySelector('#s-perf-path');
     if (perfPathEl && api.perfPath) api.perfPath().then((p) => { perfPathEl.textContent = `Log: ${p}`; }).catch(() => {});
+    const benchBtn = card.querySelector('[data-perf-bench]');
+    if (benchBtn) benchBtn.onclick = async () => {
+      closeModal();
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const mark = (m) => { if (window.__gvPerfMark) window.__gvPerfMark(m); };
+      await wait(600);
+      for (const f of ['Playing', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
+      mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
+      mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
+      mark('bench:grid'); $('#btn-view').click(); await wait(800);
+      mark('bench:scroll');
+      const lib = $('#library');
+      for (let i = 0; i < 12; i++) { lib.scrollTop += 140; await wait(60); }
+      mark('bench:detail'); if (state.games[0]) openDetail(state.games[0].id); await wait(1000);
+      mark('bench:back'); if (state.selectedId) closeDetail(); await wait(500);
+      if (api.perfLog) api.perfLog({ t: Date.now(), benchmark: 'done', tier: state.tier });
+      toast('Benchmark finished — perf.log updated', 'ok');
+    };
+
     const perfReveal = card.querySelector('[data-perf-reveal]');
     if (perfReveal && api.perfReveal) perfReveal.onclick = () => api.perfReveal();
 
