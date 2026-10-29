@@ -1445,6 +1445,9 @@
     head.addEventListener('pointercancel', end);
   }
 
+  const pillSpring = { y: 0, v: 0, target: 0, raf: null, init: false };
+
+  // Distance- and velocity-driven spring: longer jumps bounce harder.
   function syncSidePill() {
     const pill = document.querySelector('.side-pill');
     const side = document.querySelector('.sidebar');
@@ -1452,8 +1455,39 @@
     if (!pill || !side || !active) return;
     const s = side.getBoundingClientRect();
     const r = active.getBoundingClientRect();
+    const target = r.top - s.top;
     pill.style.height = `${Math.round(r.height)}px`;
-    pill.style.transform = `translateY(${Math.round(r.top - s.top)}px)`;
+
+    if (!pillSpring.init || prefersReducedMotion()) {
+      pillSpring.init = true;
+      pillSpring.y = target; pillSpring.v = 0; pillSpring.target = target;
+      pill.style.transform = `translateY(${target}px)`;
+      return;
+    }
+
+    pillSpring.target = target;
+    if (pillSpring.raf) return;
+
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(32, now - last) / 1000;
+      last = now;
+      const k = 340;   // stiffness
+      const c = 24;    // damping (ζ ≈ 0.65 → visible bounce)
+      const a = -k * (pillSpring.y - pillSpring.target) - c * pillSpring.v;
+      pillSpring.v += a * dt;
+      pillSpring.y += pillSpring.v * dt;
+      pill.style.transform = `translateY(${pillSpring.y.toFixed(2)}px)`;
+      if (Math.abs(pillSpring.v) < 0.4 && Math.abs(pillSpring.y - pillSpring.target) < 0.35) {
+        pill.style.transform = `translateY(${pillSpring.target}px)`;
+        pillSpring.y = pillSpring.target;
+        pillSpring.v = 0;
+        pillSpring.raf = null;
+      } else {
+        pillSpring.raf = requestAnimationFrame(step);
+      }
+    };
+    pillSpring.raf = requestAnimationFrame(step);
   }
 
   function openGameModal(game) {

@@ -3320,3 +3320,6 @@ body { font-size: 13.5px; }
 
 /* the switch fade is part of the interaction, not a visual-tier effect */
 [data-tier='lite'] .gv-fade-in { animation: gv-page-in 170ms cubic-bezier(0.22, 1, 0.36, 1) !important; }
+
+/* the pill is JS-driven now: kill the CSS tween so they don't fight */
+.side-pill { transition: none !important; will-change: transform; }
