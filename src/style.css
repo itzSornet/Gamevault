@@ -3317,3 +3317,6 @@ body { font-size: 13.5px; }
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(gv-side), ::view-transition-group(gv-main) { animation: none; }
 }
+
+/* the switch fade is part of the interaction, not a visual-tier effect */
+[data-tier='lite'] .gv-fade-in { animation: gv-page-in 170ms cubic-bezier(0.22, 1, 0.36, 1) !important; }
