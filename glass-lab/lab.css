@@ -101,18 +101,49 @@ h1{font:700 38px/1 'Space Grotesk';letter-spacing:-.035em;margin:8px 0 8px}
 @media (prefers-reduced-motion: reduce){.aura i{animation:none}}
 
 /* ============================================================================
-   Interactive glass: sheen follows the pointer, press compresses, small tilt
+   Aurora: the background is the animation. Glass just samples it.
+   No pointer effects — motion comes from light drifting beneath.
    ========================================================================= */
-.glass{overflow:hidden;transition:transform .32s var(--ease), box-shadow .3s, border-color .2s}
-.glass::after{
-  content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;
-  opacity:0;transition:opacity .25s var(--ease);
-  background:radial-gradient(180px circle at var(--mx,50%) var(--my,50%), rgba(255,255,255,.20), rgba(255,255,255,.05) 42%, transparent 62%);
-  mix-blend-mode:screen;
+.aura{background:#04050a}
+.aura i{mix-blend-mode:screen;opacity:.7;border-radius:50%;will-change:transform}
+.aura i:nth-child(1){
+  animation:aur1 26s ease-in-out infinite alternate;
+  background:radial-gradient(circle at 50% 50%, rgba(70,120,255,.65), rgba(70,120,255,0) 60%);
 }
-.glass:hover::after,.glass.is-hot::after{opacity:1}
-.glass.is-pressed{transform:scale(.994)}
-.cue,.lens-stage{transform-style:preserve-3d;will-change:transform}
-.play,.ghost,.add{transition:transform .18s var(--ease), filter .18s}
-.play:hover,.ghost:hover,.add:hover{filter:brightness(1.08)}
-.play:active,.ghost:active,.add:active{transform:scale(.96)}
+.aura i:nth-child(2){
+  animation:aur2 38s ease-in-out infinite alternate;
+  background:radial-gradient(circle at 50% 50%, rgba(150,70,255,.50), rgba(150,70,255,0) 62%);
+  opacity:.55;
+}
+.aura i:nth-child(3){
+  animation:aur3 52s ease-in-out infinite alternate;
+  background:radial-gradient(circle at 50% 50%, rgba(20,170,150,.42), rgba(20,170,150,0) 64%);
+  opacity:.5;
+}
+.aura i:nth-child(4){
+  width:120vw;height:120vw;left:-10vw;top:-60vw;
+  background:conic-gradient(from 0deg at 50% 50%, rgba(255,90,140,.0), rgba(255,90,140,.20), rgba(90,160,255,.0), rgba(90,255,220,.18), rgba(255,90,140,.0));
+  opacity:.35;animation:aur4 60s linear infinite;
+}
+@keyframes aur1{
+  0%{transform:translate3d(-6vw,-4vh,0) scale(1)}
+  50%{transform:translate3d(14vw,10vh,0) scale(1.28)}
+  100%{transform:translate3d(2vw,18vh,0) scale(1.05)}
+}
+@keyframes aur2{
+  0%{transform:translate3d(8vw,-6vh,0) scale(1.1)}
+  50%{transform:translate3d(-12vw,12vh,0) scale(.92)}
+  100%{transform:translate3d(-2vw,-10vh,0) scale(1.18)}
+}
+@keyframes aur3{
+  0%{transform:translate3d(-8vw,10vh,0) scale(.95)}
+  50%{transform:translate3d(16vw,-8vh,0) scale(1.22)}
+  100%{transform:translate3d(6vw,-18vh,0) scale(1)}
+}
+@keyframes aur4{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.aura i{animation:none}}
+
+/* more transparent glass so the aurora reads through it */
+.glass{background:rgba(16,19,30,.44)}
+body[data-glass='smoke'] .glass{background:rgba(9,11,17,.66)}
+body[data-glass='specular'] .glass{background:rgba(14,17,27,.38)}
