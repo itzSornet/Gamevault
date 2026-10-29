@@ -2893,6 +2893,25 @@
     $('#btn-view').classList.toggle('is-active', state.view !== 'shelf');
   }
 
+  function animateFilterSwap() {
+    if (prefersReducedMotion()) return;
+    if (state.view !== 'shelf') return;
+    const content = $('#shelf-stage .shelf-content');
+    if (content) {
+      content.animate(
+        [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 240, easing: 'cubic-bezier(.32,.72,0,1)' }
+      );
+    }
+    const tiles = Array.from($('#shelf-strip').children).slice(0, 10);
+    tiles.forEach((tile, i) => {
+      tile.animate(
+        [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 220, delay: i * 16, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'backwards' }
+      );
+    });
+  }
+
   function setFilter(filter) {
     if (state.selectedId) closeDetail();
     state.filter = filter;
@@ -2904,7 +2923,7 @@
     const apply = () => {
       renderLibrary();
       if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
-      if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
+      animateFilterSwap();
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
     };
@@ -3850,6 +3869,7 @@
     sideEl.classList.add('is-collapsing');
     setTimeout(() => {
       applySidebar(open);
+      sideEl.animate([{ opacity: 0.55 }, { opacity: 1 }], { duration: 180, easing: 'cubic-bezier(.32,.72,0,1)' });
       requestAnimationFrame(() => sideEl.classList.remove('is-collapsing'));
     }, 100);
   };

@@ -3263,3 +3263,7 @@ body { font-size: 13.5px; }
   .side-toggle { display: none; }
   .gvx-card { flex: 1 1 100%; }
 }
+
+/* collapse reads as a motion, not a snap: content slides out, fades back */
+.sidebar.is-collapsing > * { opacity: 0; transform: translateX(-6px); transition: opacity 90ms linear, transform 90ms var(--ease-out-quart); }
+.sidebar > * { transition: opacity 140ms var(--ease-out-quart), transform 140ms var(--ease-out-quart); }
