@@ -3112,3 +3112,25 @@ body { font-size: 13.5px; }
 .sidebar.is-collapsed .side-toggle { margin: 0; transform: rotate(180deg); }
 .sidebar.is-collapsed .side-item { justify-content: center; padding: 0; }
 .sidebar.is-collapsed .side-foot { border-top-color: transparent; }
+
+/* iOS 26 scroll-edge effects: content dissolves under the bar and above the footer */
+.main::before,
+.main::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  pointer-events: none;
+  z-index: 36;
+}
+.main::before {
+  top: 56px;
+  height: 24px;
+  background: linear-gradient(to bottom, rgba(8, 9, 14, 0.62), rgba(8, 9, 14, 0));
+}
+.main::after {
+  bottom: 62px;
+  height: 38px;
+  background: linear-gradient(to top, var(--bg), rgba(8, 9, 14, 0));
+}
+:root[data-palette='paper'] .main::before { background: linear-gradient(to bottom, rgba(244, 242, 237, 0.72), rgba(244, 242, 237, 0)); }
+:root[data-palette='paper'] .main::after { background: linear-gradient(to top, var(--bg), rgba(244, 242, 237, 0)); }
