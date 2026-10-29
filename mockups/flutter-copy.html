@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>GameVault — Flutter concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#07080c; --surface:#0f1117; --surface-2:#151822; --line:rgba(255,255,255,.08);
+    --text:#f4f6fb; --dim:#a8b0c2; --mute:#6d7689; --accent:#5b8cff;
+    --glass:rgba(20,23,34,.52); --hi:rgba(255,255,255,.12);
+    --ease:cubic-bezier(.32,.72,0,1);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100vw;height:100%;overflow:hidden;background:#05060a;font-family:Inter,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+  .app{position:relative;width:1600px;height:100vh;display:flex;gap:14px;padding:14px;overflow:hidden}
+  .ambient{position:absolute;inset:0;background:
+    radial-gradient(60% 55% at 12% 8%, rgba(70,110,255,.28), transparent 62%),
+    radial-gradient(55% 50% at 88% 4%, rgba(120,60,255,.20), transparent 64%),
+    radial-gradient(70% 65% at 60% 110%, rgba(20,150,140,.16), transparent 66%), #05060a;}
+  .glass{background:var(--glass);backdrop-filter:blur(24px) saturate(150%);-webkit-backdrop-filter:blur(24px) saturate(150%);border:1px solid var(--line);box-shadow:inset 0 1px 0 var(--hi),0 24px 60px rgba(0,0,0,.45)}
+
+  /* sidebar */
+  .side{position:relative;z-index:2;width:252px;flex:0 0 252px;border-radius:24px;padding:18px 12px 12px;display:flex;flex-direction:column;gap:2px}
+  .brand{display:flex;align-items:center;gap:10px;padding:0 8px 18px}
+  .logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(145deg,#6f9bff,#3f6bff);display:grid;place-items:center;box-shadow:0 8px 22px rgba(80,120,255,.4)}
+  .logo svg{width:17px;height:17px}
+  .brand b{font-family:'Space Grotesk';font-size:15px;font-weight:600;letter-spacing:-.02em}
+  .collapse{margin-left:auto;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;color:var(--mute);border:1px solid transparent}
+  .sec{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);padding:16px 10px 8px;font-weight:600}
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .item{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:10px;color:var(--dim);font-size:13.5px}
+  .item svg{width:16px;height:16px;flex:0 0 16px;opacity:.8}
+  .item .n{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--mute);background:rgba(255,255,255,.05);padding:2px 7px;border-radius:6px}
+  .item.active{background:linear-gradient(90deg,rgba(91,140,255,.24),rgba(91,140,255,.08));color:#fff;box-shadow:inset 0 0 0 1px rgba(91,140,255,.35)}
+  .item.active svg{color:var(--accent);opacity:1}
+  .item.active .n{background:var(--accent);color:#fff}
+  .src{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;font-size:12.5px;color:var(--dim)}
+  .dot{width:7px;height:7px;border-radius:50%;background:#3dd68c;box-shadow:0 0 10px rgba(61,214,140,.7)}
+  .dot.gray{background:#5b6478;box-shadow:none}
+  .src span:last-child{margin-left:auto;color:var(--mute);font-size:11px}
+  .stats{margin-top:auto;padding:14px 10px 10px;border-top:1px solid var(--line);font-size:12px;color:var(--dim);line-height:1.7}
+  .stats b{font-family:'Space Grotesk';font-weight:600;color:var(--text)}
+  .ver{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);padding-top:6px}
+
+  /* main */
+  .main{position:relative;z-index:2;flex:1;display:flex;flex-direction:column;gap:16px;min-width:0}
+  .top{height:60px;border-radius:20px;display:flex;align-items:center;gap:14px;padding:0 16px}
+  .search{flex:1;max-width:420px;height:38px;border-radius:999px;background:rgba(0,0,0,.28);border:1px solid var(--line);display:flex;align-items:center;gap:9px;padding:0 14px;color:var(--mute);font-size:13px}
+  .search kbd{margin-left:auto;font:10px Inter;color:var(--mute);border:1px solid var(--line);border-radius:5px;padding:2px 5px}
+  .seg{display:flex;gap:2px;padding:3px;border-radius:999px;background:rgba(0,0,0,.30);border:1px solid var(--line)}
+  .seg b{font-weight:500;font-size:12.5px;color:var(--mute);padding:7px 13px;border-radius:999px;display:flex;gap:6px}
+  .seg b.on{background:rgba(255,255,255,.10);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+  .seg b i{font-style:normal;font-size:10.5px;color:var(--mute)}
+  .tbtn{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .pill{height:36px;padding:0 15px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.04);font-size:12.5px;color:var(--dim);display:flex;align-items:center;gap:7px}
+  .pill.primary{background:linear-gradient(180deg,#6f9bff,#4b78f5);color:#08122e;font-weight:600;border-color:transparent;box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 10px 24px rgba(76,125,255,.35)}
+
+  /* hero */
+  .hero{position:relative;height:432px;border-radius:24px;overflow:hidden;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .hero > img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 38%}
+  .hero .scrim{position:absolute;inset:0;background:linear-gradient(90deg,rgba(5,6,10,.92) 0%,rgba(5,6,10,.55) 46%,rgba(5,6,10,.10) 78%),linear-gradient(0deg,rgba(5,6,10,.92),transparent 45%)}
+  .hero .content{position:absolute;left:34px;bottom:32px;right:34px;display:flex;align-items:flex-end;gap:22px}
+  .poster{width:132px;height:184px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.16);box-shadow:0 18px 40px rgba(0,0,0,.55);flex:0 0 132px}
+  .poster img{position:static;width:100%;height:100%;object-fit:cover}
+  .hmeta{flex:1;min-width:0;padding-bottom:4px}
+  .kick{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#cfd7ea;opacity:.85;font-weight:600}
+  h1{font-family:'Space Grotesk';font-size:46px;line-height:.98;letter-spacing:-.035em;margin:9px 0 12px;font-weight:700;text-shadow:0 8px 30px rgba(0,0,0,.6)}
+  .meta{display:flex;gap:10px;align-items:center;font-size:12.5px;color:var(--dim)}
+  .meta i{width:3px;height:3px;border-radius:50%;background:var(--mute);font-style:normal}
+  .row{display:flex;gap:10px;margin-top:16px}
+  .play{height:44px;padding:0 22px;border-radius:999px;background:linear-gradient(180deg,#7ba4ff,#4b78f5);color:#08122e;font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px;border:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.45),0 14px 30px rgba(76,125,255,.4)}
+  .ghost{height:44px;padding:0 18px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(18,21,32,.45);backdrop-filter:blur(14px);color:var(--text);font-size:13px;display:flex;align-items:center;gap:8px}
+  .hcard{position:absolute;right:26px;top:22px;width:250px;border-radius:18px;padding:14px;background:rgba(14,17,26,.55);backdrop-filter:blur(22px) saturate(150%);border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 20px 50px rgba(0,0,0,.45)}
+  .hcard h4{margin:0 0 10px;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  .stat{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);padding:5px 0}
+  .stat b{color:var(--text);font-weight:500}
+  .bar{height:5px;border-radius:99px;background:rgba(255,255,255,.1);margin-top:10px;overflow:hidden}
+  .bar i{display:block;height:100%;width:38%;background:linear-gradient(90deg,#6f9bff,#8fb2ff);border-radius:99px}
+
+  /* shelf */
+  .shelf-head{display:flex;align-items:baseline;gap:10px;padding:2px 4px 0}
+  .shelf-head h2{font-family:'Space Grotesk';font-size:19px;letter-spacing:-.02em;margin:0;font-weight:600}
+  .shelf-head span{font-size:12px;color:var(--mute)}
+  .shelf-head a{margin-left:auto;font-size:12px;color:var(--accent)}
+  .cards{display:flex;gap:14px;margin-top:10px}
+  .card{width:150px;flex:0 0 150px}
+  .thumb{position:relative;height:200px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.09);background:#111;box-shadow:0 12px 28px rgba(0,0,0,.4)}
+  .thumb img{width:100%;height:100%;object-fit:cover}
+  .chip{position:absolute;top:8px;left:8px;font-size:8.5px;letter-spacing:.1em;font-weight:700;text-transform:uppercase;padding:3px 7px;border-radius:6px;background:rgba(8,10,16,.66);backdrop-filter:blur(8px);color:#dfe6f5;display:flex;align-items:center;gap:5px}
+  .chip i{width:5px;height:5px;border-radius:50%;background:#5b8cff}
+  .chip.done i{background:#3dd68c}
+  .card p{margin:9px 2px 0;font-size:12.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card small{display:block;margin:2px 2px 0;font-size:11px;color:var(--mute)}
+
+  /* command palette */
+  .palette-wrap{position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:5;display:none;align-items:flex-start;justify-content:center;padding-top:150px;background:rgba(4,5,9,.45)}
+  body.palette-open .palette-wrap{display:flex}
+  .palette{width:680px;border-radius:22px;overflow:hidden;background:rgba(18,21,32,.62);backdrop-filter:blur(30px) saturate(160%);border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.16),0 40px 100px rgba(0,0,0,.6)}
+  .pbar{height:60px;display:flex;align-items:center;gap:11px;padding:0 18px;border-bottom:1px solid rgba(255,255,255,.08);color:var(--mute);font-size:14px}
+  .pbar kbd{margin-left:auto;font:10px Inter;border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:2px 6px}
+  .plist{padding:8px}
+  .pit{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;font-size:13px;color:var(--dim)}
+  .pit.on{background:rgba(255,255,255,.08);color:#fff}
+  .pit img{width:26px;height:34px;border-radius:5px;object-fit:cover}
+  .pit small{margin-left:auto;color:var(--mute);font-size:11px}
+  .pfoot{height:38px;display:flex;align-items:center;gap:14px;padding:0 16px;border-top:1px solid rgba(255,255,255,.08);font-size:10.5px;color:var(--mute)}
+  .tag{position:absolute;right:20px;bottom:14px;z-index:6;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.35)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="ambient"></div>
+
+  <aside class="side glass">
+    <div class="brand">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#08122e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v9a2 2 0 0 1-2 2h-3l-3 3-3-3H6a2 2 0 0 1-2-2z"/></svg></span>
+      <b>GameVault</b>
+      <span class="collapse"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m14 6-6 6 6 6"/></svg></span>
+    </div>
+
+    <div class="sec">Library</div>
+    <div class="nav">
+      <div class="item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>All <span class="n">43</span></div>
+      <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M7 4.5v15l12-7.5z"/></svg>Playing <span class="n">28</span></div>
+      <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 12.5 5.5 5.5L20 6.5"/></svg>Finished <span class="n">15</span></div>
+    </div>
+
+    <div class="sec">Saved</div>
+    <div class="nav">
+      <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/></svg>Wishlist <span class="n">9</span></div>
+    </div>
+
+    <div class="sec">Sources</div>
+    <div class="src"><span class="dot"></span>Steam<span>18</span></div>
+    <div class="src"><span class="dot"></span>Hydra<span>12</span></div>
+    <div class="src"><span class="dot gray"></span>Lutris<span>6</span></div>
+    <div class="src"><span class="dot gray"></span>Local<span>7</span></div>
+
+    <div class="stats">
+      <b>43 games</b><br />184 h played<br />
+      <div class="ver">2.0 · Flutter concept</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="top glass">
+      <div class="search">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+        Search your vault
+        <kbd>Ctrl K</kbd>
+      </div>
+      <div class="seg">
+        <b class="on">All <i>43</i></b><b>Playing <i>28</i></b><b>Finished <i>15</i></b>
+      </div>
+      <div class="tbtn">
+        <span class="pill">Last played ↕</span>
+        <span class="pill primary">+ Add game</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <img src="assets/hero.png" alt="" />
+      <div class="scrim"></div>
+
+      <div class="hcard">
+        <h4>In your vault</h4>
+        <div class="stat"><span>Status</span><b>Playing</b></div>
+        <div class="stat"><span>Playtime</span><b>0.3 h</b></div>
+        <div class="stat"><span>Last played</span><b>Oct 26</b></div>
+        <div class="bar"><i></i></div>
+      </div>
+
+      <div class="content">
+        <div class="poster"><img src="assets/cover1.jpg" alt="" /></div>
+        <div class="hmeta">
+          <div class="kick">Continue playing</div>
+          <h1>Buckshot<br/>Roulette</h1>
+          <div class="meta">Hydra <i></i> 0.3 h played <i></i> Last played Oct 26, 2026</div>
+          <div class="row">
+            <button class="play">▶ Play</button>
+            <button class="ghost">Details</button>
+            <button class="ghost">✓ Mark as finished</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="shelf-head">
+      <h2>Continue playing</h2><span>28 games</span><a>View all →</a>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="thumb"><img src="assets/cover1.jpg" /><span class="chip"><i></i>Playing</span></div><p>Buckshot Roulette</p><small>0.3 h · Hydra</small></div>
+      <div class="card"><div class="thumb"><img src="assets/cover2.jpg" /><span class="chip"><i></i>Playing</span></div><p>ELDEN RING</p><small>99.4 h · Steam</small></div>
+      <div class="card"><div class="thumb"><img src="assets/cover3.jpg" /><span class="chip done"><i></i>Finished</span></div><p>God of War</p><small>42.1 h · Steam</small></div>
+      <div class="card"><div class="thumb"><img src="assets/cover4.jpg" /><span class="chip"><i></i>Playing</span></div><p>Splitgate 2</p><small>6.8 h · Steam</small></div>
+      <div class="card"><div class="thumb"><img src="assets/cover5.jpg" /><span class="chip"><i></i>Playing</span></div><p>Air Brawl</p><small>0.2 h · Local</small></div>
+      <div class="card"><div class="thumb"><img src="assets/cover6.jpg" /><span class="chip done"><i></i>Finished</span></div><p>PICO PARK</p><small>3.1 h · Steam</small></div>
+    </div>
+  </main>
+
+  <div class="palette-wrap">
+    <div class="palette">
+      <div class="pbar">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+        Play, import, open…
+        <kbd>Esc</kbd>
+      </div>
+      <div class="plist">
+        <div class="pit on"><img src="assets/cover1.jpg" /> Buckshot Roulette <small>Play</small></div>
+        <div class="pit"><img src="assets/cover2.jpg" /> ELDEN RING <small>Open</small></div>
+        <div class="pit">Import games… <small>Action</small></div>
+        <div class="pit">Collapse sidebar <small>Layout</small></div>
+      </div>
+      <div class="pfoot"><span>↑↓ navigate</span><span>↵ open</span><span>esc close</span></div>
+    </div>
+  </div>
+
+  <div class="tag">Flutter concept · glass via BackdropFilter</div>
+</div>
+<script>
+  if (new URLSearchParams(location.search).get('palette') === '1') document.body.classList.add('palette-open');
+</script>
+</body>
+</html>
