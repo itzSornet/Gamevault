@@ -2893,25 +2893,6 @@
     $('#btn-view').classList.toggle('is-active', state.view !== 'shelf');
   }
 
-  function animateFilterSwap() {
-    if (prefersReducedMotion()) return;
-    if (state.view !== 'shelf') return;
-    const content = $('#shelf-stage .shelf-content');
-    if (content) {
-      content.animate(
-        [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
-        { duration: 240, easing: 'cubic-bezier(.32,.72,0,1)' }
-      );
-    }
-    const tiles = Array.from($('#shelf-strip').children).slice(0, 10);
-    tiles.forEach((tile, i) => {
-      tile.animate(
-        [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
-        { duration: 220, delay: i * 16, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'backwards' }
-      );
-    });
-  }
-
   function setFilter(filter) {
     if (state.selectedId) closeDetail();
     state.filter = filter;
@@ -2923,7 +2904,6 @@
     const apply = () => {
       renderLibrary();
       if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
-      animateFilterSwap();
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
     };
@@ -3864,14 +3844,15 @@
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
   if (sideToggle) sideToggle.onclick = () => {
     const open = sideEl.classList.contains('is-collapsed');
-    if (prefersReducedMotion()) { applySidebar(open); return; }
-    // Fade content out, swap layout once (no per-frame reflow), fade back in.
-    sideEl.classList.add('is-collapsing');
-    setTimeout(() => {
-      applySidebar(open);
-      sideEl.animate([{ opacity: 0.55 }, { opacity: 1 }], { duration: 180, easing: 'cubic-bezier(.32,.72,0,1)' });
-      requestAnimationFrame(() => sideEl.classList.remove('is-collapsing'));
-    }, 100);
+    const run = () => applySidebar(open);
+    const canVT = document.startViewTransition
+      && document.visibilityState === 'visible'
+      && !document.documentElement.classList.contains('shot-mode')
+      && !prefersReducedMotion();
+    if (!canVT) { run(); return; }
+    const vt = document.startViewTransition(run);
+    const guard = setTimeout(() => { try { vt.skipTransition(); } catch (_) {} }, 800);
+    vt.finished.finally(() => clearTimeout(guard));
   };
 
   const gridEl = $('#grid');
