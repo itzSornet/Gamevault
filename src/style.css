@@ -3224,3 +3224,22 @@ body { font-size: 13.5px; }
 
 /* main must actually claim the remaining width (flex default was auto) */
 .main { flex: 1 1 0%; width: auto; }
+
+/* sidebar layout morph — View Transition snapshots, no per-frame reflow */
+.sidebar { view-transition-name: gv-side; }
+.main { view-transition-name: gv-main; }
+::view-transition-group(gv-side),
+::view-transition-group(gv-main) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+::view-transition-old(gv-side),
+::view-transition-new(gv-side),
+::view-transition-old(gv-main),
+::view-transition-new(gv-main) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(gv-side), ::view-transition-group(gv-main) { animation: none; }
+}
