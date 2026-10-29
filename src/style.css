@@ -3172,3 +3172,55 @@ body { font-size: 13.5px; }
 .toast { transition-duration: 200ms; }
 
 /* grid stagger gets snappier */
+
+/* ============================================================================
+   Fixes: strong active nav, instant sidebar, responsive detail
+   ========================================================================= */
+
+/* active state you can actually see */
+.side-pill {
+  background: linear-gradient(90deg, rgba(76, 125, 255, 0.22), rgba(76, 125, 255, 0.07));
+  box-shadow: inset 0 0 0 1px rgba(76, 125, 255, 0.28), 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.side-item.is-active { color: var(--text); }
+.side-item.is-active .side-ico { color: var(--accent); opacity: 1; }
+.side-item.is-active b { color: #fff; background: var(--accent); }
+.side-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: -10px; top: 7px; bottom: 7px;
+  width: 2px; border-radius: 2px;
+  background: var(--accent);
+}
+
+/* collapse must not animate width: it reflows the whole window every frame */
+.sidebar { transition: none; }
+.sidebar.is-collapsed { width: 62px; flex-basis: 62px; }
+
+/* detail: stack when the window is narrow instead of squeezing the rail */
+@media (max-width: 1080px) {
+  .gvx-band {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    gap: 16px;
+    padding: 16px 18px 20px;
+    overflow-y: auto;
+  }
+  .gvx-rail { flex-direction: row; flex-wrap: wrap; overflow: visible; }
+  .gvx-card { flex: 1 1 260px; }
+}
+.gvx-specs div { grid-template-columns: 92px minmax(0, 1fr); }
+.gvx-specs dd { overflow-wrap: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* very narrow windows: sidebar becomes an icon rail regardless of stored state */
+@media (max-width: 900px) {
+  .sidebar { width: 62px; flex-basis: 62px; padding: 16px 6px 12px; }
+  .sidebar .side-name, .sidebar .side-sec, .sidebar .side-stats,
+  .sidebar .side-item span, .sidebar .side-item b { display: none; }
+  .sidebar .side-brand { flex-direction: column; gap: 8px; padding: 0 0 14px; }
+  .sidebar .side-toggle { margin: 0; transform: rotate(180deg); }
+  .sidebar .side-item { justify-content: center; padding: 0; }
+}
+
+/* main must actually claim the remaining width (flex default was auto) */
+.main { flex: 1 1 0%; width: auto; }
