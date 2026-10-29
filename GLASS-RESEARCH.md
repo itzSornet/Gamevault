@@ -62,3 +62,13 @@ Takeaway: refraction is a *feature surface*, not a global material — use it on
 - Keep **Frost** for the shell, **Specular** for floating surfaces.
 - Offer **Lens** as an accent (Chrome-only; skip on Flutter unless we write a fragment shader).
 - Never blur a full-height sidebar over scrolling content; bake or use tint.
+
+## Round 3.5 — aura + interactive glass
+
+- **Aura**: three large radial light fields, drifting on `transform` only (44 s / 58 s / 70 s, alternate), no blur filter, low opacity. They sit behind the glass so the material picks up their color slowly; `prefers-reduced-motion` freezes them.
+- **Interactive glass** (Apple’s `.interactive()` idea):
+  - a **specular sheen** tracks the pointer via `--mx/--my` inside the glass surface (screen blend, 180 px falloff);
+  - small panels **tilt** ±3° toward the cursor (`perspective(900px)`), transform-only;
+  - press compresses to `scale(.994)`;
+  - a `?hover=1` flag lets screenshots capture the state deterministically.
+- All of it is pointer-driven, so it works with mouse and pen; touch skips the tilt.

@@ -1,6 +1,16 @@
 (() => {
   const body = document.body;
-  const initial = new URLSearchParams(location.search).get('variant');
+  const params = new URLSearchParams(location.search);
+  const initial = params.get('variant');
+  if (params.get('hover') === '1') {
+    const cue = document.querySelector('.cue');
+    if (cue) {
+      cue.classList.add('is-hot');
+      cue.style.setProperty('--mx', '72%');
+      cue.style.setProperty('--my', '28%');
+      cue.style.transform = 'perspective(900px) rotateX(-2deg) rotateY(2deg)';
+    }
+  }
   if (initial) {
     body.dataset.glass = initial;
     for (const b of document.querySelectorAll('[data-variant]')) b.classList.toggle('on', b.dataset.variant === initial);
@@ -101,4 +111,33 @@
       <feDisplacementMap in="SourceGraphic" in2="map" scale="34" xChannelSelector="R" yChannelSelector="G" />
     </filter>`;
   sample.style.backdropFilter = 'url(#lensF)';
+})();
+
+// --- interactive glass: sheen + tilt + press ------------------------------
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const tiles = [...document.querySelectorAll('.glass')];
+  for (const el of tiles) {
+    el.addEventListener('pointermove', (e) => {
+      if (reduce) return;
+      const r = el.getBoundingClientRect();
+      el.style.setProperty('--mx', `${((e.clientX - r.left) / r.width) * 100}%`);
+      el.style.setProperty('--my', `${((e.clientY - r.top) / r.height) * 100}%`);
+      el.classList.add('is-hot');
+      if (el.classList.contains('cue') || el.classList.contains('lens-stage')) {
+        const dx = ((e.clientX - r.left) / r.width - 0.5) * 2;
+        const dy = ((e.clientY - r.top) / r.height - 0.5) * 2;
+        el.style.transform = `perspective(900px) rotateX(${(-dy * 3).toFixed(2)}deg) rotateY(${(dx * 3).toFixed(2)}deg)`;
+      }
+    });
+    el.addEventListener('pointerleave', () => {
+      el.style.removeProperty('--mx');
+      el.style.removeProperty('--my');
+      el.classList.remove('is-hot');
+      if (el.classList.contains('cue') || el.classList.contains('lens-stage')) el.style.transform = '';
+    });
+    el.addEventListener('pointerdown', () => el.classList.add('is-pressed'));
+    el.addEventListener('pointerup', () => el.classList.remove('is-pressed'));
+    el.addEventListener('pointercancel', () => el.classList.remove('is-pressed'));
+  }
 })();
