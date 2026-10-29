@@ -1472,8 +1472,8 @@
     const step = (now) => {
       const dt = Math.min(32, now - last) / 1000;
       last = now;
-      const k = 380;   // stiffness
-      const c = 14;    // damping (ζ ≈ 0.36 → pronounced bounce)
+      const k = 360;   // stiffness
+      const c = 19;    // damping (ζ ≈ 0.50 → one clean bounce)
       const a = -k * (pillSpring.y - pillSpring.target) - c * pillSpring.v;
       pillSpring.v += a * dt;
       pillSpring.y += pillSpring.v * dt;
@@ -3923,16 +3923,7 @@
   };
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
   if (sideToggle) sideToggle.onclick = () => {
-    const open = sideEl.classList.contains('is-collapsed');
-    const run = () => applySidebar(open);
-    const canVT = document.startViewTransition
-      && document.visibilityState === 'visible'
-      && !document.documentElement.classList.contains('shot-mode')
-      && !prefersReducedMotion();
-    if (!canVT) { run(); return; }
-    const vt = document.startViewTransition(run);
-    const guard = setTimeout(() => { try { vt.skipTransition(); } catch (_) {} }, 800);
-    vt.finished.finally(() => clearTimeout(guard));
+    applySidebar(sideEl.classList.contains('is-collapsed'));
   };
 
   const gridEl = $('#grid');
