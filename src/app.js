@@ -3799,13 +3799,13 @@
 
   // Software rendering (no GPU compositing) cannot afford glass: drop to lite.
   if (api.gpuStatus) {
-    api.gpuStatus().then((s) => {
+    setTimeout(() => api.gpuStatus().then((s) => {
       const soft = String((s && s.gpu_compositing) || '').includes('disabled');
       if (soft) {
         document.documentElement.dataset.software = '1';
         if (state.tier !== 'cinematic') applyTier('lite');
       }
-    }).catch(() => {});
+    }).catch(() => {}), 1400);
   }
 
   // Ctrl+Shift+F toggles a frame-rate HUD for reporting jank.
@@ -3844,6 +3844,24 @@
   };
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
   if (sideToggle) sideToggle.onclick = () => applySidebar(sideEl.classList.contains('is-collapsed'));
+
+  const gridEl = $('#grid');
+  if (gridEl) {
+    gridEl.addEventListener('pointermove', (e) => {
+      if (prefersReducedMotion() || document.documentElement.dataset.software === '1') return;
+      if (e.pointerType === 'touch') return;
+      const card = e.target.closest('.card');
+      if (!card) return;
+      const r = card.getBoundingClientRect();
+      const dx = (e.clientX - r.left) / r.width - 0.5;
+      const dy = (e.clientY - r.top) / r.height - 0.5;
+      card.style.transform = `perspective(760px) translateY(-3px) scale(1.02) rotateX(${(-dy * 4).toFixed(2)}deg) rotateY(${(dx * 4).toFixed(2)}deg)`;
+    }, { passive: true });
+    gridEl.addEventListener('pointerout', (e) => {
+      const card = e.target.closest('.card');
+      if (card && !card.contains(e.relatedTarget)) card.style.transform = '';
+    }, { passive: true });
+  }
 
   syncSidePill();
   window.addEventListener('resize', syncSidePill);
