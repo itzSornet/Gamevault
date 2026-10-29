@@ -377,7 +377,7 @@
   }
 
   function fadeIn(el) {
-    if (!el || state.tier === 'lite') return;
+    if (!el) return;
     el.classList.remove('gv-fade-in');
     void el.offsetWidth;
     el.classList.add('gv-fade-in');
@@ -2906,6 +2906,7 @@
       if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
+      fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
     };
     apply();
   }
