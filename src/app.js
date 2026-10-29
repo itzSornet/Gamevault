@@ -3038,13 +3038,14 @@
 
   const POP_EASE = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
 
-  function popIn(el, delay) {
+  function popIn(el, delay, baseTransform) {
     if (!el) return;
+    const b = baseTransform ? baseTransform + ' ' : '';
     el.animate(
       [
-        { opacity: 0, transform: 'scale(0.92) translateY(8px)' },
-        { opacity: 1, transform: 'scale(1.025) translateY(0)', offset: 0.68 },
-        { opacity: 1, transform: 'scale(1) translateY(0)' }
+        { opacity: 0, transform: `${b}scale(0.92) translateY(8px)` },
+        { opacity: 1, transform: `${b}scale(1.025) translateY(0)`, offset: 0.68 },
+        { opacity: 1, transform: `${b}scale(1)` }
       ],
       { duration: 340, delay: delay || 0, easing: POP_EASE, fill: 'backwards' }
     );
@@ -3071,7 +3072,7 @@
       if (stage) {
         Array.from(stage.querySelectorAll('.shelf-content > *')).forEach((el, i) => popIn(el, i * 34));
         const poster = stage.querySelector('.shelf-poster.is-on');
-        if (poster) popIn(poster, 40);
+        if (poster) popIn(poster, 40, 'translateY(-50%)');
       }
       const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).slice(0, 6);
       tiles.forEach((tile, i) => popIn(tile, 60 + i * 20));
