@@ -910,6 +910,17 @@ function createWindow() {
     });
   });
 
+  const PERF_LOG = path.join(app.getPath('userData'), 'perf.log');
+  ipcMain.on('perf:log', (_, sample) => {
+    try {
+      fs.appendFileSync(PERF_LOG, JSON.stringify(sample) + '\n');
+      const st = fs.statSync(PERF_LOG);
+      if (st.size > 3 * 1024 * 1024) fs.renameSync(PERF_LOG, PERF_LOG + '.old');
+    } catch (_) {}
+  });
+  ipcMain.handle('perf:path', () => PERF_LOG);
+  ipcMain.on('perf:reveal', () => { try { shell.showItemInFolder(PERF_LOG); } catch (_) {} });
+
   ipcMain.handle('app:gpu', () => {
     try { return app.getGPUFeatureStatus(); } catch (e) { return {}; }
   });

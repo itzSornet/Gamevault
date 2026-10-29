@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('api', {
   steamOwned: (payload) => ipcRenderer.invoke('steam:owned', payload),
   steamLogin: () => ipcRenderer.invoke('steam:login'),
   gpuStatus: () => ipcRenderer.invoke('app:gpu'),
+  perfLog: (sample) => ipcRenderer.send('perf:log', sample),
+  perfPath: () => ipcRenderer.invoke('perf:path'),
+  perfReveal: () => ipcRenderer.send('perf:reveal'),
 
   // Exe tracking
   trackingStart: (gameId, exePath, installDir, steamAppId) => ipcRenderer.send('tracking:start', { gameId, exePath, installDir, steamAppId }),

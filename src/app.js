@@ -902,6 +902,7 @@
   // ---------------------------------------------------------------------------
 
   function openDetail(id) {
+    window.__gvPerfMark && window.__gvPerfMark('detail');
     const active = document.activeElement;
     state._focusReturn = (active && active.id === 'cmd-input') ? null : active;
     state.selectedId = String(id);
@@ -2463,8 +2464,10 @@
           <div class="field-row" style="align-items:center">
             <span class="hint" id="s-perf" style="flex:1">measuring…</span>
             <button class="btn btn-ghost" type="button" data-perf-copy>Copy report</button>
+            <button class="btn btn-ghost" type="button" data-perf-reveal>Reveal log</button>
           </div>
           <div class="hint" id="s-perf-gpu">GPU: checking…</div>
+          <div class="hint" id="s-perf-path">Stats are written every second to perf.log</div>
         </div>
 
         <div class="section-label">About</div>
@@ -2503,6 +2506,11 @@
       };
       requestAnimationFrame(beat);
     }
+    const perfPathEl = card.querySelector('#s-perf-path');
+    if (perfPathEl && api.perfPath) api.perfPath().then((p) => { perfPathEl.textContent = `Log: ${p}`; }).catch(() => {});
+    const perfReveal = card.querySelector('[data-perf-reveal]');
+    if (perfReveal && api.perfReveal) perfReveal.onclick = () => api.perfReveal();
+
     const perfCopy = card.querySelector('[data-perf-copy]');
     if (perfCopy) perfCopy.onclick = async () => {
       const report = {
@@ -3015,6 +3023,7 @@
   }
 
   function setFilter(filter) {
+    window.__gvPerfMark && window.__gvPerfMark('filter:' + filter);
     if (state.selectedId) closeDetail();
     state.filter = filter;
     for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === filter);
@@ -3964,6 +3973,7 @@
   };
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
   if (sideToggle) sideToggle.onclick = () => {
+    window.__gvPerfMark && window.__gvPerfMark('sidebar');
     applySidebar(sideEl.classList.contains('is-collapsed'));
   };
 
@@ -3984,6 +3994,47 @@
       if (card && !card.contains(e.relatedTarget)) card.style.transform = '';
     }, { passive: true });
   }
+
+  // ---- continuous performance recorder (1 s samples, 500 ms-ish frame stats)
+  const perf = { frames: 0, sum: 0, n: 0, worst: 0, jank: 0, longTasks: 0, events: [], last: performance.now() };
+  try {
+    new PerformanceObserver((list) => { perf.longTasks += list.getEntries().length; }).observe({ entryTypes: ['longtask'] });
+  } catch (_) {}
+  const perfFrame = (now) => {
+    const dt = now - perf.last;
+    perf.last = now;
+    if (dt > 0 && dt < 5000) {
+      perf.frames += 1;
+      perf.sum += dt;
+      perf.n += 1;
+      if (dt > perf.worst) perf.worst = dt;
+      if (dt > 50) perf.jank += 1;
+    }
+    requestAnimationFrame(perfFrame);
+  };
+  requestAnimationFrame(perfFrame);
+  window.__gvPerfMark = (label) => {
+    perf.events.push(label);
+    if (perf.events.length > 8) perf.events.shift();
+  };
+  setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (!api.perfLog) return;
+    const avg = perf.n ? perf.sum / perf.n : 0;
+    const sample = {
+      t: Date.now(),
+      fps: avg ? Math.round(1000 / avg) : 0,
+      avgMs: +avg.toFixed(1),
+      worstMs: Math.round(perf.worst),
+      jank: perf.jank,
+      longTasks: perf.longTasks,
+      w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
+      tier: state.tier,
+      events: perf.events.splice(0),
+    };
+    api.perfLog(sample);
+    perf.sum = 0; perf.n = 0; perf.worst = 0; perf.jank = 0;
+  }, 1000);
 
   syncSidePill();
   window.addEventListener('resize', syncSidePill);
