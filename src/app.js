@@ -2457,6 +2457,16 @@
             </div>
           </div>` : ''}
 
+        <div class="section-label">Performance</div>
+        <div class="field">
+          <label>Frame rate</label>
+          <div class="field-row" style="align-items:center">
+            <span class="hint" id="s-perf" style="flex:1">measuring…</span>
+            <button class="btn btn-ghost" type="button" data-perf-copy>Copy report</button>
+          </div>
+          <div class="hint" id="s-perf-gpu">GPU: checking…</div>
+        </div>
+
         <div class="section-label">About</div>
         <div class="hint">
           GameVault <b>${esc(version)}</b> — experimental build<br />
@@ -2476,6 +2486,38 @@
         for (const p of card.querySelectorAll('[data-palette-opt]')) p.classList.toggle('is-active', p === pill);
       };
     }
+
+    const perfEl = card.querySelector('#s-perf');
+    const perfGpuEl = card.querySelector('#s-perf-gpu');
+    let gpuInfo = {};
+    if (api.gpuStatus) gpuInfo = await api.gpuStatus().catch(() => ({}));
+    if (perfGpuEl) perfGpuEl.textContent = `GPU compositing: ${(gpuInfo && gpuInfo.gpu_compositing) || 'unknown'}`;
+    if (perfEl) {
+      let frames = 0;
+      const t0 = performance.now();
+      const beat = (now) => {
+        frames += 1;
+        if (now - t0 < 1000) { requestAnimationFrame(beat); return; }
+        const fps = Math.max(1, Math.round((frames * 1000) / (now - t0)));
+        perfEl.textContent = `${fps} fps · ${(1000 / fps).toFixed(1)} ms/frame · tier ${state.tier}`;
+      };
+      requestAnimationFrame(beat);
+    }
+    const perfCopy = card.querySelector('[data-perf-copy]');
+    if (perfCopy) perfCopy.onclick = async () => {
+      const report = {
+        readout: perfEl ? perfEl.textContent : '',
+        window: `${innerWidth}x${innerHeight}`,
+        dpr: devicePixelRatio,
+        tier: state.tier,
+        palette: state.palette,
+        gpu: (gpuInfo && gpuInfo.gpu_compositing) || 'unknown',
+        games: state.games.length,
+      };
+      const text = JSON.stringify(report);
+      try { await navigator.clipboard.writeText(text); toast('Performance report copied — paste it to me', 'ok'); }
+      catch (_) { toast(text, 'ok'); }
+    };
 
     for (const pill of card.querySelectorAll('[data-tier]')) {
       pill.onclick = () => {
@@ -3880,10 +3922,9 @@
   if (api.gpuStatus) {
     setTimeout(() => api.gpuStatus().then((s) => {
       const soft = String((s && s.gpu_compositing) || '').includes('disabled');
-      if (soft) {
-        document.documentElement.dataset.software = '1';
-        if (state.tier !== 'cinematic') applyTier('lite');
-      }
+      // Never persist a tier change from a transient/headless GPU state.
+      if (soft) document.documentElement.dataset.software = '1';
+      else document.documentElement.dataset.software = '0';
     }).catch(() => {}), 1400);
   }
 

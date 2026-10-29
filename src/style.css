@@ -3343,3 +3343,9 @@ body { font-size: 13.5px; }
 .card { box-shadow: none !important; }
 .main { box-shadow: none !important; }
 #ambient i:nth-child(3) { display: none; }
+
+/* bring back the depth that was cut, now that it is static (not animated) */
+.card { box-shadow: 0 6px 16px rgba(0, 0, 0, 0.26) !important; }
+.main { box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42) !important; }
+#grain { display: block; opacity: 0.012; }
+#ambient i:nth-child(3) { display: block; }
