@@ -4018,7 +4018,6 @@
     if (perf.events.length > 8) perf.events.shift();
   };
   setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
     if (!api.perfLog) return;
     const avg = perf.n ? perf.sum / perf.n : 0;
     const sample = {
@@ -4030,6 +4029,7 @@
       longTasks: perf.longTasks,
       w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
       tier: state.tier,
+      vis: document.visibilityState,
       events: perf.events.splice(0),
     };
     api.perfLog(sample);
