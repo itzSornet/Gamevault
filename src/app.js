@@ -463,15 +463,30 @@
       state._shelfKey = key;
       strip.scrollLeft = 0;
       strip._max = null;
-      strip.innerHTML = list.map((g) => `
-        <button class="shelf-tile ${String(g.id) === state.shelfId ? 'is-active' : ''}" data-id="${esc(String(g.id))}" role="option" title="${esc(g.name)}">
-          ${(g._cover || g.coverUrl) ? `<img src="${esc(g._cover || g.coverUrl)}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}
-          <span class="shelf-tile-label">${esc(g.name)}</span>
-        </button>`).join('');
-      for (const tile of strip.querySelectorAll('.shelf-tile')) {
-        tile.onclick = () => { if (shelfDragMoved) return; selectShelfGame(tile.dataset.id); };
-        tile.ondblclick = () => openDetail(tile.dataset.id);
+      // Reuse tiles by id instead of re-parsing the whole strip: switching
+      // filters no longer re-decodes every cover or relayouts 43 nodes.
+      const existing = new Map(Array.from(strip.querySelectorAll('.shelf-tile')).map((t) => [t.dataset.id, t]));
+      const frag = document.createDocumentFragment();
+      for (const g of list) {
+        const id = String(g.id);
+        let tile = existing.get(id);
+        if (tile) {
+          existing.delete(id);
+        } else {
+          tile = document.createElement('button');
+          tile.className = 'shelf-tile';
+          tile.dataset.id = id;
+          tile.setAttribute('role', 'option');
+          tile.title = g.name;
+          tile.innerHTML = `${(g._cover || g.coverUrl) ? `<img src="${esc(g._cover || g.coverUrl)}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(g.name)}</span>`;
+          tile.onclick = () => { if (shelfDragMoved) return; selectShelfGame(tile.dataset.id); };
+          tile.ondblclick = () => openDetail(tile.dataset.id);
+        }
+        tile.classList.toggle('is-active', id === state.shelfId);
+        frag.appendChild(tile);
       }
+      for (const leftover of existing.values()) leftover.remove();
+      strip.appendChild(frag);
     } else {
       for (const tile of strip.querySelectorAll('.shelf-tile')) {
         tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
@@ -3014,7 +3029,7 @@
         const poster = stage.querySelector('.shelf-poster.is-on');
         if (poster) popIn(poster, 40);
       }
-      const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).slice(0, 9);
+      const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).slice(0, 6);
       tiles.forEach((tile, i) => popIn(tile, 60 + i * 20));
     } else {
       const cards = Array.from($('#grid').children).slice(0, 14);

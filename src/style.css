@@ -3349,3 +3349,10 @@ body { font-size: 13.5px; }
 .main { box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42) !important; }
 #grain { display: block; opacity: 0.012; }
 #ambient i:nth-child(3) { display: block; }
+
+/* offscreen shelf tiles skip paint; each tile gets its own paint containment */
+.shelf-tile {
+  content-visibility: auto;
+  contain-intrinsic-size: 172px 290px;
+  contain: layout paint style;
+}
