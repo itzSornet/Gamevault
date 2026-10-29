@@ -1472,8 +1472,8 @@
     const step = (now) => {
       const dt = Math.min(32, now - last) / 1000;
       last = now;
-      const k = 340;   // stiffness
-      const c = 24;    // damping (ζ ≈ 0.65 → visible bounce)
+      const k = 380;   // stiffness
+      const c = 14;    // damping (ζ ≈ 0.36 → pronounced bounce)
       const a = -k * (pillSpring.y - pillSpring.target) - c * pillSpring.v;
       pillSpring.v += a * dt;
       pillSpring.y += pillSpring.v * dt;
