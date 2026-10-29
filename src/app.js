@@ -497,6 +497,10 @@
     syncShelfNav();
     requestAnimationFrame(syncShelfNav);
     setTimeout(syncShelfNav, 120);
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 400));
+    idle(() => {
+      for (const g of list.slice(0, 8)) preloadHero(heroUrlOf(g));
+    });
   }
 
   function syncShelfNav() {
@@ -516,14 +520,14 @@
     next.disabled = strip.scrollLeft >= max - 2;
   }
 
-  function selectShelfGame(id) {
+  async function selectShelfGame(id) {
     if (String(id) === state.shelfId) return;
     state.shelfId = String(id);
     for (const tile of $('#shelf-strip').querySelectorAll('.shelf-tile')) {
       tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
     }
     const g = state.games.find((x) => String(x.id) === state.shelfId);
-    if (g) renderShelfStage(g);
+    if (g) { await preloadHero(heroUrlOf(g)); renderShelfStage(g); }
     revealShelfTile(state.shelfId);
   }
 
@@ -1075,6 +1079,23 @@
     if (state.selectedId !== String(g.id)) return;
     if (!hadRail && railHasData(g)) renderDetail();
     else paintRail(g);
+  }
+
+  const heroDecodes = new Map();
+  function preloadHero(url) {
+    if (!url) return Promise.resolve();
+    if (heroDecodes.has(url)) return heroDecodes.get(url);
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
+    const p = (img.decode ? img.decode() : Promise.resolve()).catch(() => {});
+    heroDecodes.set(url, p);
+    if (heroDecodes.size > 20) heroDecodes.delete(heroDecodes.keys().next().value);
+    return p;
+  }
+  function heroUrlOf(g) {
+    if (!g) return '';
+    return g._noHero ? '' : (g._hero || g.heroUrl || g._cover || g.coverUrl || '');
   }
 
   function animateDetailIn(view, g) {
@@ -3037,7 +3058,7 @@
     }
   }
 
-  function setFilter(filter) {
+  async function setFilter(filter) {
     window.__gvPerfMark && window.__gvPerfMark('filter:' + filter);
     if (state.selectedId) closeDetail();
     state.filter = filter;
@@ -3046,6 +3067,8 @@
     if (title) title.textContent = filter === 'Want' ? 'Wishlist' : filter;
     syncSidePill();
     state._gridAnimate = true;
+    const next = filteredGames()[0];
+    if (next) await preloadHero(heroUrlOf(next));
     const apply = () => {
       renderLibrary();
       if (state._gridAnimate) { state._gridAnimate = false; }
