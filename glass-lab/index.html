@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>GameVault — Glass Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="lab.css" />
+</head>
+<body data-glass="frost">
+<div class="ambient"></div>
+
+<header class="labbar">
+  <span class="dotmark"></span>
+  <b>Glass Lab</b>
+  <span class="muted">three materials, one layout</span>
+  <div class="seg" role="tablist">
+    <button data-variant="frost" class="on">Frost</button>
+    <button data-variant="smoke">Smoke</button>
+    <button data-variant="specular">Specular</button>
+  </div>
+  <div class="hud"><span id="fps">60</span> fps · <span id="ms">16.7</span> ms</div>
+  <button class="pill" id="stress">Stress ×300</button>
+</header>
+
+<main class="app">
+  <aside class="side glass">
+    <div class="brand"><span class="logo">G</span><b>GameVault</b></div>
+    <div class="sec">Library</div>
+    <div class="item active">All <i>43</i></div>
+    <div class="item">Playing <i>28</i></div>
+    <div class="item">Finished <i>15</i></div>
+    <div class="sec">Saved</div>
+    <div class="item">Wishlist <i>9</i></div>
+    <div class="stats">43 games<br/>184 h played</div>
+  </aside>
+
+  <section class="main">
+    <div class="top glass">
+      <div class="search">Search your vault <kbd>Ctrl K</kbd></div>
+      <div class="tabs"><b class="on">All</b><b>Playing</b><b>Finished</b></div>
+      <button class="add">+ Add game</button>
+    </div>
+
+    <div class="hero">
+      <img src="assets/hero.png" alt="" />
+      <div class="scrim"></div>
+      <div class="hero-body">
+        <div class="kick">Continue playing</div>
+        <h1>Buckshot Roulette</h1>
+        <div class="meta">Hydra · 0.3 h · last played Oct 26</div>
+        <div class="actions"><button class="play">▶ Play</button><button class="ghost">Details</button><button class="ghost">✓ Mark finished</button></div>
+      </div>
+      <div class="cue glass">
+        <div class="cue-head">In your vault</div>
+        <div class="cue-row"><span>Status</span><b>Playing</b></div>
+        <div class="cue-row"><span>Playtime</span><b>0.3 h</b></div>
+        <div class="cue-row"><span>Last played</span><b>Oct 26</b></div>
+      </div>
+    </div>
+
+    <div class="lens-wrap">
+      <div class="lens-stage">
+        <img src="assets/cover3.jpg" alt="" />
+        <div class="lens-sample" id="lensSample">
+          <div class="lens-label">Lens · SVG displacement refraction <small>Chromium only</small></div>
+        </div>
+      </div>
+      <div class="lens-copy">
+        <b>Real refraction, not blur.</b>
+        <p>A displacement map bends the backdrop at the bezel, then a specular rim is composited on top. This is the closest thing to Liquid Glass that runs in Chromium — and therefore in Electron — today.</p>
+      </div>
+    </div>
+
+    <div class="rowhead">Continue playing <span>28 games</span></div>
+    <div class="grid" id="grid">
+      <div class="tile"><img src="assets/cover1.jpg" /><span>Buckshot Roulette</span><small>0.3 h</small></div>
+      <div class="tile"><img src="assets/cover2.jpg" /><span>ELDEN RING</span><small>99.4 h</small></div>
+      <div class="tile"><img src="assets/cover3.jpg" /><span>God of War</span><small>42.1 h</small></div>
+      <div class="tile"><img src="assets/cover4.jpg" /><span>Splitgate 2</span><small>6.8 h</small></div>
+    </div>
+  </section>
+</main>
+
+<svg width="0" height="0" style="position:absolute"><defs id="lensDefs"></defs></svg>
+<script src="lab.js"></script>
+</body>
+</html>
