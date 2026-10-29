@@ -2893,6 +2893,51 @@
     $('#btn-view').classList.toggle('is-active', state.view !== 'shelf');
   }
 
+  const POP_EASE = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+
+  function popIn(el, delay) {
+    if (!el) return;
+    el.animate(
+      [
+        { opacity: 0, transform: 'scale(0.92) translateY(8px)' },
+        { opacity: 1, transform: 'scale(1.025) translateY(0)', offset: 0.68 },
+        { opacity: 1, transform: 'scale(1) translateY(0)' }
+      ],
+      { duration: 340, delay: delay || 0, easing: POP_EASE, fill: 'backwards' }
+    );
+  }
+
+  function animateSwitchPop() {
+    if (prefersReducedMotion()) return;
+    const active = document.querySelector('.side-item.is-active');
+    if (active) {
+      const icon = active.querySelector('.side-ico');
+      const count = active.querySelector('b');
+      if (icon) icon.animate(
+        [{ transform: 'scale(0.65)' }, { transform: 'scale(1.18)', offset: 0.6 }, { transform: 'scale(1)' }],
+        { duration: 300, easing: POP_EASE }
+      );
+      if (count) count.animate(
+        [{ transform: 'scale(0.8)' }, { transform: 'scale(1.12)', offset: 0.6 }, { transform: 'scale(1)' }],
+        { duration: 280, easing: POP_EASE }
+      );
+    }
+
+    if (state.view === 'shelf') {
+      const stage = $('#shelf-stage');
+      if (stage) {
+        Array.from(stage.querySelectorAll('.shelf-content > *')).forEach((el, i) => popIn(el, i * 34));
+        const poster = stage.querySelector('.shelf-poster.is-on');
+        if (poster) popIn(poster, 40);
+      }
+      const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).slice(0, 9);
+      tiles.forEach((tile, i) => popIn(tile, 60 + i * 20));
+    } else {
+      const cards = Array.from($('#grid').children).slice(0, 14);
+      cards.forEach((card, i) => popIn(card, i * 14));
+    }
+  }
+
   function setFilter(filter) {
     if (state.selectedId) closeDetail();
     state.filter = filter;
@@ -2903,10 +2948,10 @@
     state._gridAnimate = true;
     const apply = () => {
       renderLibrary();
-      if (state._gridAnimate) { state._gridAnimate = false; animateGridIn(); }
+      if (state._gridAnimate) { state._gridAnimate = false; }
+      animateSwitchPop();
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
-      fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
     };
     apply();
   }
