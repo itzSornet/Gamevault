@@ -408,6 +408,17 @@ function createWindow() {
   });
 
   if (shotPath) {
+    win.webContents.once('did-finish-load', () => {
+      if (process.argv.includes('--gpu-log')) {
+        setTimeout(async () => {
+          try {
+            console.log('[gpu-live]', JSON.stringify(app.getGPUFeatureStatus()));
+            const i = await app.getGPUInfo('complete');
+            console.log('[gpu-live-info]', JSON.stringify(i).slice(0, 500));
+          } catch (e) { console.log('[gpu-live] err', e.message); }
+        }, 1500);
+      }
+    });
     // Never leave a headless instance behind if the page fails to load.
     const shotTimer = setTimeout(() => {
       console.error('[shot] timed out waiting for the page');
@@ -1401,12 +1412,36 @@ Already recommended (DO NOT suggest these again): ${alreadyRecommended}
   startBgPoll();
 }
 
+function cleanOwnCachesWhenTight() {
+  try {
+    const st = fs.statfsSync ? fs.statfsSync(app.getPath('userData')) : null;
+    const free = st ? st.bavail * st.bsize : Infinity;
+    if (free > 2.5 * 1024 ** 3) return;
+    for (const dir of ['Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'ShaderCache']) {
+      try { fs.rmSync(path.join(app.getPath('userData'), dir), { recursive: true, force: true }); } catch (_) {}
+    }
+    console.log('[disk] freed app caches, low space');
+  } catch (_) {}
+}
+
 app.whenReady().then(() => {
+  cleanOwnCachesWhenTight();
   if (process.argv.includes('--gpu-info')) {
-    try {
-      console.log('[gpu-features]', JSON.stringify(app.getGPUFeatureStatus()));
-      app.getGPUInfo('basic').then((info) => console.log('[gpu-info]', JSON.stringify(info))).finally(() => app.exit(0));
-    } catch (e) { console.log('[gpu-info] error', e.message); app.exit(1); }
+    console.log('[gpu-probe] start');
+    // Query AFTER a window exists: before that the GPU process has not started.
+    const probe = new BrowserWindow({ show: false, width: 1200, height: 760, webPreferences: { contextIsolation: true } });
+    probe.loadFile(path.join(__dirname, 'src', 'index.html'));
+    probe.webContents.once('did-finish-load', () => {
+      console.log('[gpu-probe] loaded');
+      setTimeout(async () => {
+        try {
+          console.log('[gpu-live]', JSON.stringify(app.getGPUFeatureStatus()));
+          const info = await app.getGPUInfo('complete');
+          console.log('[gpu-live-info]', JSON.stringify(info).slice(0, 600));
+        } catch (e) { console.log('[gpu-live] error', e.message); }
+        app.exit(0);
+      }, 3000);
+    });
     return;
   }
   if (!hasSingleInstanceLock) return;
