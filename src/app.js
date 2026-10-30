@@ -4265,8 +4265,14 @@
     const listH = () => Math.min(inner.offsetHeight, Math.min(Math.floor(innerHeight * 0.55), 400));
     function fit() { list.style.height = (isOpen ? listH() : 0) + 'px'; if (isOpen) geom(openRect()); }
     function openRect() {
-      const w = Math.min(660, innerWidth - 32);
-      return { left: (innerWidth - w) / 2, top: Math.max(40, innerHeight * 0.13), width: w, height: BORDER + FIELD + listH() + FOOT };
+      const main = ($('#main') || document.querySelector('.main')).getBoundingClientRect();
+      const w = Math.min(660, main.width - 32);
+      return {
+        left: main.left + (main.width - w) / 2,
+        top: main.top + Math.max(40, main.height * 0.13),
+        width: w,
+        height: BORDER + FIELD + listH() + FOOT,
+      };
     }
     const restRect = () => { const r = slot.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
     const geom = (r) => { spot.style.left = r.left + 'px'; spot.style.top = r.top + 'px'; spot.style.width = r.width + 'px'; spot.style.height = r.height + 'px'; };
