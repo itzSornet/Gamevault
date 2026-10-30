@@ -3093,11 +3093,19 @@
         const poster = stage.querySelector('.shelf-poster.is-on');
         if (poster) popIn(poster, 40, 'translateY(-50%)');
       }
-      const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).slice(0, 6);
-      tiles.forEach((tile, i) => popIn(tile, 60 + i * 20));
+      const inView = (el) => {
+        const r = el.getBoundingClientRect();
+        return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+      };
+      const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).filter(inView);
+      tiles.forEach((tile, i) => popIn(tile, 60 + Math.min(i, 10) * 18));
     } else {
-      const cards = Array.from($('#grid').children).slice(0, 14);
-      cards.forEach((card, i) => popIn(card, i * 14));
+      const inView = (el) => {
+        const r = el.getBoundingClientRect();
+        return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+      };
+      const cards = Array.from($('#grid').children).filter(inView);
+      cards.forEach((card, i) => popIn(card, Math.min(i, 12) * 14));
     }
   }
 

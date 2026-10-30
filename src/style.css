@@ -3376,3 +3376,72 @@ body { font-size: 13.5px; }
 .topbar #search-dock:hover { border-color: var(--line-2); background: rgba(0, 0, 0, 0.36); }
 .topbar #search-dock.is-expanded { max-width: 560px; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .library { padding-bottom: 24px; }
+
+/* search truly centered and fluid at every ratio */
+.topbar { position: relative; }
+.topbar #search-dock {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(240px, 32vw, 520px);
+  max-width: none;
+  margin: 0;
+}
+@media (max-width: 1020px) {
+  .topbar #search-dock { position: relative; left: auto; transform: none; flex: 1 1 auto; width: auto; margin: 0 10px; }
+}
+
+/* topbar as a 3-column grid: title | centered search | actions.
+   Equal side columns keep the search centered at every width. */
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 520px) minmax(0, 1fr);
+  column-gap: 14px;
+  align-items: center;
+}
+.topbar .filter-title { justify-self: start; min-width: 0; }
+.topbar #search-dock {
+  position: relative;
+  left: auto;
+  transform: none;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+.topbar .top-actions { justify-self: end; margin-left: 0; min-width: 0; }
+@media (max-width: 900px) {
+  .topbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+.shelf-strip { padding-top: 8px; }
+.shelf-tile:hover img { transform: scale(1.012); }
+.shelf-tile.is-active img { transform: none; }
+
+/* search: absolutely centered, shrinks with the window, never drifts */
+.topbar { display: flex; align-items: center; }
+.topbar #search-dock {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(220px, 30vw, 520px);
+  max-width: none;
+  margin: 0;
+}
+.topbar .filter-title { flex: 0 0 auto; }
+.topbar .top-actions { margin-left: auto; }
+@media (max-width: 1280px) {
+  .topbar .sort-btn span { display: none; }
+  .topbar .top-actions { gap: 4px; }
+}
+@media (max-width: 980px) {
+  .topbar #search-dock { position: relative; left: auto; transform: none; flex: 1 1 auto; margin: 0 10px; }
+}
+
+/* card never overflows the hero; keeps its 2:3 shape at any window height */
+.shelf-poster {
+  height: min(264px, calc(100% - 28px));
+  width: auto;
+  aspect-ratio: 2 / 3;
+}
+/* strip breathing room so the lifted/selected card and its label aren't clipped */
+.shelf-strip { padding-bottom: 10px; }
+.shelf-tile-label { padding-bottom: 2px; }
