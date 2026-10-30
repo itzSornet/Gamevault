@@ -401,7 +401,7 @@ function createWindow() {
   setTrackerWindow(win);
   initUpdater(win, () => { forceQuit = true; });
 
-  win.loadFile(path.join(__dirname, 'src', 'index.html'), shotState ? { hash: shotState } : undefined);
+  win.loadFile(path.join(__dirname, 'src', 'index.html'), { hash: shotState || '', query: process.argv.includes('--shot') ? { shot: '1' } : undefined });
 
   win.webContents.on('console-message', (_e, level, message) => {
     if (level >= 2) console.log('[renderer]', message);
