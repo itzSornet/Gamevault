@@ -2717,8 +2717,10 @@
     const dock = $('#search-dock');
     if (!root || !dock) return;
     const d = dock.getBoundingClientRect();
-    root.style.setProperty('--cmd-x', `${Math.round(d.left + d.width / 2)}px`);
-    root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 28)}px`);
+    const m = ($('#main') || document.querySelector('.main')).getBoundingClientRect();
+    // the spotlight sits in the middle of the library section, not under the bar
+    root.style.setProperty('--cmd-x', `${Math.round(m.left + m.width / 2)}px`);
+    root.style.setProperty('--cmd-y', `${Math.round(m.top + m.height / 2)}px`);
   }
 
   function openCmd() {
