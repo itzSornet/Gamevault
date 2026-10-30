@@ -2717,8 +2717,9 @@
     const dock = $('#search-dock');
     if (!root || !dock) return;
     const d = dock.getBoundingClientRect();
-    root.style.setProperty('--cmd-x', `${Math.round(d.left + d.width / 2)}px`);
+    root.style.setProperty('--cmd-x', `${Math.round(d.left)}px`);
     root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 10)}px`);
+    root.style.setProperty('--cmd-w', `${Math.round(d.width)}px`);
   }
 
   function openCmd() {
@@ -2733,7 +2734,6 @@
 
     root.hidden = false;
     root.classList.remove('is-bar', 'is-full', 'is-closing');
-    document.querySelector('.bottombar')?.classList.add('is-hidden');
     setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
     renderCmd(input.value || '');
 
@@ -2741,15 +2741,7 @@
     const d = $('#search-dock').getBoundingClientRect();
     void root.offsetWidth;
     const t = root.getBoundingClientRect();
-
-    // where the bubble sits while it is small
-    const bubble = 46;
-    const startX = d.left + d.width / 2 - (t.left + t.width / 2);
-    const startY = d.top + d.height / 2 - (t.top + bubble / 2);
-    const dockSX = d.width / t.width;
-    const dockSY = d.height / t.height;
-    const cSX = bubble / t.width;
-    const cSY = bubble / t.height;
+    const beam = root.querySelector('.cmd-beam');
 
     if (reducedMotion()) {
       root.classList.add('is-bar', 'is-full');
@@ -2758,24 +2750,29 @@
       return;
     }
 
-    bg.style.transformOrigin = 'top center';
+    bg.style.transformOrigin = 'top left';
+    const dx = d.left - t.left;
+    const dy = d.top - t.top;
+    const sx = d.width / t.width;
+    const sy = d.height / t.height;
 
     if (cmd.anim) cmd.anim.cancel();
     cmd.anim = bg.animate([
-      { offset: 0, transform: `translate(${startX}px, ${startY}px) scale(${dockSX}, ${dockSY})`, borderRadius: '999px', easing: 'cubic-bezier(.5,0,.75,0)' },
-      { offset: 0.16, transform: `translate(${startX}px, ${startY}px) scale(${cSX}, ${cSY}) rotate(-6deg)`, borderRadius: '50%', easing: 'cubic-bezier(.4,0,.2,1)' },
-      { offset: 0.5, transform: `translate(0px, -${bubble / 2}px) scale(${cSX}, ${cSY}) rotate(4deg)`, borderRadius: '50%', easing: 'cubic-bezier(.34,1.56,.64,1)' },
-      { offset: 0.7, transform: 'translate(0, 0) scale(1.07, 1.13) rotate(0deg)', borderRadius: '24px', easing: 'ease-out' },
-      { offset: 0.8, transform: 'translate(0, 0) scale(0.982, 0.965)', borderRadius: '13px', easing: 'cubic-bezier(.4,0,.2,1)' },
-      { offset: 0.89, transform: 'translate(0, 0) scale(1.014, 1.01)', borderRadius: '18px', easing: 'ease-out' },
-      { offset: 0.96, transform: 'translate(0, 0) scale(0.997, 0.996)', borderRadius: '15px', easing: 'ease-in-out' },
-      { offset: 1, transform: 'translate(0, 0) scale(1, 1)', borderRadius: '16px' },
-    ], { duration: 660, fill: 'forwards' });
+      { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: '999px' },
+      { transform: 'translate(0, 0) scale(1.012, 1.02)', borderRadius: '24px', offset: 0.78, easing: 'ease-out' },
+      { transform: 'translate(0, 0) scale(1, 1)', borderRadius: '22px' },
+    ], { duration: 460, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'forwards' });
 
-    setTimeout(() => { if (cmd.open) root.classList.add('is-bar'); }, 460);
-    setTimeout(() => { if (cmd.open) root.classList.add('is-full'); }, 530);
-    setTimeout(() => { if (cmd.open) input.focus(); }, 120);
+    if (beam) {
+      beam.animate([
+        { opacity: 0, transform: 'scaleY(0.25)' },
+        { opacity: 0.9, transform: 'scaleY(1)' },
+      ], { duration: 420, delay: 120, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
+    }
 
+    setTimeout(() => { if (cmd.open) root.classList.add('is-bar'); }, 220);
+    setTimeout(() => { if (cmd.open) root.classList.add('is-full'); }, 330);
+    setTimeout(() => { if (cmd.open) input.focus(); }, 200);
   }
 
   function closeCmd() {
@@ -2786,7 +2783,6 @@
     document.removeEventListener('pointerdown', onCmdOutside, true);
     root.classList.remove('is-bar', 'is-full');
     root.classList.add('is-closing');
-    document.querySelector('.bottombar')?.classList.remove('is-hidden');
 
     const finish = () => {
       root.hidden = true;
@@ -2806,25 +2802,21 @@
     const d = $('#search-dock').getBoundingClientRect();
     void root.offsetWidth;
     const t = root.getBoundingClientRect();
-    const bubble = 46;
-    const startX = d.left + d.width / 2 - (t.left + t.width / 2);
-    const startY = d.top + d.height / 2 - (t.top + bubble / 2);
-    const dockSX = d.width / t.width;
-    const dockSY = d.height / t.height;
-    const cSX = bubble / t.width;
-    const cSY = bubble / t.height;
-
     if (cmd.anim) cmd.anim.cancel();
     if (reducedMotion()) { finish(); return; }
 
-    cmd.anim = bg.animate([
-      { offset: 0, transform: 'translate(0, 0) scale(1, 1)', borderRadius: '16px', easing: 'cubic-bezier(.4,0,1,1)' },
-      { offset: 0.32, transform: `translate(0px, -${bubble / 2}px) scale(${cSX}, ${cSY})`, borderRadius: '50%', easing: 'cubic-bezier(.6,0,.8,.2)' },
-      { offset: 0.82, transform: `translate(${startX}px, ${startY}px) scale(${cSX}, ${cSY})`, borderRadius: '50%', easing: 'ease-out' },
-      { offset: 1, transform: `translate(${startX}px, ${startY}px) scale(${dockSX}, ${dockSY})`, borderRadius: '999px' },
-    ], { duration: 360, fill: 'forwards' });
+    bg.style.transformOrigin = 'top left';
+    const dx = d.left - t.left;
+    const dy = d.top - t.top;
+    const sx = d.width / t.width;
+    const sy = d.height / t.height;
 
+    cmd.anim = bg.animate([
+      { transform: 'translate(0, 0) scale(1, 1)', borderRadius: '22px' },
+      { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: '999px' },
+    ], { duration: 240, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
     cmd.anim.onfinish = finish;
+    setTimeout(() => { if (!cmd.open && !root.hidden) finish(); }, 320);
   }
 
   function onCmdOutside(e) {
