@@ -3667,3 +3667,31 @@ body { font-size: 13.5px; }
   border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
+
+/* ============================================================================
+   Spotlight v6 — same material as the sidebar, clipped to the radius
+   ========================================================================= */
+.cmd {
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+.cmd-bg {
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(24, 26, 38, 0.90), rgba(12, 14, 22, 0.94));
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+.cmd-bg::after { display: none; }
+.cmd-bar { background: transparent; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.cmd-list { background: transparent; }
+.cmd-foot { background: rgba(10, 12, 18, 0.35); border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.topbar #search-dock {
+  background: linear-gradient(180deg, rgba(24, 26, 38, 0.88), rgba(12, 14, 22, 0.92));
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
