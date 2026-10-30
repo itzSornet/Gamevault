@@ -72,3 +72,12 @@ Takeaway: refraction is a *feature surface*, not a global material — use it on
   - press compresses to `scale(.994)`;
   - a `?hover=1` flag lets screenshots capture the state deterministically.
 - All of it is pointer-driven, so it works with mouse and pen; touch skips the tilt.
+
+## Glass colour rules (search spotlight)
+
+1. **Three layers, never a flat rgba**: ambient colour bleed (accent blue / violet radial), a dark blue-graphite base (`linear-gradient(150deg, …)`), then a top rim highlight.
+2. **Saturation 160–180 %**, blur 26–30 px. Lower saturation reads grey/cheap; higher starts to glow.
+3. **Tint from the app palette, not random**: blue `#4C7DFF`, violet `#6B3BFF`, both at 10–16 % over the base.
+4. **One bright edge**: `inset 0 1px 0 rgba(255,255,255,.20)` plus a 1 px white-16 border. No full outlines.
+5. **Coloured outer glow** at ~10 % (`0 0 60px rgba(76,125,255,.10)`) so it sits in the ambient light.
+6. Text contrast comes from the dark base, not from more blur — rows stay opaque, shell stays glass.
