@@ -135,3 +135,7 @@ The old bubble keyframes (rotate/wobble) are removed.
 2. Replace bubble with surface expand + beam behind a `?spotlight=1` dev flag for one round of screenshots.
 3. Compare against current; keep whichever reads better.
 4. Remove flag, delete old keyframes, update `MOTION.md`.
+
+## Implementation update
+
+Implemented: palette is left-aligned to the search pill (`x = pill.left`, `y = pill.bottom + 10`), the glass surface expands from that rect with `transform-origin: 0 0`, a spotlight cone fades in behind it, and the search pill itself is now a glass capsule (blur 18px, saturate 160%, inner highlight). Rows and footer stay opaque.
