@@ -2712,6 +2712,15 @@
   const reducedMotion = () => !window.__gvForceAnim && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Shrink to a bubble, fly, pop, wobble, settle. Only the surface moves.
+  function positionCmd() {
+    const root = $('#cmd');
+    const dock = $('#search-dock');
+    if (!root || !dock) return;
+    const d = dock.getBoundingClientRect();
+    root.style.setProperty('--cmd-x', `${Math.round(d.left + d.width / 2)}px`);
+    root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 10)}px`);
+  }
+
   function openCmd() {
     if (cmd.open) { const { input } = cmdEls(); input.focus(); input.select(); return; }
     const modal = $('#modal');
@@ -2728,7 +2737,9 @@
     setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
     renderCmd(input.value || '');
 
+    positionCmd();
     const d = $('#search-dock').getBoundingClientRect();
+    void root.offsetWidth;
     const t = root.getBoundingClientRect();
 
     // where the bubble sits while it is small
@@ -2791,7 +2802,9 @@
       cmd.navigating = false;
     };
 
+    positionCmd();
     const d = $('#search-dock').getBoundingClientRect();
+    void root.offsetWidth;
     const t = root.getBoundingClientRect();
     const bubble = 46;
     const startX = d.left + d.width / 2 - (t.left + t.width / 2);
@@ -4066,7 +4079,7 @@
     sideEl.classList.toggle('is-collapsed', !open);
     try { localStorage.setItem('gv.sidebar', open ? 'open' : 'closed'); } catch (_) {}
     if (sideToggle) sideToggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
-    setTimeout(syncSidePill, 340);
+    setTimeout(() => { syncSidePill(); if (cmd.open) positionCmd(); }, 340);
   };
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
   if (sideToggle) sideToggle.onclick = () => {
@@ -4134,7 +4147,10 @@
   }, 1000);
 
   syncSidePill();
-  window.addEventListener('resize', syncSidePill);
+  window.addEventListener('resize', () => {
+    syncSidePill();
+    if (cmd.open) positionCmd();
+  });
   const libScroll = $('#library');
   if (libScroll) {
     libScroll.addEventListener('scroll', () => {

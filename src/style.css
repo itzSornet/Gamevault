@@ -1781,10 +1781,10 @@ input[type='checkbox'] { width: 15px; height: 15px; accent-color: var(--accent);
 
 .cmd {
   position: fixed;
-  top: clamp(96px, 17vh, 190px);
-  left: 50%;
+  top: var(--cmd-y, clamp(96px, 17vh, 190px));
+  left: var(--cmd-x, 50%);
   transform: translateX(-50%);
-  width: min(620px, calc(100vw - 96px));
+  width: min(640px, calc(100vw - 48px));
   z-index: 70;
   border-radius: 16px;
   background: none;
