@@ -2735,6 +2735,7 @@
 
     root.hidden = false;
     root.classList.remove('is-bar', 'is-full', 'is-closing');
+    $('#search-dock').classList.add('is-morphing');
     setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
     renderCmd(input.value || '');
 
@@ -2793,6 +2794,7 @@
       cmd.index = 0;
       const dock = $('#search-dock');
       dock.classList.remove('is-expanded');
+      dock.classList.remove('is-morphing');
       const dockInput = $('#dock-input');
       if (dockInput) dockInput.blur();
       if (!cmd.navigating && dockInput) dockInput.focus({ preventScroll: true });
