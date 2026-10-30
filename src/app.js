@@ -2717,9 +2717,8 @@
     const dock = $('#search-dock');
     if (!root || !dock) return;
     const d = dock.getBoundingClientRect();
-    root.style.setProperty('--cmd-x', `${Math.round(d.left)}px`);
-    root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 10)}px`);
-    root.style.setProperty('--cmd-w', `${Math.round(d.width)}px`);
+    root.style.setProperty('--cmd-x', `${Math.round(d.left + d.width / 2)}px`);
+    root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 8)}px`);
   }
 
   function openCmd() {
@@ -2750,8 +2749,8 @@
       return;
     }
 
-    bg.style.transformOrigin = 'top left';
-    const dx = d.left - t.left;
+    bg.style.transformOrigin = 'top center';
+    const dx = (d.left + d.width / 2) - (t.left + t.width / 2);
     const dy = d.top - t.top;
     const sx = d.width / t.width;
     const sy = d.height / t.height;
@@ -2805,8 +2804,8 @@
     if (cmd.anim) cmd.anim.cancel();
     if (reducedMotion()) { finish(); return; }
 
-    bg.style.transformOrigin = 'top left';
-    const dx = d.left - t.left;
+    bg.style.transformOrigin = 'top center';
+    const dx = (d.left + d.width / 2) - (t.left + t.width / 2);
     const dy = d.top - t.top;
     const sx = d.width / t.width;
     const sy = d.height / t.height;
