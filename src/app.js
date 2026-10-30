@@ -2718,7 +2718,7 @@
     if (!root || !dock) return;
     const d = dock.getBoundingClientRect();
     root.style.setProperty('--cmd-x', `${Math.round(d.left + d.width / 2)}px`);
-    root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 8)}px`);
+    root.style.setProperty('--cmd-y', `${Math.round(d.bottom + 28)}px`);
   }
 
   function openCmd() {
