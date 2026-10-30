@@ -3723,3 +3723,17 @@ body { font-size: 13.5px; }
 /* a bit more body: readable dark tint, still blurred and transparent */
 .cmd-bg { background: rgba(9, 11, 15, 0.58); }
 .topbar #search-dock { background: rgba(9, 11, 15, 0.48); }
+
+/* ============================================================================
+   Search morph — one object. The pill is replaced by the spotlight.
+   ========================================================================= */
+.topbar #search-dock {
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.topbar #search-dock.is-morphing {
+  opacity: 0;
+  transform: translateX(-50%) scale(0.985);
+  pointer-events: none;
+}
+.cmd-bg { background: rgba(9, 11, 15, 0.66); }
+.topbar #search-dock { background: rgba(9, 11, 15, 0.54); }
