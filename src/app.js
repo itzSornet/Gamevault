@@ -1064,7 +1064,7 @@
   }
 
   function paintRail(g) {
-    const rail = document.querySelector('[data-rail]');
+    const rail = document.querySelector('#game-view [data-rail]');
     if (rail) rail.innerHTML = railHtml(g);
   }
 
@@ -1096,7 +1096,8 @@
   }
   function heroUrlOf(g) {
     if (!g) return '';
-    return g._noHero ? '' : (g._hero || g.heroUrl || g._cover || g.coverUrl || '');
+    const hero = g._noHero ? '' : (g._hero || g.heroUrl || '');
+    return hero || g._cover || g.coverUrl || '';
   }
 
   function animateDetailIn(view, g) {
@@ -3564,6 +3565,13 @@
       openDetail(g.id);
     }
     if (name === 'palette') openCmd();
+    if (name === 'detailfilter') {
+      setTimeout(() => {
+        const g = state.games.find((x) => x.status === 'Finished') || state.games[0];
+        openDetail(g.id);
+        setTimeout(() => setFilter('Finished'), 700);
+      }, 300);
+    }
     if (name === 'docked') { $('#search-dock').classList.add('is-expanded'); }
     if (name === 'sortforce') { $('#sort-menu').hidden = false; }
     if (name === 'wishlist') {
@@ -4135,8 +4143,8 @@
     }, { passive: true });
   }
 
-  for (const b of $$('[data-rail]')) {
-    b.onclick = () => { const target = document.getElementById(b.dataset.rail); if (target) target.click(); };
+  for (const b of $$('[data-rail-action]')) {
+    b.onclick = () => { const target = document.getElementById(b.dataset.railAction); if (target) target.click(); };
   }
 
   boot();
