@@ -48,11 +48,7 @@
     <div id="main" class="main">
       <header id="topbar" class="topbar">
         <div class="filter-title" id="filter-title">Library</div>
-        <div id="search-dock" class="search-dock" tabindex="0" aria-controls="cmd" aria-expanded="false">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-          <input id="dock-input" type="text" placeholder="Search your vault" autocomplete="off" spellcheck="false" aria-label="Search your vault" />
-          <kbd>Ctrl K</kbd>
-        </div>
+        <div class="slot" id="slot"></div>
 
         <div class="top-actions">
           <div class="sort-wrap" id="sort-wrap">
@@ -114,6 +110,25 @@
 
       <section id="game-view" class="game-view" hidden></section>
 
+    </div>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+  <div class="spot snap" id="spot" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+    <div class="field">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+      <input id="q" dir="auto" autocomplete="off" spellcheck="false" placeholder="Search your vault" aria-label="Search games or run a command">
+      <div class="keys"><kbd class="k-rest">Ctrl K</kbd><kbd class="k-open">Esc</kbd></div>
+    </div>
+    <div class="panel">
+      <div class="list" id="list" role="listbox">
+        <div class="inner" id="inner"><i class="pill" id="pill"></i><div id="rows"></div></div>
+      </div>
+      <div class="foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span><kbd>↵</kbd> open</span>
+        <span class="r" id="count"></span>
+      </div>
     </div>
   </div>
 

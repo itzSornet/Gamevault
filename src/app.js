@@ -2959,8 +2959,9 @@
 
   function wireCmd() {
     const { root, input, dock } = cmdEls();
-
     const dockInput = $('#dock-input');
+    if (!dockInput) return; // spotlight replaced the old dock
+
     const expandDock = () => {
       dock.classList.add('is-expanded');
       dockInput.focus();
@@ -3344,11 +3345,6 @@
     document.addEventListener('keydown', (e) => {
       const meta = e.ctrlKey || e.metaKey;
       const modalOpen = !$('#modal').hidden;
-      if (meta && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'f') && !modalOpen) {
-        e.preventDefault();
-        openCmd();
-        return;
-      }
       if (e.key === 'Escape') {
         if (e.defaultPrevented) return;
         if (cmd.open) closeCmd();
@@ -3572,6 +3568,7 @@
       openDetail(g.id);
     }
     if (name === 'palette') openCmd();
+    if (name === 'spot') setTimeout(() => window.__spotOpen && window.__spotOpen(), 150);
     if (name === 'detailfilter') {
       setTimeout(() => {
         const g = state.games.find((x) => x.status === 'Finished') || state.games[0];
@@ -4156,6 +4153,190 @@
   for (const b of $$('[data-rail-action]')) {
     b.onclick = () => { const target = document.getElementById(b.dataset.railAction); if (target) target.click(); };
   }
+
+  // ---------------------------------------------------------------------------
+  // Spotlight morph — ported from spotlight-morph.html.
+  // ONE element (#spot) is both the header bar and the panel.
+  // ---------------------------------------------------------------------------
+  (() => {
+    const $s = (q) => document.querySelector(q);
+    const slot = $s('#slot'), spot = $s('#spot'), scrim = $s('#scrim'), input = $s('#q');
+    const list = $s('#list'), inner = $s('#inner'), rowsEl = $s('#rows'), pill = $s('#pill'), countEl = $s('#count');
+    if (!slot || !spot || !input) return;
+
+    const ICON = {
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      down: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
+      sliders: '<path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.2"/><circle cx="8" cy="17" r="2.2"/>',
+      star: '<path d="m12 4 2.4 5 5.4.7-4 3.8 1 5.4-4.8-2.7-4.8 2.7 1-5.4-4-3.8 5.4-.7z"/>'
+    };
+    const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const initials = (t) => String(t || '?').split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase();
+    const mark = (t, q) => {
+      if (!q) return esc(t);
+      const i = String(t).toLowerCase().indexOf(String(q).toLowerCase());
+      return i < 0 ? esc(t) : esc(String(t).slice(0, i)) + '<b>' + esc(String(t).slice(i, i + q.length)) + '</b>' + esc(String(t).slice(i + q.length));
+    };
+    const score = (t, q) => {
+      t = String(t).toLowerCase(); q = String(q).toLowerCase();
+      const i = t.indexOf(q); if (i >= 0) return 100 - i;
+      let j = 0; for (const c of t) if (c === q[j]) j++;
+      return j === q.length ? 40 : 0;
+    };
+
+    const actions = () => [
+      { icon: 'plus', title: 'Add game', run: () => $('#btn-add')?.click() },
+      { icon: 'down', title: 'Import games', run: () => $('#btn-import')?.click() },
+      { icon: 'star', title: 'Open wishlist', run: () => document.querySelector('[data-filter="Want"]')?.click() },
+      { icon: 'sliders', title: 'Open settings', run: () => $('#btn-settings')?.click() },
+    ];
+
+    const games = () => (state.games || []).map((g) => ({
+      kind: 'game',
+      id: g.id,
+      title: g.name || 'Untitled',
+      status: gvStatusOf(g),
+      h: Number.isFinite(Number(g.hours)) ? Number(g.hours) : null,
+      cover: g._cover || g.coverUrl || g.heroUrl || '',
+      last: g.lastPlayed || 0,
+    }));
+
+    function sections(q) {
+      const all = games();
+      const acts = actions();
+      if (!q) {
+        const recent = all.slice().sort((a, b) => b.last - a.last).slice(0, 6);
+        return [{ label: 'Recently played', items: recent }, { label: 'Actions', items: acts }];
+      }
+      const g = all.map((x) => [score(x.title, q), x]).filter((a) => a[0]).sort((a, b) => b[0] - a[0]).map((a) => a[1]);
+      const a = acts.filter((x) => score(x.title, q));
+      const out = [];
+      if (g.length) out.push({ label: 'Games', items: g });
+      if (a.length) out.push({ label: 'Actions', items: a });
+      return out;
+    }
+
+    function rowHTML(it, i, q) {
+      const thumb = it.icon
+        ? `<span class="thumb act"><svg viewBox="0 0 24 24">${ICON[it.icon]}</svg></span>`
+        : it.cover
+          ? `<span class="thumb"><img src="${esc(it.cover)}" alt="" loading="lazy"></span>`
+          : `<span class="thumb">${esc(initials(it.title))}</span>`;
+      let meta = '';
+      if (!it.icon) {
+        meta = it.status === 'Finished' ? '<span class="done">Finished</span>' : esc(it.status || '');
+        if (it.h != null && it.h > 0) meta += (meta ? ' · ' : '') + it.h + 'h';
+      }
+      return `<div class="item" role="option" data-i="${i}" style="--i:${i}"><div class="in">${thumb}<span class="name">${mark(it.title, q)}</span><span class="meta">${meta}</span></div></div>`;
+    }
+
+    function render() {
+      const q = input.value.trim();
+      const secs = sections(q);
+      flat = [];
+      let html = '';
+      secs.forEach((s) => {
+        html += `<div class="sec">${s.label}</div>`;
+        s.items.forEach((it) => { html += rowHTML(it, flat.push(it) - 1, q); });
+      });
+      if (!flat.length) html = `<div class="empty">No results for “${esc(q)}”</div>`;
+      rowsEl.innerHTML = html;
+      countEl.textContent = flat.length ? `${flat.length} result${flat.length > 1 ? 's' : ''}` : '';
+      sel = 0;
+      place(false);
+      fit();
+    }
+
+    function place(animate = true) {
+      const els = rowsEl.querySelectorAll('.item');
+      els.forEach((e, i) => e.classList.toggle('sel', i === sel));
+      const el = els[sel];
+      if (!el) { pill.style.opacity = 0; return; }
+      if (!animate) pill.style.transition = 'none';
+      pill.style.opacity = 1;
+      pill.style.transform = `translateY(${el.offsetTop}px)`;
+      if (!animate) { void pill.offsetHeight; pill.style.transition = ''; list.scrollTop = 0; return; }
+      const t = el.offsetTop, b = t + el.offsetHeight, v = list.clientHeight;
+      if (t < list.scrollTop + 30) list.scrollTop = Math.max(0, t - 30);
+      else if (b > list.scrollTop + v - 8) list.scrollTop = b - v + 8;
+    }
+
+    const FIELD = 58, FOOT = 42, BORDER = 2;
+    const listH = () => Math.min(inner.offsetHeight, Math.min(Math.floor(innerHeight * 0.55), 400));
+    function fit() { list.style.height = (isOpen ? listH() : 0) + 'px'; if (isOpen) geom(openRect()); }
+    function openRect() {
+      const w = Math.min(660, innerWidth - 32);
+      return { left: (innerWidth - w) / 2, top: Math.max(40, innerHeight * 0.13), width: w, height: BORDER + FIELD + listH() + FOOT };
+    }
+    const restRect = () => { const r = slot.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
+    const geom = (r) => { spot.style.left = r.left + 'px'; spot.style.top = r.top + 'px'; spot.style.width = r.width + 'px'; spot.style.height = r.height + 'px'; };
+
+    let isOpen = false, sel = 0, flat = [];
+
+    function openSpot() {
+      if (isOpen) return;
+      isOpen = true;
+      spot.classList.add('open'); scrim.classList.add('open'); spot.setAttribute('aria-expanded', 'true');
+      input.value = ''; render();
+      input.focus({ preventScroll: true });
+    }
+    function closeSpot() {
+      if (!isOpen) return;
+      isOpen = false;
+      spot.classList.remove('open'); scrim.classList.remove('open'); spot.setAttribute('aria-expanded', 'false');
+      input.blur(); input.value = '';
+      list.style.height = '0px'; geom(restRect());
+    }
+    function choose(i) {
+      const it = flat[i]; if (!it) return;
+      closeSpot();
+      if (typeof window.onSpotlightSelect === 'function') window.onSpotlightSelect(it);
+    }
+
+    window.onSpotlightSelect = (it) => {
+      if (!it) return;
+      if (it.kind === 'game') openDetail(it.id);
+      else if (typeof it.run === 'function') it.run();
+    };
+
+    input.addEventListener('focus', openSpot);
+    spot.addEventListener('pointerdown', () => { if (!isOpen) setTimeout(openSpot, 0); });
+    scrim.addEventListener('pointerdown', closeSpot);
+    input.addEventListener('input', render);
+    rowsEl.addEventListener('mousemove', (e) => {
+      const it = e.target.closest('.item'); if (!it) return;
+      const i = +it.dataset.i;
+      if (i !== sel) { sel = i; place(); }
+    });
+    rowsEl.addEventListener('click', (e) => { const it = e.target.closest('.item'); if (it) choose(+it.dataset.i); });
+
+    window.addEventListener('keydown', (e) => {
+      const meta = e.ctrlKey || e.metaKey;
+      if (meta && e.key.toLowerCase() === 'k') {
+        e.preventDefault(); e.stopImmediatePropagation();
+        isOpen ? closeSpot() : openSpot();
+        return;
+      }
+      if (!isOpen) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeSpot(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); if (flat.length) { sel = (sel + 1) % flat.length; place(); } }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); if (flat.length) { sel = (sel - 1 + flat.length) % flat.length; place(); } }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); choose(sel); }
+    }, true);
+
+    function resync() {
+      spot.classList.add('snap');
+      geom(isOpen ? openRect() : restRect());
+      requestAnimationFrame(() => requestAnimationFrame(() => spot.classList.remove('snap')));
+    }
+    addEventListener('resize', resync);
+    new ResizeObserver(() => { if (!isOpen) resync(); }).observe(slot);
+
+    window.__spotToggle = () => (isOpen ? closeSpot() : openSpot());
+    window.__spotOpen = openSpot;
+    geom(restRect());
+    requestAnimationFrame(() => requestAnimationFrame(() => spot.classList.remove('snap')));
+  })();
 
   boot();
 })();
