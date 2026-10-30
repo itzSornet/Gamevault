@@ -3870,3 +3870,16 @@ body { font-size: 13.5px; }
 .spot .field { flex-direction: row; justify-content: flex-start; align-items: center; }
 .spot #q { text-align: left; width: 100%; }
 .spot .keys { width: 52px; }
+
+/* slot centred on the library column, not the leftover flex space */
+.topbar { position: relative; }
+.topbar .slot {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(240px, 36vw, 520px);
+  margin: 0;
+}
+@media (max-width: 980px) {
+  .topbar .slot { position: relative; left: auto; transform: none; flex: 1 1 auto; width: auto; margin: 0 10px; }
+}
