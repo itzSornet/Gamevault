@@ -3740,7 +3740,9 @@ body { font-size: 13.5px; }
 
 /* true morph: the pill and the panel are the same view-transition element */
 #search-dock { view-transition-name: gv-search; }
-#cmd:not([hidden]) { view-transition-name: gv-search; }
+#cmd:not([hidden]) { view-transition-name: none; }
+.cmd-bar { view-transition-name: gv-search; }
+.cmd-bg { view-transition-name: gv-search-body; }
 ::view-transition-group(gv-search) {
   animation-duration: 420ms;
   animation-timing-function: cubic-bezier(.32, .72, 0, 1);
@@ -3757,3 +3759,31 @@ body { font-size: 13.5px; }
 
 /* only the search element participates in the morph — the shell must stay live */
 .sidebar, .main { view-transition-name: none; }
+
+/* directional morph clocks */
+::view-transition-group(gv-search) { animation-duration: var(--morph-dur, 420ms) !important; }
+::view-transition-old(gv-search) { animation-duration: var(--morph-old, 90ms) !important; }
+::view-transition-new(gv-search) { animation-duration: var(--morph-new, 420ms) !important; }
+
+/* row cascade after the surface lands */
+@keyframes cmd-row-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.cmd.is-full .cmd-item { animation: cmd-row-in 220ms cubic-bezier(.32,.72,0,1) both; }
+.cmd.is-full .cmd-item:nth-child(2) { animation-delay: 18ms; }
+.cmd.is-full .cmd-item:nth-child(3) { animation-delay: 36ms; }
+.cmd.is-full .cmd-item:nth-child(4) { animation-delay: 54ms; }
+.cmd.is-full .cmd-item:nth-child(5) { animation-delay: 72ms; }
+.cmd.is-full .cmd-item:nth-child(6) { animation-delay: 90ms; }
+.cmd.is-full .cmd-item:nth-child(7) { animation-delay: 108ms; }
+.cmd.is-full .cmd-item:nth-child(8) { animation-delay: 126ms; }
+
+/* body grows from the bar's bottom edge while the bar itself morphs */
+@keyframes gv-body-in {
+  from { clip-path: inset(0 0 100% 0); opacity: 0.55; }
+  to   { clip-path: inset(0 0 0 0); opacity: 1; }
+}
+@keyframes gv-body-out {
+  from { clip-path: inset(0 0 0 0); opacity: 1; }
+  to   { clip-path: inset(0 0 100% 0); opacity: 0.55; }
+}
+::view-transition-new(gv-search-body) { animation: gv-body-in 420ms cubic-bezier(.32,.72,0,1) both; }
+::view-transition-old(gv-search-body) { animation: gv-body-out 260ms cubic-bezier(.4,0,.2,1) both; }

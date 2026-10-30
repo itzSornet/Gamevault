@@ -62,3 +62,11 @@ Only transform/opacity/border-radius; will-change while morphing; no layout anim
 - [ ] Centered at 900/1200/1600/1900.
 - [ ] Focus/typing contract holds.
 - [ ] Reduced motion + lite tiers.
+
+## Critic rounds (3)
+
+| round | score /9.9 | verdict | applied |
+|---|---|---|---|
+| timing | 6.2 | nothing responds until the animation ends | focus at t=0, content at 140 ms, open 420 / close 260, old snapshot 160, Esc <380 ms skips VT |
+| morph truth | 6.4 | 13:1 box = vertical smear, then UI reveal | pill↔bar share `gv-search`; shell grows via `gv-search-body` clip-path from bar bottom |
+| correctness | 7.6 | focus ownership + ARIA | `aria-expanded`/`aria-controls`, dialog role, seq token gates the focus restore |

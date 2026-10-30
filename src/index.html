@@ -48,7 +48,7 @@
     <div id="main" class="main">
       <header id="topbar" class="topbar">
         <div class="filter-title" id="filter-title">Library</div>
-        <div id="search-dock" class="search-dock" tabindex="0">
+        <div id="search-dock" class="search-dock" tabindex="0" aria-controls="cmd" aria-expanded="false">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
           <input id="dock-input" type="text" placeholder="Search your vault" autocomplete="off" spellcheck="false" aria-label="Search your vault" />
           <kbd>Ctrl K</kbd>
@@ -120,7 +120,7 @@
   <div id="modal" class="modal-wrap" hidden></div>
   <div id="toasts" class="toasts"></div>
 
-  <div id="cmd" class="cmd" hidden>
+  <div id="cmd" class="cmd" role="dialog" aria-modal="true" aria-label="Search and commands" hidden>
     <div class="cmd-beam" aria-hidden="true"></div>
     <div class="cmd-bg" id="cmd-bg"></div>
     <div class="cmd-bar">
