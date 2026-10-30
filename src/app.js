@@ -2733,37 +2733,51 @@
     const { root, input } = cmdEls();
     cmd.open = true;
     cmd.navigating = false;
+    cmd.openedAt = performance.now();
+    const seq = (cmd.seq = (cmd.seq || 0) + 1);
 
     const reveal = () => {
       if (!cmd.open) return;
       root.classList.add('is-bar', 'is-full');
-      setTimeout(() => { if (cmd.open) input.focus(); }, 60);
     };
 
     const run = () => {
       root.hidden = false;
       root.classList.remove('is-bar', 'is-full', 'is-closing');
-      // one surface: the pill stops being rendered the instant the panel exists
-      $('#search-dock').classList.add('is-morphing');
+      const dockEl = $('#search-dock');
+      dockEl.classList.add('is-morphing');
+      dockEl.setAttribute('aria-expanded', 'true');
       renderCmd(input.value || '');
       positionCmd();
+      // layout exists even at opacity 0: focus now, so typing is never dropped
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(input.value.length, input.value.length);
       setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
     };
 
-    if (document.startViewTransition && !reducedMotion() && !IS_SHOT) {
-      const vt = document.startViewTransition(run);
-      // content lands after the box has become the panel
-      vt.finished.then(reveal).catch(reveal);
+    const canVT = document.startViewTransition && !reducedMotion() && !IS_SHOT;
+    if (canVT) {
+      const rs = document.documentElement.style;
+      rs.setProperty('--morph-dur', '420ms');
+      rs.setProperty('--morph-old', '160ms');
+      rs.setProperty('--morph-new', '420ms');
+      cmd.vt = document.startViewTransition(run);
+      setTimeout(reveal, 140);
+      cmd.vt.finished.finally(() => { if (cmd.open) reveal(); });
     } else {
       run();
       reveal();
+      if (reducedMotion()) root.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140 });
     }
   }
 
   function closeCmd() {
     if (!cmd.open) return;
     const { root, input } = cmdEls();
+    const dockInput = $('#dock-input');
+    const early = performance.now() - (cmd.openedAt || 0) < 380;
     cmd.open = false;
+    const seq = (cmd.seq = (cmd.seq || 0) + 1);
     document.removeEventListener('pointerdown', onCmdOutside, true);
 
     const finish = () => {
@@ -2775,23 +2789,35 @@
       const dock = $('#search-dock');
       dock.classList.remove('is-expanded');
       dock.classList.remove('is-morphing');
-      const dockInput = $('#dock-input');
       if (dockInput) dockInput.blur();
-      if (!cmd.navigating && dockInput) dockInput.focus({ preventScroll: true });
       cmd.navigating = false;
     };
 
     const run = () => {
       root.hidden = true;
       root.classList.remove('is-bar', 'is-full');
-      $('#search-dock').classList.remove('is-morphing');
+      const dockEl = $('#search-dock');
+      dockEl.classList.remove('is-morphing');
+      dockEl.setAttribute('aria-expanded', 'false');
       finish();
     };
 
-    if (document.startViewTransition && !reducedMotion() && !IS_SHOT) {
-      document.startViewTransition(run);
+    const focusPill = () => {
+      if (!cmd.navigating && dockInput) dockInput.focus({ preventScroll: true });
+    };
+
+    const canVT = document.startViewTransition && !reducedMotion() && !IS_SHOT && !early;
+    if (canVT) {
+      const rs = document.documentElement.style;
+      rs.setProperty('--morph-dur', '260ms');
+      rs.setProperty('--morph-old', '260ms');
+      rs.setProperty('--morph-new', '120ms');
+      cmd.vt = document.startViewTransition(run);
+      cmd.vt.finished.finally(() => { if (cmd.seq === seq && !cmd.open) focusPill(); });
     } else {
+      if (cmd.vt && cmd.vt.skipTransition) { try { cmd.vt.skipTransition(); } catch (_) {} }
       run();
+      focusPill();
     }
   }
 
