@@ -2709,6 +2709,8 @@
     };
   }
 
+  const IS_SHOT = new URLSearchParams(location.search).has('shot');
+
   const reducedMotion = () => !window.__gvForceAnim && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Shrink to a bubble, fly, pop, wobble, settle. Only the surface moves.
@@ -2729,62 +2731,40 @@
     if (modal && !modal.hidden) return;
 
     const { root, input } = cmdEls();
-    const bg = $('#cmd-bg');
     cmd.open = true;
     cmd.navigating = false;
 
-    root.hidden = false;
-    root.classList.remove('is-bar', 'is-full', 'is-closing');
-    $('#search-dock').classList.add('is-morphing');
-    setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
-    renderCmd(input.value || '');
-
-    positionCmd();
-    const d = $('#search-dock').getBoundingClientRect();
-    void root.offsetWidth;
-    const t = root.getBoundingClientRect();
-    const beam = root.querySelector('.cmd-beam');
-
-    if (reducedMotion()) {
+    const reveal = () => {
+      if (!cmd.open) return;
       root.classList.add('is-bar', 'is-full');
-      input.focus();
-      input.select();
-      return;
+      setTimeout(() => { if (cmd.open) input.focus(); }, 60);
+    };
+
+    const run = () => {
+      root.hidden = false;
+      root.classList.remove('is-bar', 'is-full', 'is-closing');
+      // one surface: the pill stops being rendered the instant the panel exists
+      $('#search-dock').classList.add('is-morphing');
+      renderCmd(input.value || '');
+      positionCmd();
+      setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
+    };
+
+    if (document.startViewTransition && !reducedMotion() && !IS_SHOT) {
+      const vt = document.startViewTransition(run);
+      // content lands after the box has become the panel
+      vt.finished.then(reveal).catch(reveal);
+    } else {
+      run();
+      reveal();
     }
-
-    bg.style.transformOrigin = 'top center';
-    const dx = (d.left + d.width / 2) - (t.left + t.width / 2);
-    const dy = d.top - t.top;
-    const sx = d.width / t.width;
-    const sy = d.height / t.height;
-
-    if (cmd.anim) cmd.anim.cancel();
-    cmd.anim = bg.animate([
-      { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: '999px' },
-      { transform: 'translate(0, 0) scale(1.012, 1.02)', borderRadius: '24px', offset: 0.78, easing: 'ease-out' },
-      { transform: 'translate(0, 0) scale(1, 1)', borderRadius: '22px' },
-    ], { duration: 460, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'forwards' });
-
-    if (beam) {
-      beam.animate([
-        { opacity: 0, transform: 'scaleY(0.25)' },
-        { opacity: 0.9, transform: 'scaleY(1)' },
-      ], { duration: 420, delay: 120, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
-    }
-
-    setTimeout(() => { if (cmd.open) root.classList.add('is-bar'); }, 220);
-    setTimeout(() => { if (cmd.open) root.classList.add('is-full'); }, 330);
-    setTimeout(() => { if (cmd.open) input.focus(); }, 200);
   }
 
   function closeCmd() {
     if (!cmd.open) return;
     const { root, input } = cmdEls();
-    const bg = $('#cmd-bg');
     cmd.open = false;
     document.removeEventListener('pointerdown', onCmdOutside, true);
-    root.classList.remove('is-bar', 'is-full');
-    root.classList.add('is-closing');
 
     const finish = () => {
       root.hidden = true;
@@ -2801,25 +2781,18 @@
       cmd.navigating = false;
     };
 
-    positionCmd();
-    const d = $('#search-dock').getBoundingClientRect();
-    void root.offsetWidth;
-    const t = root.getBoundingClientRect();
-    if (cmd.anim) cmd.anim.cancel();
-    if (reducedMotion()) { finish(); return; }
+    const run = () => {
+      root.hidden = true;
+      root.classList.remove('is-bar', 'is-full');
+      $('#search-dock').classList.remove('is-morphing');
+      finish();
+    };
 
-    bg.style.transformOrigin = 'top center';
-    const dx = (d.left + d.width / 2) - (t.left + t.width / 2);
-    const dy = d.top - t.top;
-    const sx = d.width / t.width;
-    const sy = d.height / t.height;
-
-    cmd.anim = bg.animate([
-      { transform: 'translate(0, 0) scale(1, 1)', borderRadius: '22px' },
-      { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, borderRadius: '999px' },
-    ], { duration: 240, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
-    cmd.anim.onfinish = finish;
-    setTimeout(() => { if (!cmd.open && !root.hidden) finish(); }, 320);
+    if (document.startViewTransition && !reducedMotion() && !IS_SHOT) {
+      document.startViewTransition(run);
+    } else {
+      run();
+    }
   }
 
   function onCmdOutside(e) {

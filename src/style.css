@@ -3737,3 +3737,23 @@ body { font-size: 13.5px; }
 }
 .cmd-bg { background: rgba(9, 11, 15, 0.66); }
 .topbar #search-dock { background: rgba(9, 11, 15, 0.54); }
+
+/* true morph: the pill and the panel are the same view-transition element */
+#search-dock { view-transition-name: gv-search; }
+#cmd:not([hidden]) { view-transition-name: gv-search; }
+::view-transition-group(gv-search) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(.32, .72, 0, 1);
+}
+::view-transition-old(gv-search), ::view-transition-new(gv-search) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(.32, .72, 0, 1);
+}
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+.topbar #search-dock.is-morphing { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(gv-search) { animation: none; }
+}
+
+/* only the search element participates in the morph — the shell must stay live */
+.sidebar, .main { view-transition-name: none; }
