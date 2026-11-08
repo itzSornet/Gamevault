@@ -3102,16 +3102,7 @@ body { font-size: 13.5px; }
 .side-toggle:hover { background: var(--surface-2); color: var(--text); }
 .side-ico { width: 16px; height: 16px; flex: 0 0 16px; opacity: 0.8; }
 .side-item { gap: 9px; }
-.sidebar.is-collapsed { width: 62px; flex-basis: 62px; padding: 16px 6px 12px; }
-.sidebar.is-collapsed .side-name,
-.sidebar.is-collapsed .side-sec,
-.sidebar.is-collapsed .side-stats,
-.sidebar.is-collapsed .side-item span,
-.sidebar.is-collapsed .side-item b { display: none; }
-.sidebar.is-collapsed .side-brand { flex-direction: column; gap: 8px; padding: 0 0 14px; }
-.sidebar.is-collapsed .side-toggle { margin: 0; transform: rotate(180deg); }
-.sidebar.is-collapsed .side-item { justify-content: center; padding: 0; }
-.sidebar.is-collapsed .side-foot { border-top-color: transparent; }
+/* collapsed-state geometry lives in "Sidebar fold" at the end of this file */
 
 /* iOS 26 scroll-edge effects: content dissolves under the bar and above the footer */
 .main::before,
@@ -3185,13 +3176,6 @@ body { font-size: 13.5px; }
 .side-item.is-active { color: var(--text); }
 .side-item.is-active .side-ico { color: var(--accent); opacity: 1; }
 .side-item.is-active b { color: #fff; background: var(--accent); }
-.side-item.is-active::before {
-  content: '';
-  position: absolute;
-  left: -10px; top: 7px; bottom: 7px;
-  width: 2px; border-radius: 2px;
-  background: var(--accent);
-}
 
 /* collapse must not animate width: it reflows the whole window every frame */
 .sidebar { transition: none; }
@@ -3212,15 +3196,6 @@ body { font-size: 13.5px; }
 .gvx-specs div { grid-template-columns: 92px minmax(0, 1fr); }
 .gvx-specs dd { overflow-wrap: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* very narrow windows: sidebar becomes an icon rail regardless of stored state */
-@media (max-width: 900px) {
-  .sidebar { width: 62px; flex-basis: 62px; padding: 16px 6px 12px; }
-  .sidebar .side-name, .sidebar .side-sec, .sidebar .side-stats,
-  .sidebar .side-item span, .sidebar .side-item b { display: none; }
-  .sidebar .side-brand { flex-direction: column; gap: 8px; padding: 0 0 14px; }
-  .sidebar .side-toggle { margin: 0; transform: rotate(180deg); }
-  .sidebar .side-item { justify-content: center; padding: 0; }
-}
 
 /* main must actually claim the remaining width (flex default was auto) */
 .main { flex: 1 1 0%; width: auto; }
@@ -3244,10 +3219,6 @@ body { font-size: 13.5px; }
   ::view-transition-group(gv-side), ::view-transition-group(gv-main) { animation: none; }
 }
 
-/* collapse without layout animation or ghosting: fade out → one reflow → fade in */
-.sidebar.is-collapsing > * { opacity: 0; transition: opacity 90ms linear; }
-.sidebar > * { transition: opacity 140ms var(--ease-out-quart); }
-@media (prefers-reduced-motion: reduce) { .sidebar > *, .sidebar.is-collapsing > * { transition: none; } }
 
 /* short windows: sidebar scrolls, stats step aside */
 @media (max-height: 620px) {
@@ -3264,9 +3235,6 @@ body { font-size: 13.5px; }
   .gvx-card { flex: 1 1 100%; }
 }
 
-/* collapse reads as a motion, not a snap: content slides out, fades back */
-.sidebar.is-collapsing > * { opacity: 0; transform: translateX(-6px); transition: opacity 90ms linear, transform 90ms var(--ease-out-quart); }
-.sidebar > * { transition: opacity 140ms var(--ease-out-quart), transform 140ms var(--ease-out-quart); }
 
 /* ============================================================================
    Glass restored (GPU compositing is enabled on this machine)
@@ -3921,3 +3889,189 @@ body { font-size: 13.5px; }
 :root[data-palette='paper'] .modal-card { color-scheme: light; }
 .modal-card input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; flex: 0 0 auto; margin: 0; }
 .modal-card .combo .input { width: 100%; box-sizing: border-box; }
+
+/* ============================================================================
+   Sidebar fold — height-locked collapse
+   Every row keeps its y in both states, so collapsing is a pure width change:
+   icons never move, section labels fade into hairlines of the same height,
+   labels slide out top-to-bottom. Width only animates while .side-anim is on
+   (set by JS around a toggle); the main column's content is frozen at its
+   final width during that window so the grid reflows once, not per frame.
+   ========================================================================= */
+.sidebar { width: 216px; flex-basis: 216px; padding-left: 11px; padding-right: 11px; }
+.sidebar.is-collapsed { width: 62px; flex-basis: 62px; padding-left: 11px; padding-right: 11px; }
+.sidebar.side-anim {
+  transition: width 340ms var(--ease-spring), flex-basis 340ms var(--ease-spring);
+}
+
+/* brand row: icon pinned left (centered in the rail), toggle pinned right */
+.sidebar { --brand-pb: 12px; }
+@media (max-height: 620px) { .sidebar { --brand-pb: 8px; } }
+.side-brand { position: relative; padding-left: 4px; padding-right: 7px; padding-bottom: var(--brand-pb); gap: 10px; }
+.side-name { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; padding-right: 30px; }
+.side-toggle { position: absolute; right: 7px; top: 3px; margin: 0; }
+.side-brand .brand { transition: opacity 160ms var(--ease-out-quart); }
+
+/* section labels hold their height; the text gives way to a hairline */
+.side-sec { position: relative; white-space: nowrap; overflow: hidden; transition: color 160ms var(--ease-out-quart); }
+.side-sec::after {
+  content: '';
+  position: absolute; left: 9px; right: 9px; top: 50%; height: 1px;
+  background: var(--line-2, rgba(255, 255, 255, 0.10));
+  opacity: 0;
+  transition: opacity 200ms var(--ease-out-quart);
+}
+
+/* items: icon at a fixed x (23px from the edge = rail center), label left-aligned */
+.side-item { justify-content: flex-start; padding: 0 8px 0 11px; overflow: hidden; white-space: nowrap; }
+.side-item > span { flex: 1 1 auto; min-width: 0; text-align: left; overflow: hidden; text-overflow: clip; }
+.side-item > b { flex: 0 0 auto; }
+.side-stats { white-space: nowrap; overflow: hidden; transition: opacity 200ms var(--ease-out-quart), visibility 0s linear 0s; }
+.side-foot { transition: border-color 200ms var(--ease-out-quart); }
+
+/* labels return after the panel has started to open, top row first */
+.side-name,
+.side-item > span,
+.side-item > b {
+  transition:
+    opacity 220ms var(--ease-out-quart) calc(70ms + var(--i, 0) * 18ms),
+    transform 300ms var(--ease-spring) calc(70ms + var(--i, 0) * 18ms);
+}
+
+/* collapsed state (toggle) and auto-rail (narrow window) share one look */
+.sidebar.is-collapsed .side-name,
+.sidebar.is-collapsed .side-item > span,
+.sidebar.is-collapsed .side-item > b {
+  opacity: 0;
+  transform: translateX(-8px);
+  transition-duration: 110ms, 160ms;
+  transition-delay: calc(var(--i, 0) * 12ms);
+}
+/* hairlines sit midway between the groups they separate; the first one
+   also counts the brand row's bottom padding as part of its gap */
+.side-brand + .side-sec::after { top: calc(50% - var(--brand-pb) / 2); }
+.sidebar.is-collapsed .side-sec { color: transparent; }
+.sidebar.is-collapsed .side-sec::after { opacity: 1; }
+.sidebar.is-collapsed .side-stats { opacity: 0; visibility: hidden; transition: opacity 110ms linear, visibility 0s linear 110ms; }
+.sidebar.is-collapsed .side-foot { border-top-color: transparent; }
+
+/* collapsed: the toggle sits on the brand mark and shows on hover/focus */
+.sidebar.is-collapsed .side-toggle { transform: rotate(180deg); opacity: 0; }
+.sidebar.is-collapsed .side-toggle:hover,
+.sidebar.is-collapsed .side-toggle:focus-visible { opacity: 1; background: var(--surface-2); }
+.sidebar.is-collapsed .side-brand:has(.side-toggle:hover) .brand,
+.sidebar.is-collapsed .side-brand:has(.side-toggle:focus-visible) .brand { opacity: 0; }
+.side-toggle { transition: background 0.15s, color 0.15s, opacity 160ms var(--ease-out-quart), transform 300ms var(--ease-poppy); }
+
+@media (max-width: 900px) {
+  .sidebar, .sidebar.is-collapsed { width: 62px; flex-basis: 62px; }
+  .sidebar .side-name,
+  .sidebar .side-item > span,
+  .sidebar .side-item > b { opacity: 0; transform: translateX(-8px); }
+  .sidebar .side-sec { color: transparent; }
+  .sidebar .side-sec::after { opacity: 1; }
+  .sidebar .side-stats { opacity: 0; visibility: hidden; }
+  .sidebar .side-foot { border-top-color: transparent; }
+}
+
+/* the pill carries the accent bar, so the bar travels and stretches with it */
+.side-pill { left: 11px; right: 11px; overflow: visible; }
+.side-pill::before {
+  content: '';
+  position: absolute;
+  left: -9px; top: 7px; bottom: 7px;
+  width: 2px; border-radius: 2px;
+  background: var(--accent);
+}
+
+/* main column content is pinned to a px width while the sidebar animates */
+.main.is-side-moving > :not(.topbar) { flex-shrink: 0; }
+/* the pinned content's scrollbar would hang mid-column for a moment — hide it */
+.main.is-side-moving ::-webkit-scrollbar-thumb { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar.side-anim { transition: none; }
+  .side-name, .side-item > span, .side-item > b,
+  .sidebar.is-collapsed .side-name, .sidebar.is-collapsed .side-item > span, .sidebar.is-collapsed .side-item > b { transition: none; }
+}
+
+/* ============================================================================
+   Background waves — the aurora lives behind the glass, not inside it.
+   Three soft bands in the active palette's colors drift slowly across the
+   window; the sidebar's backdrop blur is what turns them into light.
+   The bands only move by transform and step ~15x a second (invisible at this
+   speed), so the blur behind the glass is re-sampled 4x less often than a
+   60 fps drift would force.
+   ========================================================================= */
+:root, :root[data-palette='midnight'] {
+  --wave-1: 76, 125, 255;   /* accent */
+  --wave-2: 124, 92, 255;
+  --wave-3: 32, 190, 160;
+  --wave-alpha: 0.8;
+}
+:root[data-palette='paper'] {
+  --wave-1: 228, 87, 46;    /* accent */
+  --wave-2: 240, 168, 72;
+  --wave-3: 96, 146, 214;
+  --wave-alpha: 0.55;
+}
+
+#ambient i,
+#ambient i:nth-child(1),
+#ambient i:nth-child(2),
+#ambient i:nth-child(3) {
+  display: block;
+  inset: auto;
+  left: -35vw;
+  width: 170vw;
+  height: 62vh;
+  border-radius: 0;
+  opacity: var(--wave-alpha);
+  will-change: transform;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+#ambient i:nth-child(1) {
+  top: -16vh;
+  background: radial-gradient(58% 50% at 28% 50%, rgba(var(--wave-1), 0.95), rgba(var(--wave-1), 0.38) 38%, rgba(var(--wave-1), 0.08) 66%, rgba(var(--wave-1), 0) 100%);
+  animation-name: gv-wave-1;
+  animation-duration: 26s;
+  animation-timing-function: steps(195);
+}
+#ambient i:nth-child(2) {
+  top: 22vh;
+  background: radial-gradient(58% 50% at 28% 50%, rgba(var(--wave-2), 0.85), rgba(var(--wave-2), 0.32) 38%, rgba(var(--wave-2), 0.07) 66%, rgba(var(--wave-2), 0) 100%);
+  animation-name: gv-wave-2;
+  animation-duration: 34s;
+  animation-timing-function: steps(255);
+}
+#ambient i:nth-child(3) {
+  top: 58vh;
+  background: radial-gradient(58% 50% at 28% 50%, rgba(var(--wave-3), 0.85), rgba(var(--wave-3), 0.32) 38%, rgba(var(--wave-3), 0.07) 66%, rgba(var(--wave-3), 0) 100%);
+  animation-name: gv-wave-3;
+  animation-duration: 30s;
+  animation-timing-function: steps(225);
+}
+/* each band swells and tilts like a slow wave; two keyframe legs, ~15 steps/s */
+@keyframes gv-wave-1 {
+  0%   { transform: translate3d(-8vw, 0, 0) rotate(-7deg) scaleY(0.85); }
+  50%  { transform: translate3d(4vw, 9vh, 0) rotate(3deg) scaleY(1.15); }
+  100% { transform: translate3d(10vw, 2vh, 0) rotate(-4deg) scaleY(0.95); }
+}
+@keyframes gv-wave-2 {
+  0%   { transform: translate3d(9vw, 4vh, 0) rotate(6deg) scaleY(1.1); }
+  50%  { transform: translate3d(-5vw, -8vh, 0) rotate(-4deg) scaleY(0.85); }
+  100% { transform: translate3d(-10vw, 6vh, 0) rotate(5deg) scaleY(1.05); }
+}
+@keyframes gv-wave-3 {
+  0%   { transform: translate3d(-6vw, 6vh, 0) rotate(-5deg) scaleY(0.9); }
+  50%  { transform: translate3d(8vw, -6vh, 0) rotate(6deg) scaleY(1.2); }
+  100% { transform: translate3d(2vw, 4vh, 0) rotate(-3deg) scaleY(0.95); }
+}
+
+/* the waves are only worth moving when glass is there to soften them */
+[data-tier='lite'] #ambient i,
+[data-software='1'] #ambient i { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  #ambient i { animation: none; }
+}
