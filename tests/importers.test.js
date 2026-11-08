@@ -71,7 +71,8 @@ test('ingestFile names a shell launcher after its file', () => {
   fs.rmSync(file, { force: true });
 });
 
-test('ingestFile makes an ELF executable', () => {
+// POSIX exec bits don't exist on Windows, so this is Linux/macOS-only.
+test('ingestFile makes an ELF executable', { skip: process.platform === 'win32' && 'POSIX exec bit' }, () => {
   const buf = Buffer.alloc(64);
   buf[0] = 0x7f; buf[1] = 0x45; buf[2] = 0x4c; buf[3] = 0x46;
   const file = tmpFile('binary', buf);

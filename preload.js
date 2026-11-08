@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   close:    () => ipcRenderer.send('win-close'),
   isMaximized: () => ipcRenderer.invoke('win:is-maximized'),
   getPlatformInfo: () => ipcRenderer.invoke('app:platform-info'),
-  thumb: (src, width) => ipcRenderer.invoke('img:thumb', { src, width }),
+  thumb: (src, width, kind) => ipcRenderer.invoke('img:thumb', { src, width, kind }),
   onMaximizedChange: (cb) => ipcRenderer.on('win:maximized', (_, isMax) => cb(isMax)),
 
   // Games data

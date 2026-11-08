@@ -33,7 +33,8 @@ function dbCandidates(homeDir) {
   const dirs = [];
 
   if (IS_WIN) {
-    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    // An explicit homeDir wins over %APPDATA% so callers/tests can point at another profile.
+    const appData = (!homeDir && process.env.APPDATA) || path.join(home, 'AppData', 'Roaming');
     dirs.push(path.join(appData, 'hydralauncher', 'hydra-db'));
     dirs.push(path.join(home, 'AppData', 'Roaming', 'hydralauncher', 'hydra-db'));
   } else {

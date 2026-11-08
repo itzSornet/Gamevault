@@ -12,6 +12,15 @@
 
 (() => {
   const api = window.api;
+  // Frameless window: custom caption buttons + a drag handle (see .win-controls in index.html).
+  document.getElementById('win-min').onclick = () => api.minimize();
+  document.getElementById('win-max').onclick = () => api.maximize();
+  document.getElementById('win-close').onclick = () => api.close();
+  api.onMaximizedChange((isMax) => {
+    const b = document.getElementById('win-max');
+    b.title = isMax ? 'Restore' : 'Maximize';
+    b.classList.toggle('is-max', isMax);
+  });
 
   const state = {
     games: [],
@@ -1558,10 +1567,10 @@
         <div class="field">
           <label for="f-exe">Executable</label>
           <div class="field-row">
-            <input class="input" id="f-exe" value="${esc(g.exePath || '')}" placeholder="/games/.../game.exe" />
+            <input class="input" id="f-exe" value="${esc(g.exePath || '')}" placeholder="${/Windows/i.test(navigator.userAgent) ? 'C:\\Games\\Game\\game.exe' : '/games/.../game.exe'}" />
             <button class="btn btn-ghost" data-browse style="flex:0 0 auto">Browse</button>
           </div>
-          <div class="hint">Linux: any ELF binary or Windows .exe (runs through Wine/Proton).</div>
+          <div class="hint">${/Windows/i.test(navigator.userAgent) ? 'Any .exe, .bat or shortcut that starts the game.' : 'Linux: any ELF binary or Windows .exe (runs through Wine/Proton).'}</div>
         </div>
         <div class="field">
           <label for="f-steam">Steam AppID</label>
@@ -2533,7 +2542,7 @@
         <div class="section-label">About</div>
         <div class="hint">
           GameVault <b>${esc(version)}</b> — experimental build<br />
-          ${esc(info.protonPath ? `Proton: ${info.protonPath}` : 'Proton: not found')}
+          ${info.platform === 'linux' ? esc(info.protonPath ? `Proton: ${info.protonPath}` : 'Proton: not found') : ''}
         </div>
       </div>
       <div class="modal-foot">

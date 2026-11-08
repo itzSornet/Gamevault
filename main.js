@@ -386,6 +386,8 @@ function createWindow() {
     height: Number(process.env.GV_H || 760),
     minWidth: 900,
     minHeight: 580,
+    // Frameless: the renderer draws its own minimize / maximize / close buttons
+    // (see .win-controls in index.html) and the top bar is the drag handle.
     frame: false,
     show: !shotPath,
     backgroundColor: '#07080c',
