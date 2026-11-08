@@ -1500,49 +1500,69 @@
     head.addEventListener('pointercancel', end);
   }
 
-  const pillSpring = { y: 0, v: 0, target: 0, raf: null, init: false };
+  // Two springs, one per edge. The edge leading the move is stiff, the
+  // trailing edge is loose, so the pill stretches toward the new item and
+  // then gathers itself in — the accent bar (pill::before) rides along.
+  const pillSpring = {
+    top: { x: 0, v: 0, to: 0 },
+    bot: { x: 0, v: 0, to: 0 },
+    raf: null, init: false, down: true,
+  };
+  const PILL_LEAD = { k: 620, c: 34 };   // ζ ≈ 0.68: lands with a hint of overshoot
+  const PILL_TRAIL = { k: 260, c: 26 };  // ζ ≈ 0.81: follows, never bounces
 
-  // Distance- and velocity-driven spring: longer jumps bounce harder.
+  function drawSidePill(pill) {
+    const t = pillSpring.top.x;
+    const h = Math.max(10, pillSpring.bot.x - t);
+    pill.style.transform = `translateY(${t.toFixed(2)}px)`;
+    pill.style.height = `${h.toFixed(2)}px`;
+  }
+
   function syncSidePill() {
     const pill = document.querySelector('.side-pill');
     const side = document.querySelector('.sidebar');
     const active = side && side.querySelector('.side-item.is-active');
     if (!pill || !side || !active) return;
-    const s = side.getBoundingClientRect();
-    const r = active.getBoundingClientRect();
-    const target = r.top - s.top;
-    pill.style.height = `${Math.round(r.height)}px`;
+    // Pill is absolutely positioned inside the sidebar's border box.
+    const top = active.offsetTop;
+    const bot = top + active.offsetHeight;
+    const S = pillSpring;
 
-    if (!pillSpring.init || prefersReducedMotion()) {
-      pillSpring.init = true;
-      pillSpring.y = target; pillSpring.v = 0; pillSpring.target = target;
-      pill.style.transform = `translateY(${target}px)`;
+    if (!S.init || prefersReducedMotion() || !pill.offsetParent) {
+      if (S.raf) { cancelAnimationFrame(S.raf); S.raf = null; }
+      S.init = true;
+      S.top.x = S.top.to = top; S.bot.x = S.bot.to = bot;
+      S.top.v = S.bot.v = 0;
+      drawSidePill(pill);
       return;
     }
+    if (top === S.top.to && bot === S.bot.to) return;
 
-    pillSpring.target = target;
-    if (pillSpring.raf) return;
+    S.down = top > S.top.x;
+    S.top.to = top; S.bot.to = bot;
+    if (S.raf) return;
 
     let last = performance.now();
     const step = (now) => {
       const dt = Math.min(32, now - last) / 1000;
       last = now;
-      const k = 360;   // stiffness
-      const c = 19;    // damping (ζ ≈ 0.50 → one clean bounce)
-      const a = -k * (pillSpring.y - pillSpring.target) - c * pillSpring.v;
-      pillSpring.v += a * dt;
-      pillSpring.y += pillSpring.v * dt;
-      pill.style.transform = `translateY(${pillSpring.y.toFixed(2)}px)`;
-      if (Math.abs(pillSpring.v) < 0.4 && Math.abs(pillSpring.y - pillSpring.target) < 0.35) {
-        pill.style.transform = `translateY(${pillSpring.target}px)`;
-        pillSpring.y = pillSpring.target;
-        pillSpring.v = 0;
-        pillSpring.raf = null;
-      } else {
-        pillSpring.raf = requestAnimationFrame(step);
+      const lead = S.down ? S.bot : S.top;
+      const trail = S.down ? S.top : S.bot;
+      for (const [edge, p] of [[lead, PILL_LEAD], [trail, PILL_TRAIL]]) {
+        const a = -p.k * (edge.x - edge.to) - p.c * edge.v;
+        edge.v += a * dt;
+        edge.x += edge.v * dt;
       }
+      const settled = [S.top, S.bot].every((e) => Math.abs(e.v) < 0.4 && Math.abs(e.x - e.to) < 0.35);
+      if (settled) {
+        S.top.x = S.top.to; S.bot.x = S.bot.to; S.top.v = S.bot.v = 0;
+        S.raf = null;
+      } else {
+        S.raf = requestAnimationFrame(step);
+      }
+      drawSidePill(pill);
     };
-    pillSpring.raf = requestAnimationFrame(step);
+    S.raf = requestAnimationFrame(step);
   }
 
   function openGameModal(game) {
@@ -4074,17 +4094,66 @@
 
   const sideEl = document.querySelector('.sidebar');
   const sideToggle = $('#side-toggle');
-  const applySidebar = (open) => {
-    if (!sideEl) return;
-    sideEl.classList.toggle('is-collapsed', !open);
-    try { localStorage.setItem('gv.sidebar', open ? 'open' : 'closed'); } catch (_) {}
-    if (sideToggle) sideToggle.setAttribute('aria-label', open ? 'Collapse sidebar' : 'Expand sidebar');
-    setTimeout(() => { syncSidePill(); if (cmd.open) positionCmd(); }, 340);
+  const mainEl = $('#main');
+  // Stagger index for the label slide (top row first).
+  if (sideEl) sideEl.querySelectorAll('.side-item').forEach((el, i) => el.style.setProperty('--i', i));
+
+  // Height-locked fold: rows never move vertically, so the only thing that
+  // animates is the sidebar's width. The main column's content is pinned to
+  // its *final* px width for the duration, so the grid reflows once up front
+  // and each frame only re-lays the sidebar, the main box and the top bar.
+  let sideAnimEnd = null;
+  const finishSideAnim = () => {
+    if (!sideAnimEnd) return;
+    const done = sideAnimEnd; sideAnimEnd = null; done();
   };
-  applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })());
+  const applySidebar = (open, animate) => {
+    if (!sideEl) return;
+    finishSideAnim();
+    const label = open ? 'Collapse sidebar' : 'Expand sidebar';
+    try { localStorage.setItem('gv.sidebar', open ? 'open' : 'closed'); } catch (_) {}
+    if (sideToggle) {
+      sideToggle.setAttribute('aria-label', label);
+      sideToggle.setAttribute('aria-expanded', String(open));
+      sideToggle.title = label;
+    }
+
+    const fromW = sideEl.getBoundingClientRect().width;
+    sideEl.classList.toggle('is-collapsed', !open);
+    const toW = sideEl.getBoundingClientRect().width; // one layout at the final state
+    if (!animate || !mainEl || prefersReducedMotion() || Math.abs(toW - fromW) < 1) {
+      syncSidePill();
+      if (cmd.open) positionCmd();
+      return;
+    }
+
+    const pinned = [...mainEl.children].filter((el) => !el.hidden && !el.classList.contains('topbar'));
+    pinned.forEach((el) => { el.style.width = `${el.getBoundingClientRect().width}px`; });
+    mainEl.classList.add('is-side-moving');
+    // Start from the old width, then release to the class width with the transition on.
+    sideEl.style.width = sideEl.style.flexBasis = `${fromW}px`;
+    void sideEl.offsetWidth;
+    sideEl.classList.add('side-anim');
+    sideEl.style.width = sideEl.style.flexBasis = '';
+
+    let timer = 0;
+    const onEnd = (e) => { if (e.target === sideEl && e.propertyName === 'width') finishSideAnim(); };
+    sideAnimEnd = () => {
+      clearTimeout(timer);
+      sideEl.removeEventListener('transitionend', onEnd);
+      sideEl.classList.remove('side-anim');
+      mainEl.classList.remove('is-side-moving');
+      pinned.forEach((el) => { el.style.width = ''; });
+      syncSidePill();
+      if (cmd.open) positionCmd();
+    };
+    sideEl.addEventListener('transitionend', onEnd);
+    timer = setTimeout(finishSideAnim, 500); // safety if transitionend never fires
+  };
+  applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })(), false);
   if (sideToggle) sideToggle.onclick = () => {
     window.__gvPerfMark && window.__gvPerfMark('sidebar');
-    applySidebar(sideEl.classList.contains('is-collapsed'));
+    applySidebar(sideEl.classList.contains('is-collapsed'), true);
   };
 
   const gridEl = $('#grid');
