@@ -88,7 +88,9 @@ test('parseExec resolves command/args and unwraps env assignments and options', 
   assert.deepEqual(linux.parseExec(''), { command: '', args: [] });
 });
 
-test('scanDesktopFiles keeps games, known launchers and depth-3 entries only', (t) => {
+const LINUX_ONLY = process.platform === 'win32' && '.desktop/Linux launcher scanning is not used on Windows';
+
+test('scanDesktopFiles keeps games, known launchers and depth-3 entries only', { skip: LINUX_ONLY }, (t) => {
   const root = fixture(t);
   const apps = path.join(root, 'apps');
   const exe = write(path.join(root, 'games', 'My Game', 'my-game'), '#!/bin/sh\n');
@@ -230,7 +232,7 @@ test('scanWinePrefixes keeps game exes and skips system/redist/uninstall trees',
 // Minecraft
 // ---------------------------------------------------------------------------
 
-test('scanMinecraftLaunchers finds instance files and Horizon versions', (t) => {
+test('scanMinecraftLaunchers finds instance files and Horizon versions', { skip: LINUX_ONLY }, (t) => {
   const home = fixture(t);
   write(
     path.join(home, '.local', 'share', 'PrismLauncher', 'instances', 'My Instance', 'instance.cfg'),
