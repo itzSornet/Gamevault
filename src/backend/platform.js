@@ -10,6 +10,7 @@ const path = require('path');
 const childProcess = require('child_process');
 
 const PLATFORM = process.platform;
+const os = require('os');
 
 // Files that are never the game itself.
 const SKIP_NAME_HINTS = [
@@ -157,7 +158,7 @@ function listLaunchableNamesSync(dirPath, opts) {
   const maxDepth = o.maxDepth == null ? 4 : o.maxDepth;
   const budget = { left: o.limit || 3000 };
   const found = new Set();
-  if (!dirPath) return [];
+  if (!dirPath || isSharedSystemDir(dirPath)) return [];
 
   const scan = (dir, depth) => {
     if (depth > maxDepth || budget.left <= 0) return;
@@ -185,7 +186,7 @@ async function listLaunchableNamesAsync(dirPath, opts) {
   const maxDepth = o.maxDepth == null ? 2 : o.maxDepth;
   const budget = { left: o.limit || 2000 };
   const found = new Set();
-  if (!dirPath) return [];
+  if (!dirPath || isSharedSystemDir(dirPath)) return [];
 
   let level = [dirPath];
   for (let depth = 0; depth <= maxDepth && level.length && budget.left > 0; depth++) {
@@ -315,6 +316,7 @@ function pidsForNames(snapshot, names) {
   const pids = [];
   if (!snapshot || !snapshot.byName || !names) return pids;
   for (const n of new Set(names.map((x) => String(x).toLowerCase()))) {
+    if (isProtectedProcessName(n)) continue;
     const hit = snapshot.byName.get(n);
     if (hit) pids.push(...hit);
   }
@@ -340,6 +342,59 @@ const GENERIC_PROCESS_NAMES = new Set([
 
 function isGenericProcessName(name) {
   return GENERIC_PROCESS_NAMES.has(String(name || '').toLowerCase());
+}
+
+// Processes GameVault must never treat as a game, and never kill. Killing
+// lsass/csrss/wininit makes Windows restart on the spot.
+const PROTECTED_PROCESS_NAMES = new Set([
+  // Windows core
+  'system', 'registry', 'smss.exe', 'csrss.exe', 'wininit.exe', 'winlogon.exe',
+  'services.exe', 'lsass.exe', 'lsaiso.exe', 'svchost.exe', 'fontdrvhost.exe',
+  'dwm.exe', 'memory compression', 'secure system', 'lsm.exe', 'spoolsv.exe',
+  'audiodg.exe', 'wudfhost.exe', 'dllhost.exe', 'sihost.exe', 'taskhostw.exe',
+  'ctfmon.exe', 'runtimebroker.exe', 'searchhost.exe', 'searchindexer.exe',
+  'startmenuexperiencehost.exe', 'shellexperiencehost.exe', 'textinputhost.exe',
+  'explorer.exe', 'conhost.exe', 'msmpeng.exe', 'nissrv.exe',
+  'securityhealthservice.exe', 'securityhealthsystray.exe', 'smartscreen.exe',
+  'wmiprvse.exe', 'taskmgr.exe', 'userinit.exe', 'logonui.exe', 'consent.exe',
+  // ourselves
+  'electron.exe', 'gamevault.exe', 'gamevault experimental.exe',
+  // Linux core
+  'systemd', 'init', 'xorg', 'xwayland', 'gnome-shell', 'kwin_wayland', 'kwin_x11',
+  'plasmashell', 'pipewire', 'pulseaudio', 'dbus-daemon', 'sddm', 'gdm', 'electron', 'gamevault',
+]);
+
+function isProtectedProcessName(name) {
+  return PROTECTED_PROCESS_NAMES.has(String(name || '').trim().toLowerCase());
+}
+
+// Folders that hold far more than one game. Walking them for "the game's
+// executables" would sweep up system and unrelated programs (System32 contains
+// lsass.exe), so tracking/killing never enumerates them.
+function isSharedSystemDir(dir) {
+  if (!dir) return true;
+  let d;
+  try { d = path.resolve(String(dir)); } catch (_) { return true; }
+  const norm = (x) => path.resolve(x).replace(/[\\/]+$/, '').toLowerCase();
+  const nd = norm(d);
+  if (PLATFORM === 'win32') {
+    if (/^[a-z]:$/.test(nd) || /^\\\\[^\\]+\\[^\\]+$/.test(nd)) return true; // drive or share root
+    const winDir = norm(process.env.SystemRoot || process.env.windir || 'C:\\Windows');
+    if (nd === winDir || nd.startsWith(winDir + '\\')) return true;
+    const home = process.env.USERPROFILE || os.homedir();
+    const exact = [
+      process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432,
+      process.env.ProgramData, process.env.APPDATA, process.env.LOCALAPPDATA,
+      home, home && path.join(home, 'Desktop'), home && path.join(home, 'Downloads'),
+      home && path.join(home, 'Documents'), home && path.join(home, 'AppData'),
+    ].filter(Boolean).map(norm);
+    return exact.includes(nd);
+  }
+  if (nd === '/') return true;
+  if (['/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc', '/boot', '/proc', '/sys', '/dev', '/run'].some((s) => nd === s || nd.startsWith(s + '/'))) return true;
+  const home = os.homedir();
+  return [home, '/opt', '/usr/local', '/home', home && path.join(home, 'Desktop'), home && path.join(home, 'Downloads')]
+    .filter(Boolean).map(norm).includes(nd);
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +691,8 @@ module.exports = {
   pidsForNames,
   listWindowsProcesses,
   isGenericProcessName,
+  isProtectedProcessName,
+  isSharedSystemDir,
   isLaunchUri,
   isShellAppsFolder,
   isFilesystemPath,

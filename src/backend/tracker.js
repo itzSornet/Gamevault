@@ -150,6 +150,7 @@ function trackableExeName(p) {
   if (!p || !platform.isFilesystemPath(p)) return '';
   const base = path.basename(p).toLowerCase();
   if (/\.(lnk|url)$/.test(base)) return '';
+  if (platform.isProtectedProcessName(base)) return '';
   return base;
 }
 
@@ -226,7 +227,7 @@ function enrichTrackedGame(sid) {
       if (!cur || !names || !names.length) return;
       // Runtimes bundled next to the game (python.exe, javaw.exe...) would
       // match unrelated processes; only the primary exe may be one of those.
-      const extra = names.filter((n) => !platform.isGenericProcessName(n));
+      const extra = names.filter((n) => !platform.isGenericProcessName(n) && !platform.isProtectedProcessName(n));
       cur.allExeNames = [...new Set([...cur.allExeNames, ...extra])];
     })
     .catch(() => {});
@@ -287,9 +288,10 @@ function windowsKillPids(snapshot, t, names) {
   if (t && t.pid && snapshot && snapshot.byPid) {
     const image = snapshot.byPid.get(t.pid);
     const expected = t.childImage || t.exeName;
-    if (image && expected && image === expected) pids.add(t.pid);
+    if (image && expected && image === expected && !platform.isProtectedProcessName(image)) pids.add(t.pid);
   }
   pids.delete(process.pid);
+  pids.delete(process.ppid);
   return [...pids];
 }
 
@@ -303,7 +305,7 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
     let dir = installDir || '';
     if (!dir && steamAppId) dir = resolveSteamInstallDir(steamAppId);
     if (!dir && exePath && platform.isFilesystemPath(exePath)) dir = path.dirname(exePath);
-    if (dir) exesToKill = collectGameExes(dir).filter((n) => !platform.isGenericProcessName(n));
+    if (dir) exesToKill = collectGameExes(dir).filter((n) => !platform.isGenericProcessName(n) && !platform.isProtectedProcessName(n));
     const bn = trackableExeName(exePath);
     if (bn && !exesToKill.includes(bn)) exesToKill.push(bn);
   }
@@ -311,7 +313,9 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
   const lbn = trackableExeName(launcherPath);
   if (lbn && !exesToKill.includes(lbn)) exesToKill.push(lbn);
 
-  const cleanExes = [...new Set(exesToKill.map(e => path.basename(e).trim().toLowerCase()).filter(Boolean))];
+  // Never kill system processes, whatever ended up in the list.
+  const cleanExes = [...new Set(exesToKill.map(e => path.basename(e).trim().toLowerCase()).filter(Boolean))]
+    .filter((n) => !platform.isProtectedProcessName(n));
 
   if (process.platform === 'win32') {
     const snapshot = await platform.listWindowsProcesses();
