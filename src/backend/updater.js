@@ -10,6 +10,9 @@ const { loadConfig, saveConfig } = require('./data.js');
 const CAN_SELF_UPDATE = process.platform !== 'linux' || !!process.env.APPIMAGE;
 const MANUAL_UPDATE = app.isPackaged && !CAN_SELF_UPDATE;
 const MANUAL_UPDATE_COMMAND = 'sudo pacman -Syu';
+// Experimental (2.0) builds are dev-only: they never look at the public 1.x
+// releases and have no update feed (package.json build.publish is null).
+const UPDATES_DISABLED = /experimental/i.test(app.getVersion());
 
 let mainWindow = null;
 let updateAvailableInfo = null;
@@ -105,6 +108,12 @@ function initUpdater(win, onBeforeQuit) {
 
   ipcMain.handle('updater:check', async (_, isManual = false) => {
     try {
+      if (UPDATES_DISABLED) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('updater:not-available', { version: app.getVersion(), latestVersion: app.getVersion() });
+        }
+        return null;
+      }
       if (!app.isPackaged || !CAN_SELF_UPDATE) {
         // Fallback check against GitHub API during local development,
         // and for installs that cannot self-update (package manager).
@@ -120,6 +129,7 @@ function initUpdater(win, onBeforeQuit) {
   });
 
   ipcMain.handle('updater:download', async () => {
+    if (UPDATES_DISABLED) return null;
     if (MANUAL_UPDATE) {
       // Package-manager install: there is nothing this process may overwrite.
       return { manual: true, command: MANUAL_UPDATE_COMMAND };
@@ -142,7 +152,7 @@ function initUpdater(win, onBeforeQuit) {
   });
 
   ipcMain.handle('updater:install', () => {
-    if (MANUAL_UPDATE) return false;
+    if (UPDATES_DISABLED || MANUAL_UPDATE) return false;
     if (typeof onBeforeQuit === 'function') onBeforeQuit();
     if (app.isPackaged) {
       autoUpdater.quitAndInstall(false, true);
