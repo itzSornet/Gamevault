@@ -489,8 +489,15 @@ function registerOverlayShortcut(hotkey) {
   }
 }
 
+// Dev/QA only: GV_BACKGROUND=1 renders the real window off-screen, without
+// focus or a taskbar button, so it can be driven and screenshotted over the
+// DevTools protocol while someone keeps using the PC. (A hidden window does
+// not paint, so screenshots of it hang.)
+const backgroundMode = process.env.GV_BACKGROUND === '1';
+
 function createWindow() {
   win = new BrowserWindow({
+    ...(backgroundMode ? { x: -12000, y: -12000, focusable: false, skipTaskbar: true } : {}),
     width: Number(process.env.GV_W || 1200),
     height: Number(process.env.GV_H || 760),
     minWidth: 900,
@@ -498,7 +505,7 @@ function createWindow() {
     // Frameless: the renderer draws its own minimize / maximize / close buttons
     // (see .win-controls in index.html) and the top bar is the drag handle.
     frame: false,
-    show: !shotPath,
+    show: !shotPath && !backgroundMode,
     backgroundColor: '#07080c',
     icon: path.join(__dirname, 'src', platform.iconFile()),
     webPreferences: {
@@ -509,6 +516,12 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
+  if (backgroundMode) {
+    // showInactive never steals focus; re-pin the position in case Windows
+    // pulled the window back onto a monitor.
+    win.showInactive();
+    win.setPosition(-12000, -12000);
+  }
   setTrackerWindow(win);
   initUpdater(win, () => { forceQuit = true; });
 
