@@ -60,8 +60,7 @@ glassmorphism, no blur, no gradient chrome — the poster art carries the colour
 **Shelf layout (default).** The library is a console-style stage: the selected
 game's artwork fills the frame with its title, playtime and Play button, and a
 horizontal filmstrip of covers runs underneath. Arrow keys move the selection,
-clicks load the stage instantly, and `View` switches between shelf, poster grid
-and compact grid.
+clicks load the stage instantly, and `View` switches between the shelf and the card grid.
 
 **Game detail — "Marquee".** Full-bleed stage with the logo, a live Play/Stop
 with a session timer, a single **Mark as finished** action (Playing is set automatically when a session starts),
@@ -79,7 +78,7 @@ slides over content and no scrim steals context.
 **Command palette.** `Ctrl/Cmd + K` jumps to any game or runs an action.
 `/` focuses search, `Esc` closes whatever is open.
 
-**Three layouts.** Poster / compact / list, persisted between sessions.
+**Two layouts.** Shelf and cards, persisted between sessions.
 
 **Performance is a feature, not a cleanup task.** See below.
 
@@ -136,7 +135,7 @@ a 5-minute response cache and request de-duplication.
 
 ## Fuzzy search
 
-Both the library and Ctrl+K use `src/lib/fuzzy.js`: diacritic folding, token
+Both the library and Ctrl+F use `src/lib/fuzzy.js`: diacritic folding, token
 matching, abbreviations (`rdr2` → Red Dead Redemption 2), and one- or two-
 character typos. Results are ranked, not just filtered.
 
