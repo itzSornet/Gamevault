@@ -1,7 +1,7 @@
 {
   "name": "gamevault-experimental",
   "version": "2.0.0-experimental.1",
-  "description": "GameVault 2.0 \u2014 experimental UI overhaul",
+  "description": "GameVault 2.0 — experimental UI overhaul",
   "main": "main.js",
   "author": "itzSornet",
   "license": "MIT",
@@ -27,13 +27,7 @@
   "build": {
     "appId": "com.gamevault.experimental",
     "productName": "GameVault Experimental",
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "itzSornet",
-        "repo": "Gamevault"
-      }
-    ],
+    "publish": null,
     "directories": {
       "output": "dist"
     },
