@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('api', {
   saveGames:   (g) => ipcRenderer.invoke('games:save', g),
   backupGames: () => ipcRenderer.invoke('games:backup'),
   getDataPath: () => ipcRenderer.invoke('games:data-path'),
+  // Main changed a game on its own: { id, lastPlayed?, installDir?, exePath? }
+  onGamesUpdated: (cb) => ipcRenderer.on('games:updated', (_, patch) => cb(patch)),
+  // Quitting: save now; main waits for 'app:flushed' (max 2.5 s).
+  onAppFlush: (cb) => ipcRenderer.on('app:flush', async () => { try { await cb(); } catch (_) {} finally { ipcRenderer.send('app:flushed'); } }),
 
   // Config (RAWG key etc)
   loadConfig: () => ipcRenderer.invoke('config:load'),

@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
-const { execSync } = require('child_process');
 const { loadConfig } = require('./data.js');
 const { httpsGet } = require('./api.js');
 const platform = require('./platform.js');
@@ -28,9 +27,20 @@ const LINUX_SKIP_TOP = new Set([
 ]);
 
 // Steam library detection
-function getSteamLibraries() {
-  const libs = [];
-  const home = process.env.HOME || '';
+//
+// Memoized: a library of 200 owned-only Steam games used to run one sync
+// `reg query` plus a libraryfolders.vdf read per game at boot (7.6 s freeze).
+// The Steam root candidates are computed once per process, the library list
+// is re-read at most every LIBRARY_TTL_MS, and appid -> installDir answers
+// (negative ones included) are kept for the session.
+const LIBRARY_TTL_MS = 60 * 1000;
+let steamRootCache = null;
+let steamLibraryCache = { at: 0, libs: null };
+const steamInstallDirCache = new Map();
+
+function steamRootCandidates() {
+  if (steamRootCache) return steamRootCache;
+  const home = process.env.HOME || require('os').homedir() || '';
   const roots = process.platform === 'win32' ? [
     'C:\\Program Files (x86)\\Steam',
     'C:\\Program Files\\Steam',
@@ -41,22 +51,34 @@ function getSteamLibraries() {
     path.join(home, '.steam', 'steam'),
     path.join(home, '.steam', 'root'),
     path.join(home, '.var', 'app', 'com.valvesoftware.Steam', 'data', 'Steam'),
+    path.join(home, '.var', 'app', 'com.valvesoftware.Steam', '.steam', 'steam'),
   ];
 
   if (process.platform === 'win32') {
-    try {
-      const reg = execSync('reg query "HKCU\\Software\\Valve\\Steam" /v SteamPath', { encoding: 'utf-8', timeout: 2000 });
-      const match = reg.match(/SteamPath\s+REG_SZ\s+(.+)/i);
-      if (match && match[1]) {
-        const regPath = path.normalize(match[1].trim());
-        if (fs.existsSync(regPath) && !roots.includes(regPath)) {
-          roots.unshift(regPath);
-        }
-      }
-    } catch (e) {}
+    const reg = platform.runHelperSync('reg.exe', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'SteamPath'], { timeout: 2000 });
+    const match = reg.match(/SteamPath\s+REG_SZ\s+(.+)/i);
+    if (match && match[1]) {
+      const regPath = path.normalize(match[1].trim());
+      const known = roots.some((r) => r.toLowerCase() === regPath.toLowerCase());
+      if (!known && fs.existsSync(regPath)) roots.unshift(regPath);
+    }
   }
+  steamRootCache = roots;
+  return roots;
+}
 
-  for (const root of roots) {
+// Existing Steam roots (folders that hold steamapps/).
+function getSteamRoots() {
+  return steamRootCandidates().filter((root) => {
+    try { return fs.existsSync(path.join(root, 'steamapps')); } catch (_) { return false; }
+  });
+}
+
+function getSteamLibraries() {
+  const now = Date.now();
+  if (steamLibraryCache.libs && now - steamLibraryCache.at < LIBRARY_TTL_MS) return steamLibraryCache.libs.slice();
+  const libs = [];
+  for (const root of steamRootCandidates()) {
     if (!fs.existsSync(root)) continue;
     const vdf = path.join(root, 'steamapps', 'libraryfolders.vdf');
     if (!fs.existsSync(vdf)) continue;
@@ -67,26 +89,54 @@ function getSteamLibraries() {
       if (!libs.includes(root)) libs.push(root);
     } catch (e) {}
   }
-  return [...new Set(libs)];
+  // Symlinked roots (~/.steam/steam -> ~/.local/share/Steam) list the same
+  // libraries; resolve before de-duplicating so each is visited once.
+  const seen = new Set();
+  const out = [];
+  for (const lib of libs) {
+    let key = lib;
+    try { key = fs.realpathSync(lib); } catch (_) {}
+    if (process.platform === 'win32') key = key.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(lib);
+  }
+  steamLibraryCache = { at: now, libs: out };
+  return out.slice();
+}
+
+// Forget cached Steam answers (after an import scan, Steam may have changed).
+function clearSteamCache() {
+  steamLibraryCache = { at: 0, libs: null };
+  steamInstallDirCache.clear();
 }
 
 // Resolve install directory for a specific Steam App ID
 function resolveSteamInstallDir(steamAppId) {
   if (!steamAppId) return '';
+  const key = String(steamAppId);
+  if (steamInstallDirCache.has(key)) {
+    const cached = steamInstallDirCache.get(key);
+    if (!cached) return '';
+    if (fs.existsSync(cached)) return cached;
+    steamInstallDirCache.delete(key); // uninstalled or moved: look again
+  }
   const libs = getSteamLibraries();
+  let found = '';
   for (const lib of libs) {
-    const manifestPath = path.join(lib, 'steamapps', `appmanifest_${steamAppId}.acf`);
+    const manifestPath = path.join(lib, 'steamapps', `appmanifest_${key}.acf`);
     if (!fs.existsSync(manifestPath)) continue;
     try {
       const content = fs.readFileSync(manifestPath, 'utf-8');
       const installDirMatch = content.match(/"installdir"\s+"([^"]+)"/i);
       if (installDirMatch) {
         const fullDir = path.join(lib, 'steamapps', 'common', installDirMatch[1]);
-        if (fs.existsSync(fullDir)) return fullDir;
+        if (fs.existsSync(fullDir)) { found = fullDir; break; }
       }
     } catch (e) {}
   }
-  return '';
+  steamInstallDirCache.set(key, found);
+  return found;
 }
 
 function findMainExe(dirPath) {
@@ -170,6 +220,8 @@ function findMainExe(dirPath) {
 
 function detectSteamGames() {
   const games = [];
+  // A user-initiated scan: re-read Steam instead of trusting session caches.
+  clearSteamCache();
   const libs = getSteamLibraries();
   for (const lib of libs) {
     const appsDir = path.join(lib, 'steamapps');
@@ -187,6 +239,7 @@ function detectSteamGames() {
             // Skip Steamworks Common Redistributables
             if (appId === '228980') continue;
             const installDir = installDirMatch ? path.join(appsDir, 'common', installDirMatch[1]) : '';
+            if (installDir && !steamInstallDirCache.get(appId) && fs.existsSync(installDir)) steamInstallDirCache.set(appId, installDir);
             const exePath = installDir ? findMainExe(installDir) : '';
             games.push({
               name: nameMatch[1],
@@ -327,13 +380,14 @@ function scanFolder(folderPath) {
 function getAllDrives() {
   const drives = [];
   if (process.platform === 'win32') {
-    try {
-      const stdout = execSync('powershell -NoProfile -Command "[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq \'Fixed\' -or $_.DriveType -eq \'Removable\' } | Select-Object -ExpandProperty Name"', { encoding: 'utf-8', timeout: 3000 });
-      const lines = stdout.split(/\r?\n/).map(l => l.trim().replace(/\\$/, '')).filter(l => /^[A-Z]:$/i.test(l));
-      if (lines.length > 0) {
-        return [...new Set(lines.map(l => l.toUpperCase()))];
-      }
-    } catch (e) {}
+    const stdout = platform.runHelperSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      "[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -or $_.DriveType -eq 'Removable' } | Select-Object -ExpandProperty Name",
+    ], { timeout: 5000 });
+    const lines = stdout.split(/\r?\n/).map(l => l.trim().replace(/\\$/, '')).filter(l => /^[A-Z]:$/i.test(l));
+    if (lines.length > 0) {
+      return [...new Set(lines.map(l => l.toUpperCase()))];
+    }
 
     // Fallback: probe drive letters with fs.existsSync
     const letters = 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
@@ -675,4 +729,4 @@ async function autoFetchCovers(games, sgdbKey) {
 
 
 
-module.exports = { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, findMainExe, resolveSteamInstallDir, getSteamLibraries };
+module.exports = { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, findMainExe, resolveSteamInstallDir, getSteamLibraries, getSteamRoots, clearSteamCache };

@@ -7,13 +7,12 @@ app.commandLine.appendSwitch('disk-cache-size', String(150 * 1024 * 1024));
 
 const path = require('path');
 const fs = require('fs');
-const { execSync, exec } = require('child_process');
 const https = require('https');
 const crypto = require('crypto');
 const platform = require('./src/backend/platform.js');
 
-const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, loadConfig, saveConfig, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
-const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
+const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, writeJsonAtomicSync, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
+const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
 const steamSource = require('./src/backend/sources/steam.js');
 const { setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses } = require('./src/backend/tracker.js');
@@ -28,6 +27,40 @@ let overlayWin = null;
 let tray = null;
 let forceQuit = false;
 let bgPollInterval = null;
+
+// Every games.json write goes through this queue, so an older snapshot can
+// never land after a newer one (renderer saves, launch lastPlayed, backfill).
+let gamesWriteTail = Promise.resolve();
+function enqueueGamesWrite(task) {
+  const run = gamesWriteTail.then(task);
+  gamesWriteTail = run.catch((err) => { console.warn('[games] write failed:', err && err.message); });
+  return run;
+}
+
+// Read-modify-write of one game, in queue order; tells the renderer what changed.
+function patchGame(gameId, patch) {
+  const sid = String(gameId);
+  return enqueueGamesWrite(() => {
+    const games = loadGames();
+    const g = games.find((x) => String(x.id) === sid);
+    if (!g) return null;
+    const changed = { id: sid };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined || g[k] === v) continue;
+      g[k] = v;
+      changed[k] = v;
+    }
+    if (Object.keys(changed).length === 1) return null;
+    saveGames(games);
+    if (win && !win.isDestroyed()) win.webContents.send('games:updated', changed);
+    refreshTray();
+    return changed;
+  });
+}
+
+function sendLaunchError(gameId, error) {
+  if (win && !win.isDestroyed()) win.webContents.send('game:launch-error', { gameId, error });
+}
 
 // CLI flags (used by autostart and compositor keybinds on Wayland)
 const cliArgs = platform.parseCliArgs(process.argv);
@@ -108,14 +141,51 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
   const launchArgs = Array.isArray(launchOpts.launchArgs) ? launchOpts.launchArgs : [];
   const protonPath = launchOpts.protonPath || '';
 
+  // Runs once the launch really happened: lastPlayed + backfill, via the queue.
+  const afterLaunch = () => {
+    if (!gameRecord) return;
+    const tp = trackedProcesses[sid];
+    const patch = { lastPlayed: Date.now() };
+    if (tp) {
+      if (!gameRecord.installDir && tp.installDir) patch.installDir = tp.installDir;
+      if (!gameRecord.exePath && tp.exePath) patch.exePath = tp.exePath;
+    }
+    patchGame(sid, patch).catch(() => {});
+  };
+  const fail = (msg) => sendLaunchError(gameId, msg);
+
   // Launch: launcherPath if provided, otherwise exePath or steam
   const pathToLaunch = launcherPath || exePath;
   if (steamAppId && !launcherPath) {
     startTracking(sid, exePath, installDir, steamAppId);
-    shell.openExternal(`steam://rungameid/${steamAppId}`);
+    shell.openExternal(`steam://rungameid/${steamAppId}`).catch((err) => fail(`Failed to open Steam:\n${err.message}`));
+    afterLaunch();
+  } else if (pathToLaunch && platform.isLaunchUri(pathToLaunch)) {
+    // steam://, com.epicgames.launcher://, uplay://, origin2://, battlenet://...
+    const uriAppId = platform.steamAppIdFromUri(pathToLaunch) || steamAppId;
+    shell.openExternal(pathToLaunch).then(() => {
+      startTracking(sid, platform.isLaunchUri(exePath) ? '' : exePath, installDir, uriAppId);
+      afterLaunch();
+    }).catch((err) => fail(`Failed to launch game:\n${err.message}`));
+  } else if (pathToLaunch && process.platform === 'win32' && platform.isShellAppsFolder(pathToLaunch)) {
+    // Xbox / AppX: shell:AppsFolder\<PackageFamily>!App never exists on disk.
+    try {
+      const { spawn } = require('child_process');
+      const child = spawn('explorer.exe', [pathToLaunch], { detached: true, stdio: 'ignore' });
+      child.once('spawn', () => { startTracking(sid, '', installDir, steamAppId); afterLaunch(); });
+      child.once('error', (err) => fail(`Failed to launch game:\n${err.message}`));
+      child.unref();
+    } catch (err) {
+      fail(`Failed to launch game:\n${err.message}`);
+    }
   } else if (pathToLaunch) {
     if (!fs.existsSync(pathToLaunch)) {
-      win && win.webContents.send('game:launch-error', { gameId, error: `Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.` });
+      fail(`Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.`);
+      return;
+    }
+
+    if (process.platform === 'win32') {
+      launchWindowsFile(sid, gameId, pathToLaunch, exePath, installDir, steamAppId, launchArgs, afterLaunch);
       return;
     }
 
@@ -176,31 +246,68 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
       }
 
       const child = spawn(cmd, argv, { cwd: gameDir, detached: true, stdio: 'ignore', env });
-      const childPid = child.pid || 0;
-      child.on('error', (err) => {
-        win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
+      // Track only once the child really exists: a failed spawn must not
+      // leave a tracking entry behind.
+      child.once('spawn', () => {
+        startTracking(sid, exePath, installDir, steamAppId, child.pid || 0, { childImage: path.basename(cmd) });
+        afterLaunch();
       });
+      child.once('error', (err) => fail(`Failed to launch game:\n${err.message}`));
       child.unref();
-      startTracking(sid, exePath, installDir, steamAppId, childPid);
     } catch (err) {
-      win && win.webContents.send('game:launch-error', { gameId, error: `Failed to launch game:\n${err.message}` });
+      fail(`Failed to launch game:\n${err.message}`);
       return;
     }
   } else {
     startTracking(sid, exePath, installDir, steamAppId);
+    afterLaunch();
+  }
+}
+
+// Windows: .exe/.com spawn directly; .bat/.cmd through cmd.exe; anything else
+// (.lnk, .url, .jar, ...) through the shell association.
+function launchWindowsFile(sid, gameId, pathToLaunch, exePath, installDir, steamAppId, launchArgs, afterLaunch) {
+  const fail = (msg) => sendLaunchError(gameId, msg);
+  const ext = path.extname(pathToLaunch).toLowerCase();
+  const gameDir = installDir || path.dirname(pathToLaunch);
+  const { spawn } = require('child_process');
+
+  // Tracking target when the launched file is not the game exe itself.
+  let trackExe = exePath;
+  let trackAppId = steamAppId;
+  if (ext === '.lnk' && exePath === pathToLaunch) {
+    try { const link = shell.readShortcutLink(pathToLaunch); trackExe = link && link.target && /\.exe$/i.test(link.target) ? link.target : ''; } catch (_) { trackExe = ''; }
+  } else if (ext === '.url' && exePath === pathToLaunch) {
+    try { trackAppId = platform.steamAppIdFromUri(platform.parseInternetShortcut(fs.readFileSync(pathToLaunch, 'utf-8'))) || steamAppId; } catch (_) {}
+    trackExe = '';
   }
 
-  // Update lastPlayed and backfill any missing exePath / installDir
-  if (gameRecord) {
-    gameRecord.lastPlayed = Date.now();
-    const tp = trackedProcesses[sid];
-    if (tp) {
-      if (!gameRecord.installDir && tp.installDir) gameRecord.installDir = tp.installDir;
-      if (!gameRecord.exePath && tp.exePath) gameRecord.exePath = tp.exePath;
+  const spawnTracked = (cmd, args, opts, childImage) => {
+    try {
+      const child = spawn(cmd, args, { cwd: gameDir, detached: true, stdio: 'ignore', ...opts });
+      child.once('spawn', () => {
+        startTracking(sid, trackExe, installDir, trackAppId, child.pid || 0, { childImage });
+        afterLaunch();
+      });
+      child.once('error', (err) => fail(`Failed to launch game:\n${err.message}`));
+      child.unref();
+    } catch (err) {
+      fail(`Failed to launch game:\n${err.message}`);
     }
-    saveGames(games);
-    refreshTray();
-    win && win.webContents.send('games:updated');
+  };
+
+  if (ext === '.exe' || ext === '.com') {
+    spawnTracked(pathToLaunch, launchArgs.slice(), {}, path.basename(pathToLaunch));
+  } else if (ext === '.bat' || ext === '.cmd') {
+    const quote = (a) => `"${String(a).replace(/"/g, '""')}"`;
+    const line = [quote(pathToLaunch), ...launchArgs.map(quote)].join(' ');
+    spawnTracked('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { windowsHide: false, windowsVerbatimArguments: true }, 'cmd.exe');
+  } else {
+    shell.openPath(pathToLaunch).then((err) => {
+      if (err) { fail(`Failed to launch game:\n${err}`); return; }
+      startTracking(sid, trackExe, installDir, trackAppId);
+      afterLaunch();
+    }).catch((err) => fail(`Failed to launch game:\n${err.message}`));
   }
 }
 
@@ -252,26 +359,28 @@ function refreshTray() {
 // Background polling — detect games launched outside app every 30s
 function startBgPoll() {
   if (bgPollInterval) return;
-  const pollCmd = process.platform === 'win32' ? 'tasklist /NH /FO CSV' : 'ps -eo comm=,args=';
   bgPollInterval = setInterval(async () => {
     try {
-      const result = await new Promise(resolve => {
-        exec(pollCmd, { encoding: 'utf-8', timeout: 5000 }, (err, stdout) => {
-          resolve(err ? '' : stdout.toLowerCase());
-        });
-      });
-      if (!result) return;
-      const games = loadGames();
-      games.filter(g => g.exePath && g.status === 'Playing').forEach(g => {
+      // Only games the tracker does not already watch; skip the process
+      // listing entirely when there are none.
+      const candidates = loadGames().filter(g => g.exePath && g.status === 'Playing'
+        && !trackedProcesses[String(g.id)] && platform.isFilesystemPath(g.exePath)
+        && !/\.(lnk|url)$/i.test(g.exePath));
+      if (!candidates.length) return;
+      let isRunningName;
+      if (process.platform === 'win32') {
+        const snapshot = await platform.listWindowsProcesses();
+        if (!snapshot) return;
+        isRunningName = (name) => platform.pidsForNames(snapshot, [name]).length > 0;
+      } else {
+        const procs = platform.readLinuxProcesses();
+        isRunningName = (name) => procs.some((p) => platform.matchesGameProcess(p, [name]));
+      }
+      candidates.forEach(g => {
         const gameId = String(g.id);
         if (trackedProcesses[gameId]) return; // already tracked
-        // Use the names we already know; never walk the install dir here —
-        // this runs every 30s and must stay O(1).
-        const tracked = trackedProcesses[String(g.id)];
-        const gameExes = (tracked && tracked.allExeNames && tracked.allExeNames.length)
-          ? tracked.allExeNames
-          : [path.basename(g.exePath).toLowerCase()];
-        const isRunning = gameExes.some(name => result.includes(name));
+        // Exact executable name; never walk the install dir here.
+        const isRunning = isRunningName(path.basename(g.exePath).toLowerCase());
         if (isRunning) {
           startTracking(gameId, g.exePath);
           win && win.webContents.send('tracking:detected', { gameId: g.id, gameName: g.name });
@@ -717,32 +826,40 @@ function createWindow() {
   });
 
   ipcMain.on('game:show-in-folder', (_, targetPath) => {
-    if (!targetPath || typeof targetPath !== 'string') return;
+    if (!targetPath || typeof targetPath !== 'string' || targetPath.length > 4096 || targetPath.includes('\0')) return;
+    if (!platform.isFilesystemPath(targetPath)) return;
     try {
-      if (fs.existsSync(targetPath)) {
-        shell.showItemInFolder(targetPath);
+      const target = path.resolve(targetPath);
+      if (fs.existsSync(target)) {
+        shell.showItemInFolder(target);
       }
     } catch (_) {}
   });
 
-  ipcMain.handle('games:load', () => {
+  const noMainExeDirs = new Set(); // install dirs where findMainExe found nothing (session)
+  ipcMain.handle('games:load', () => enqueueGamesWrite(() => {
     const games = loadGames();
     let updated = false;
     for (const g of games) {
+      if (!g) continue;
       if (g.steamAppId) {
         if (!g.installDir) {
           const resolved = resolveSteamInstallDir(g.steamAppId);
           if (resolved) { g.installDir = resolved; updated = true; }
         }
-        if (!g.exePath && g.installDir) {
+        if (!g.exePath && g.installDir && !noMainExeDirs.has(g.installDir)) {
           const exe = findMainExe(g.installDir);
-          if (exe) { g.exePath = exe; updated = true; }
+          if (exe) { g.exePath = exe; updated = true; } else noMainExeDirs.add(g.installDir);
         }
+      }
+      for (const field of ['coverUrl', 'heroUrl', 'logoUrl', 'iconUrl']) {
+        const fixed = normalizeLegacyFileUrl(g[field]);
+        if (fixed) { g[field] = fixed; updated = true; }
       }
     }
     if (updated) saveGames(games);
     return games;
-  });
+  }));
   ipcMain.handle('games:backup', () => {
     try {
       if (!fs.existsSync(DATA_PATH)) return null;
@@ -753,16 +870,20 @@ function createWindow() {
     } catch (_) { return null; }
   });
 
-  ipcMain.handle('games:save', async (_, games) => {
-    await cacheGameImages(games);
-    saveGames(games);
-    refreshTray();
-    return true;
+  ipcMain.handle('games:save', (_, games) => {
+    if (!Array.isArray(games)) return false;
+    return enqueueGamesWrite(async () => {
+      await cacheGameImages(games);
+      saveGames(games);
+      refreshTray();
+      return true;
+    });
   });
   ipcMain.handle('games:data-path', () => DATA_PATH);
 
   ipcMain.handle('config:load', () => loadConfig());
-  ipcMain.handle('config:save', (_, cfg) => { saveConfig(cfg); return true; });
+  // Merge-patch: resolves to the merged config.
+  ipcMain.handle('config:save', (_, patch) => mergeConfig(patch));
 
   ipcMain.handle('detect:steam', () => detectSteamGames());
   ipcMain.handle('detect:epic', () => detectEpicGames());
@@ -772,25 +893,6 @@ function createWindow() {
     const { users } = steamSource.loginUsers();
     return { users, active: steamSource.activeSteamId() };
   });
-  function mapSteamWebGames(games) {
-    const out = [];
-    for (const g of games) {
-      const name = g && g.name;
-      if (!name) continue;
-      const raw = String(g.hours_forever || g.hours || '0').replace(/,/g, '');
-      const hours = Math.round((Number(raw) || 0) * 100) / 100;
-      out.push({
-        name,
-        source: 'Steam account',
-        sourceId: `steam:${g.appid}`,
-        exePath: '', installDir: '', hours,
-        steamAppId: Number(g.appid) || null,
-        iconPath: '', ownedOnly: true,
-      });
-    }
-    return out;
-  }
-
   function mapSteamWebGames(games) {
     const out = [];
     for (const g of games || []) {
@@ -1184,7 +1286,13 @@ function createWindow() {
     }
   });
 
-  ipcMain.on('open-external', (_, url) => shell.openExternal(url));
+  ipcMain.on('open-external', (_, url) => {
+    if (typeof url !== 'string' || url.length > 8192) return;
+    let parsed;
+    try { parsed = new URL(url); } catch (_) { return; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+    shell.openExternal(parsed.href).catch(() => {});
+  });
 
   // AI Advisor handlers
   ipcMain.handle('pick:gcpkey', async () => {
@@ -1271,7 +1379,7 @@ function createWindow() {
   });
 
   ipcMain.handle('ai:save-profile', (_, profile) => {
-    fs.writeFileSync(AI_PROFILE_PATH, JSON.stringify(profile, null, 2), 'utf-8');
+    writeJsonAtomicSync(AI_PROFILE_PATH, profile);
     if (win) win.webContents.send('ai:profile-updated', profile);
     if (overlayWin) overlayWin.webContents.send('ai:profile-updated', profile);
     return true;
@@ -1485,10 +1593,34 @@ app.on('window-all-closed', () => {
   // Don't quit — stay in tray
 });
 
-app.on('before-quit', () => {
+// Quit sequence: end running sessions (tracking:session-end), let the renderer
+// save ('app:flush' -> 'app:flushed', 2.5 s cap), drain the write queue, then
+// quit for real. Closing the window only hides it, so before-quit is always a
+// real quit (tray Quit, updater install, OS).
+let quitFlushState = 'idle'; // idle | flushing | done
+app.on('before-quit', (e) => {
   forceQuit = true;
+  if (bgPollInterval) { clearInterval(bgPollInterval); bgPollInterval = null; }
+  if (quitFlushState === 'done') return;
+  if (quitFlushState === 'flushing') { e.preventDefault(); return; }
+
+  const canFlush = !shotMode && win && !win.isDestroyed() && !win.webContents.isDestroyed();
   stopAllTracking();
-  if (bgPollInterval) clearInterval(bgPollInterval);
+  if (!canFlush) { quitFlushState = 'done'; return; }
+
+  e.preventDefault();
+  quitFlushState = 'flushing';
+  const finish = () => {
+    if (quitFlushState === 'done') return;
+    quitFlushState = 'done';
+    ipcMain.removeListener('app:flushed', onFlushed);
+    clearTimeout(timer);
+    Promise.race([gamesWriteTail, new Promise((r) => setTimeout(r, 3000))]).then(() => app.quit());
+  };
+  const onFlushed = (event) => { if (!win || win.isDestroyed() || event.sender === win.webContents) finish(); };
+  const timer = setTimeout(finish, 2500);
+  ipcMain.on('app:flushed', onFlushed);
+  try { win.webContents.send('app:flush'); } catch (_) { finish(); }
 });
 
 app.on('activate', () => {

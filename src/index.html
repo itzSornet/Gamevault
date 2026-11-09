@@ -41,8 +41,8 @@
         <span class="side-ver">2.0 experimental</span>
       </div>
       <div class="side-foot">
-        <button class="side-item side-btn" data-rail="btn-import" title="Import games"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v10M8 10l4 4 4-4M4 18h16"/></svg><span>Import games</span></button>
-        <button class="side-item side-btn" data-rail="btn-settings" title="Settings"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+        <button class="side-item side-btn" data-rail-action="btn-import" title="Import games"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v10M8 10l4 4 4-4M4 18h16"/></svg><span>Import games</span></button>
+        <button class="side-item side-btn" data-rail-action="btn-settings" title="Settings"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
       </div>
     </aside>
     <div id="main" class="main">
@@ -108,7 +108,7 @@
         <div id="empty" class="empty" hidden>
           <div class="empty-mark"></div>
           <h2 id="empty-title">Your vault is empty</h2>
-          <p id="empty-sub">Import a Steam library, scan Lutris, or add a game by hand.</p>
+          <p id="empty-sub">Import from Steam or another launcher, scan a folder, or add a game by hand.</p>
           <button id="empty-cta" class="btn btn-primary">Import games</button>
         </div>
       </section>
@@ -119,14 +119,15 @@
   </div>
 
   <div class="scrim" id="scrim"></div>
-  <div class="spot snap" id="spot" role="combobox" aria-expanded="false" aria-haspopup="listbox">
+  <div class="spot snap" id="spot" aria-expanded="false">
     <div class="field">
-      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
-      <input id="q" dir="auto" autocomplete="off" spellcheck="false" placeholder="Search your vault" aria-label="Search games or run a command">
-      <div class="keys"><kbd class="k-rest">Ctrl K</kbd><kbd class="k-open">Esc</kbd></div>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+      <input id="q" dir="auto" autocomplete="off" spellcheck="false" placeholder="Search your vault" aria-label="Search games or run a command"
+             role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="list">
+      <div class="keys" aria-hidden="true"><kbd class="k-rest">Ctrl K</kbd><kbd class="k-open">Esc</kbd></div>
     </div>
     <div class="panel">
-      <div class="list" id="list" role="listbox">
+      <div class="list" id="list" role="listbox" aria-label="Results">
         <div class="inner" id="inner"><i class="pill" id="pill"></i><div id="rows"></div></div>
       </div>
       <div class="foot">
@@ -139,25 +140,6 @@
 
   <div id="modal" class="modal-wrap" hidden></div>
   <div id="toasts" class="toasts"></div>
-
-  <div id="cmd" class="cmd" role="dialog" aria-modal="true" aria-label="Search and commands" hidden>
-    <div class="cmd-beam" aria-hidden="true"></div>
-    <div class="cmd-bg" id="cmd-bg"></div>
-    <div class="cmd-bar">
-      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-      <input id="cmd-input" type="text" placeholder="Search games or run a command" aria-label="Search games or run a command"
-             autocomplete="off" spellcheck="false" role="combobox"
-             aria-expanded="true" aria-controls="cmd-list" aria-autocomplete="list" />
-      <kbd id="cmd-hint">Esc</kbd>
-    </div>
-    <div id="cmd-list" class="cmd-list" role="listbox" aria-label="Results"></div>
-    <div class="cmd-foot">
-      <span><b>↑↓</b> navigate</span>
-      <span><b>↵</b> open</span>
-      <span><b>esc</b> close</span>
-      <span id="cmd-count" class="cmd-count" role="status" aria-live="polite"></span>
-    </div>
-  </div>
 
   <script src="lib/fuzzy.js"></script>
   <script src="lib/sessions.js"></script>
