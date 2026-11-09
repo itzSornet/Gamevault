@@ -4492,3 +4492,49 @@ input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; marg
 #grid .card-shade { z-index: 1; }
 #grid .card-status, #grid .card-rating { z-index: 2; }
 #grid .card-play { z-index: 3; }
+
+/* Edit dialog: "Launch & tracking" (tracker split) */
+.modal-card .adv-launch { gap: 7px; border-top: 1px solid var(--line); padding-top: 10px; }
+.modal-card .adv-launch > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.modal-card .adv-launch > summary::-webkit-details-marker { display: none; }
+.modal-card .adv-launch > summary::before { content: '▸'; transition: transform 0.15s var(--ease); }
+.modal-card .adv-launch[open] > summary::before { transform: rotate(90deg); }
+.modal-card .adv-launch > summary:hover { color: var(--text); }
+.modal-card .adv-launch[open] > summary { margin-bottom: 4px; }
+.modal-card .adv-launch .select { width: 100%; height: 36px; }
+.modal-card .detect-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.modal-card .detect-list[hidden] { display: none; }
+.modal-card .detect-item {
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.modal-card .detect-item:hover { background: var(--surface-2); color: var(--text); }
+.modal-card .detect-item.is-likely { color: var(--text); font-weight: 600; }
+.modal-card [data-track-exe-row][hidden] { display: none; }

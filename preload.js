@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('api', {
   onTrackingTick:       (cb) => ipcRenderer.on('tracking:tick',        (_, d) => cb(d)),
   onTrackingSessionEnd: (cb) => ipcRenderer.on('tracking:session-end', (_, d) => cb(d)),
   onTrackingStarted:    (cb) => ipcRenderer.on('tracking:started',     (_, d) => cb(d)),
+  // { gameId, reason: 'not-seen' | 'untracked' } — launched but no session will be recorded
+  onTrackingGaveUp:     (cb) => ipcRenderer.on('tracking:gave-up',     (_, d) => cb(d)),
+  // Edit dialog "Detect": running programs, the game folder's exes first
+  runningProcesses: (opts) => ipcRenderer.invoke('tracking:running-processes', opts || {}),
 
   // Pick image file for custom cover
   pickImage: () => ipcRenderer.invoke('pick:image'),

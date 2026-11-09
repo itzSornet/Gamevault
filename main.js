@@ -15,7 +15,7 @@ const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImag
 const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
 const steamSource = require('./src/backend/sources/steam.js');
-const { setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses } = require('./src/backend/tracker.js');
+const { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses } = require('./src/backend/tracker.js');
 
 const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
@@ -153,6 +153,11 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
     patchGame(sid, patch).catch(() => {});
   };
   const fail = (msg) => sendLaunchError(gameId, msg);
+
+  // What to open and what counts as playing are separate (tracker split):
+  // launchTarget/launcherPath is opened, trackMode/trackExe decide tracking.
+  configureTracking(sid, launchOpts);
+  if (!launcherPath && launchOpts.launchTarget) launcherPath = String(launchOpts.launchTarget);
 
   // Launch: launcherPath if provided, otherwise exePath or steam
   const pathToLaunch = launcherPath || exePath;
@@ -363,9 +368,13 @@ function startBgPoll() {
     try {
       // Only games the tracker does not already watch; skip the process
       // listing entirely when there are none.
-      const candidates = loadGames().filter(g => g.exePath && g.status === 'Playing'
-        && !trackedProcesses[String(g.id)] && platform.isFilesystemPath(g.exePath)
-        && !/\.(lnk|url)$/i.test(g.exePath));
+      // The process that means "playing" is trackExe when set, else exePath;
+      // games set to "don't track" and launcher executables never qualify.
+      const watchExe = (g) => (g.trackExe || g.exePath || '');
+      const candidates = loadGames().filter(g => g.status === 'Playing' && g.trackMode !== 'none' && g.trackMode !== 'steam'
+        && !trackedProcesses[String(g.id)] && platform.isFilesystemPath(watchExe(g))
+        && !/\.(lnk|url)$/i.test(watchExe(g))
+        && !platform.isLauncherProcessName(path.basename(watchExe(g))));
       if (!candidates.length) return;
       let isRunningName;
       if (process.platform === 'win32') {
@@ -380,9 +389,10 @@ function startBgPoll() {
         const gameId = String(g.id);
         if (trackedProcesses[gameId]) return; // already tracked
         // Exact executable name; never walk the install dir here.
-        const isRunning = isRunningName(path.basename(g.exePath).toLowerCase());
+        const isRunning = isRunningName(path.basename(watchExe(g)).toLowerCase());
         if (isRunning) {
-          startTracking(gameId, g.exePath);
+          configureTracking(gameId, g);
+          startTracking(gameId, g.exePath || watchExe(g), g.installDir, g.steamAppId);
           win && win.webContents.send('tracking:detected', { gameId: g.id, gameName: g.name });
         }
       });
@@ -1079,6 +1089,32 @@ function createWindow() {
 
   ipcMain.on('tracking:start', (_, { gameId, exePath, installDir, steamAppId }) => startTracking(String(gameId), exePath, installDir, steamAppId));
   ipcMain.on('tracking:stop', (_, { gameId }) => stopTracking(String(gameId)));
+
+  // "Detect" in the edit dialog: names of running programs a user could pick
+  // as a game's track exe. System processes, runtimes and GameVault itself
+  // are left out; executables found in the game's folder come first.
+  ipcMain.handle('tracking:running-processes', async (_, { installDir } = {}) => {
+    try {
+      let names = [];
+      if (process.platform === 'win32') {
+        const snap = await platform.listWindowsProcesses();
+        names = snap && snap.byName ? [...snap.byName.keys()] : [];
+      } else {
+        names = platform.readLinuxProcesses().map((p) => p.exeBase || p.comm).filter(Boolean);
+      }
+      const inFolder = new Set(installDir && path.isAbsolute(String(installDir))
+        ? await platform.listLaunchableNamesAsync(String(installDir), { maxDepth: 4, limit: 3000 }).catch(() => [])
+        : []);
+      return [...new Set(names.map((n) => String(n).toLowerCase()))]
+        .filter((n) => n && !platform.isProtectedProcessName(n) && !platform.isGenericProcessName(n))
+        .map((n) => ({ name: n, inGameFolder: inFolder.has(n), launcher: platform.isLauncherProcessName(n) }))
+        .filter((p) => p.inGameFolder || !p.launcher)
+        .sort((a, b) => (b.inGameFolder - a.inGameFolder) || a.name.localeCompare(b.name))
+        .slice(0, 60);
+    } catch (_) {
+      return [];
+    }
+  });
   ipcMain.handle('tracking:active', () => Object.keys(trackedProcesses));
 
   ipcMain.handle('pick:exe', async () => {

@@ -364,6 +364,28 @@ const PROTECTED_PROCESS_NAMES = new Set([
   'plasmashell', 'pipewire', 'pulseaudio', 'dbus-daemon', 'sddm', 'gdm', 'electron', 'gamevault',
 ]);
 
+// Store launchers and their helpers. Opening Steam or Epic is not playing a
+// game, so in "auto" tracking these never count (a user can still pick one
+// explicitly as a game's track exe). Also the generic "launcher.exe" wrappers
+// many games ship: they start the real game and exit.
+const LAUNCHER_PROCESS_NAMES = new Set([
+  'steam.exe', 'steamwebhelper.exe', 'steamservice.exe', 'steamerrorreporter.exe',
+  'epicgameslauncher.exe', 'epicwebhelper.exe', 'epiconlineservices.exe', 'eosoverlayrenderer-win64-shipping.exe',
+  'galaxyclient.exe', 'galaxyclient helper.exe', 'galaxycommunication.exe',
+  'battle.net.exe', 'battle.net helper.exe',
+  'eadesktop.exe', 'eabackgroundservice.exe', 'origin.exe', 'originwebhelperservice.exe',
+  'ubisoftconnect.exe', 'upc.exe', 'uplaywebcore.exe', 'ubisoftgamelauncher.exe', 'ubisoftgamelauncher64.exe',
+  'rockstarlauncher.exe', 'socialclubhelper.exe', 'xboxpcapp.exe', 'gamingservices.exe',
+  'heroic.exe', 'playnite.desktopapp.exe', 'playnite.fullscreenapp.exe', 'itch.exe',
+  'launcher.exe', 'gamelauncher.exe', 'unitycrashhandler64.exe', 'unitycrashhandler32.exe', 'crashreportclient.exe',
+  // Linux
+  'steam', 'steamwebhelper', 'lutris', 'heroic', 'bottles', 'itch',
+]);
+
+function isLauncherProcessName(name) {
+  return LAUNCHER_PROCESS_NAMES.has(String(name || '').trim().toLowerCase());
+}
+
 function isProtectedProcessName(name) {
   return PROTECTED_PROCESS_NAMES.has(String(name || '').trim().toLowerCase());
 }
@@ -692,6 +714,7 @@ module.exports = {
   listWindowsProcesses,
   isGenericProcessName,
   isProtectedProcessName,
+  isLauncherProcessName,
   isSharedSystemDir,
   isLaunchUri,
   isShellAppsFolder,

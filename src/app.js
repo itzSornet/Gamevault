@@ -1936,6 +1936,28 @@
           <input class="input" id="f-ttb" type="number" min="0" step="0.5" value="${g.timeToBeat || ''}" placeholder="How long a full playthrough takes" />
         </div>
 
+        <details class="field adv-launch" ${g.launchTarget || g.trackExe || (g.trackMode && g.trackMode !== 'auto') ? 'open' : ''}>
+          <summary>Launch &amp; tracking</summary>
+          <label for="f-launch">Launch with</label>
+          <div class="field-row">
+            <input class="input" id="f-launch" value="${esc(g.launchTarget || '')}" placeholder="Empty = the executable above. Or a launcher, shortcut or steam:// link" />
+            <button class="btn btn-ghost" type="button" data-browse-launch style="flex:0 0 auto">Browse</button>
+          </div>
+          <label for="f-track-mode">Count playtime while</label>
+          <select class="select" id="f-track-mode">
+            <option value="auto">Automatic — the game's exe, or Steam says it's running</option>
+            <option value="exe">This program is running…</option>
+            <option value="steam">Steam reports the game running</option>
+            <option value="none">Never — don't track playtime</option>
+          </select>
+          <div class="field-row" data-track-exe-row>
+            <input class="input" id="f-track-exe" value="${esc(g.trackExe || '')}" placeholder="e.g. eldenring.exe" />
+            <button class="btn btn-ghost" type="button" data-detect style="flex:0 0 auto">Detect</button>
+          </div>
+          <div class="hint">Use this when a launcher or wrapper starts the real game. Start the game, then press Detect and pick it.</div>
+          <div class="detect-list" data-detect-list hidden></div>
+        </details>
+
         <div class="field">
           <div class="art-summary-head">
             <label>Artwork</label>
@@ -2389,6 +2411,38 @@
       if (file) card.querySelector('#f-exe').value = file;
     };
 
+    // Launch & tracking (tracker split): what to open vs what counts as playing.
+    const trackModeEl = card.querySelector('#f-track-mode');
+    const trackExeEl = card.querySelector('#f-track-exe');
+    const trackRow = card.querySelector('[data-track-exe-row]');
+    const detectList = card.querySelector('[data-detect-list]');
+    trackModeEl.value = ['auto', 'exe', 'steam', 'none'].includes(g.trackMode) ? g.trackMode : (g.trackExe ? 'exe' : 'auto');
+    const syncTrackRow = () => { trackRow.hidden = trackModeEl.value !== 'exe'; if (trackRow.hidden) detectList.hidden = true; };
+    trackModeEl.onchange = syncTrackRow;
+    syncTrackRow();
+    card.querySelector('[data-browse-launch]').onclick = async () => {
+      const file = await api.pickExe();
+      if (file) card.querySelector('#f-launch').value = file;
+    };
+    card.querySelector('[data-detect]').onclick = async () => {
+      if (!api.runningProcesses) return;
+      detectList.hidden = false;
+      detectList.textContent = 'Looking at running programs…';
+      const installDir = g.installDir || '';
+      const list = await api.runningProcesses({ installDir }).catch(() => []);
+      if (!alive()) return;
+      detectList.innerHTML = '';
+      if (!list || !list.length) { detectList.textContent = 'Nothing found — start the game first, then press Detect.'; return; }
+      for (const p of list) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'detect-item' + (p.inGameFolder ? ' is-likely' : '');
+        b.textContent = p.inGameFolder ? `${p.name}  · in the game's folder` : p.name;
+        b.onclick = () => { trackExeEl.value = p.name; detectList.hidden = true; };
+        detectList.appendChild(b);
+      }
+    };
+
     for (const btn of card.querySelectorAll('[data-close]')) btn.onclick = closeModal;
 
     let saving = false;
@@ -2406,6 +2460,10 @@
       const notes = card.querySelector('#f-notes').value;
       const steamAppId = Number(card.querySelector('#f-steam').value) || null;
       const timeToBeat = Number(card.querySelector('#f-ttb').value) || null;
+      const launchTarget = card.querySelector('#f-launch').value.trim();
+      const trackExe = trackModeEl.value === 'exe' ? trackExeEl.value.trim() : '';
+      // "This program…" with nothing picked falls back to automatic
+      const trackMode = trackModeEl.value === 'exe' && !trackExe ? 'auto' : trackModeEl.value;
 
       if (!name) { toast('A title is required', 'error'); saving = false; saveBtnEl.disabled = false; return; }
 
@@ -2443,6 +2501,9 @@
           sgdbId: chosen ? chosen.id : null,
           steamAppId,
           timeToBeat,
+          launchTarget,
+          trackMode,
+          trackExe,
           artVersion: 2,
           notes,
           status: nextStatus,
@@ -2458,6 +2519,9 @@
           sgdbId: chosen ? chosen.id : (g.sgdbId || null),
           steamAppId,
           timeToBeat,
+          launchTarget,
+          trackMode,
+          trackExe,
           artVersion: 2,
         });
       }
@@ -3314,9 +3378,10 @@
     apply();
   }
 
-  // "Launching…" must never stick: if the tracker never reports the game
-  // (e.g. Steam opened an install dialog instead), give up after 45 s.
-  const LAUNCH_TIMEOUT_MS = 45000;
+  // "Launching…" must never stick. The tracker itself gives up after 90 s
+  // (180 s for Steam) and says so via tracking:gave-up; this is only the
+  // backstop in case that message never arrives.
+  const LAUNCH_TIMEOUT_MS = 200000;
   const launchWatchdogs = new Map();
 
   function clearLaunchWatchdog(id) {
@@ -3659,23 +3724,42 @@
       if (!wasRunning) refreshStage(g);
     });
 
-    if (api.onTrackingSessionEnd) api.onTrackingSessionEnd(({ gameId, sessionHours, sessionStart, sessionEnd }) => {
+    if (api.onTrackingSessionEnd) api.onTrackingSessionEnd(({ gameId, sessionHours, sessionStart, sessionEnd, discarded }) => {
       const id = String(gameId);
       clearLaunchWatchdog(id);
       delete state.live[id];
       if (state.liveStart) delete state.liveStart[id];
       const g = findGame(id);
       if (!g) return;
-      const hours = Number(sessionHours) || 0;
-      g.hours = (Number(g.hours) || 0) + Math.max(0, hours);
-      if (!Array.isArray(g.sessions)) g.sessions = [];
-      // sub-minute blips (crash on start, launcher hand-off) count towards
-      // the total but are not listed as sessions
-      if (hours * 3600 >= 60) g.sessions.push({ start: sessionStart, end: sessionEnd, duration: hours });
-      g.lastPlayed = sessionEnd || Date.now();
-      saveGamesSoon();
+      // The tracker discards blips under 30 s (launcher hand-off, crash on
+      // start): they are not playtime, so nothing is added or listed.
+      const hours = discarded ? 0 : Math.max(0, Number(sessionHours) || 0);
+      if (hours > 0) {
+        g.hours = (Number(g.hours) || 0) + hours;
+        if (!Array.isArray(g.sessions)) g.sessions = [];
+        g.sessions.push({ start: sessionStart, end: sessionEnd, duration: hours });
+        g.lastPlayed = sessionEnd || Date.now();
+        saveGamesSoon();
+      }
       refreshGameUi(g);
       repaintDetailHistory(g);
+    });
+
+    // Launched, but no session will be recorded: the track process never
+    // appeared (wrong exe, launcher only, install prompt) or tracking is off.
+    if (api.onTrackingGaveUp) api.onTrackingGaveUp(({ gameId, reason }) => {
+      const id = String(gameId);
+      clearLaunchWatchdog(id);
+      if (state.live[id] !== 'launching' && reason !== 'untracked') return;
+      delete state.live[id];
+      if (state.liveStart) delete state.liveStart[id];
+      const g = findGame(id);
+      refreshGameUi(g);
+      const name = (g && g.name) || 'The game';
+      toast(reason === 'untracked'
+        ? `${name} launched — playtime tracking is off for this game`
+        : `${name} launched, but GameVault never saw it running. Edit → Launch & tracking to pick what to track`,
+      reason === 'untracked' ? 'ok' : 'error');
     });
 
     if (api.onLaunchError) api.onLaunchError(({ gameId, error }) => {
