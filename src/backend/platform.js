@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const childProcess = require('child_process');
 
 const PLATFORM = process.platform;
 
@@ -176,7 +177,9 @@ function listLaunchableNamesSync(dirPath, opts) {
   return [...found];
 }
 
-// Asynchronous, bounded, shallow: background enrichment only.
+// Asynchronous, bounded: background enrichment only. Breadth-first, so the
+// entry budget is spent on shallow folders before a deep content tree can
+// eat it (CS2 keeps its exe at game\bin\win64\cs2.exe).
 async function listLaunchableNamesAsync(dirPath, opts) {
   const o = opts || {};
   const maxDepth = o.maxDepth == null ? 2 : o.maxDepth;
@@ -184,24 +187,206 @@ async function listLaunchableNamesAsync(dirPath, opts) {
   const found = new Set();
   if (!dirPath) return [];
 
-  const walk = async (dir, depth) => {
-    if (depth > maxDepth || budget.left <= 0) return;
-    let entries;
-    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) { return; }
-    budget.left -= entries.length;
-    const subdirs = [];
-    for (const e of entries) {
-      if (budget.left <= 0) return;
-      if (e.isDirectory()) {
-        if (depth < maxDepth && shouldDescend(e.name)) subdirs.push(path.join(dir, e.name));
-      } else if (e.isFile() && looksLikeExecutableName(e.name)) {
-        if (isLaunchableFile(path.join(dir, e.name))) found.add(e.name.toLowerCase());
+  let level = [dirPath];
+  for (let depth = 0; depth <= maxDepth && level.length && budget.left > 0; depth++) {
+    const next = [];
+    for (const dir of level) {
+      if (budget.left <= 0) break;
+      let entries;
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch (e) { continue; }
+      budget.left -= entries.length;
+      for (const e of entries) {
+        if (e.isDirectory()) {
+          if (depth < maxDepth && shouldDescend(e.name)) next.push(path.join(dir, e.name));
+        } else if (e.isFile() && looksLikeExecutableName(e.name)) {
+          if (isLaunchableFile(path.join(dir, e.name))) found.add(e.name.toLowerCase());
+        }
       }
     }
-    for (const sub of subdirs) await walk(sub, depth + 1);
-  };
-  await walk(dirPath, 0);
+    level = next;
+  }
   return [...found];
+}
+
+// ---------------------------------------------------------------------------
+// Helper processes (tasklist, taskkill, reg, powershell, ...)
+// ---------------------------------------------------------------------------
+//
+// Always execFile (no cmd.exe in between) with windowsHide, so a packaged GUI
+// build never flashes a console window over a fullscreen game. Never use these
+// for launching games: those must stay visible.
+
+function helperOptions(o) {
+  return {
+    windowsHide: true,
+    timeout: o.timeout || 5000,
+    encoding: o.encoding || 'utf8',
+    maxBuffer: o.maxBuffer || 16 * 1024 * 1024,
+    ...(o.cwd ? { cwd: o.cwd } : {}),
+    ...(o.env ? { env: o.env } : {}),
+  };
+}
+
+// Resolves { ok, stdout, stderr, code }. Never rejects.
+function runHelper(cmd, args, opts) {
+  const o = opts || {};
+  const run = o.execFile || childProcess.execFile;
+  return new Promise((resolve) => {
+    try {
+      run(cmd, args || [], helperOptions(o), (err, stdout, stderr) => {
+        resolve({
+          ok: !err,
+          stdout: stdout == null ? '' : String(stdout),
+          stderr: stderr == null ? '' : String(stderr),
+          code: err ? (typeof err.code === 'number' ? err.code : -1) : 0,
+        });
+      });
+    } catch (e) {
+      resolve({ ok: false, stdout: '', stderr: e.message, code: -1 });
+    }
+  });
+}
+
+// Synchronous variant for the few callers that cannot await. Returns stdout,
+// or '' on any failure.
+function runHelperSync(cmd, args, opts) {
+  const o = opts || {};
+  const run = o.execFileSync || childProcess.execFileSync;
+  try {
+    const out = run(cmd, args || [], helperOptions(o));
+    return out == null ? '' : String(out);
+  } catch (_) {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Process matching (Windows)
+// ---------------------------------------------------------------------------
+
+// One CSV record -> fields. Handles quoted fields with embedded commas
+// ("12,345 K") and doubled quotes.
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else quoted = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ',') {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+// `tasklist /NH /FO CSV` output -> { byName: Map<lowerImage, pid[]>, byPid: Map<pid, lowerImage> }
+function parseTasklistCsv(text) {
+  const byName = new Map();
+  const byPid = new Map();
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line[0] !== '"') continue; // "INFO: No tasks are running..." etc.
+    const fields = parseCsvLine(line);
+    if (fields.length < 2) continue;
+    const name = fields[0].trim().toLowerCase();
+    const pid = Number(fields[1]);
+    if (!name || !Number.isInteger(pid) || pid <= 0) continue;
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name).push(pid);
+    byPid.set(pid, name);
+  }
+  return { byName, byPid };
+}
+
+// Exact, case-insensitive image-name matching. Returns the matching PIDs.
+function pidsForNames(snapshot, names) {
+  const pids = [];
+  if (!snapshot || !snapshot.byName || !names) return pids;
+  for (const n of new Set(names.map((x) => String(x).toLowerCase()))) {
+    const hit = snapshot.byName.get(n);
+    if (hit) pids.push(...hit);
+  }
+  return pids;
+}
+
+// Snapshot of running Windows processes, or null when tasklist failed.
+async function listWindowsProcesses(opts) {
+  const res = await runHelper('tasklist.exe', ['/NH', '/FO', 'CSV'], { timeout: 5000, ...(opts || {}) });
+  if (!res.ok || !res.stdout) return null;
+  return parseTasklistCsv(res.stdout);
+}
+
+// Runtimes and system tools that games often ship next to their own exe.
+// Discovered in an install folder, they would match unrelated processes.
+const GENERIC_PROCESS_NAMES = new Set([
+  'java.exe', 'javaw.exe', 'python.exe', 'pythonw.exe', 'node.exe', 'cmd.exe',
+  'powershell.exe', 'pwsh.exe', 'conhost.exe', 'explorer.exe', 'rundll32.exe',
+  'msiexec.exe', 'steam.exe', 'steamwebhelper.exe', 'steamservice.exe',
+  'crashpad_handler.exe', 'cefsharp.browsersubprocess.exe', 'qtwebengineprocess.exe',
+  'notepad.exe', 'wscript.exe', 'cscript.exe',
+]);
+
+function isGenericProcessName(name) {
+  return GENERIC_PROCESS_NAMES.has(String(name || '').toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+// Launch targets
+// ---------------------------------------------------------------------------
+
+// Launcher URIs (steam://, com.epicgames.launcher://, uplay://, origin2://,
+// battlenet://, heroic://, lutris:rungameid/...). Never file:, javascript:,
+// data: or a Windows drive letter.
+function isLaunchUri(value) {
+  const s = String(value || '').trim();
+  const m = s.match(/^([a-z][a-z0-9+.-]+):/i);
+  if (!m) return false;
+  const scheme = m[1].toLowerCase();
+  if (scheme === 'file' || scheme === 'javascript' || scheme === 'data' || scheme === 'vbscript' || scheme === 'shell') return false;
+  if (s.slice(m[0].length).startsWith('//')) return true;
+  return scheme === 'lutris' || scheme === 'steam';
+}
+
+// Xbox / AppX entries: shell:AppsFolder\<PackageFamily>!App. Never on disk.
+function isShellAppsFolder(value) {
+  return /^shell:appsfolder\\/i.test(String(value || '').trim());
+}
+
+// A real filesystem path (not a URI or shell: moniker).
+function isFilesystemPath(value) {
+  const s = String(value || '');
+  return !!s && !isLaunchUri(s) && !/^shell:/i.test(s) && path.isAbsolute(s);
+}
+
+// "steam://rungameid/730" / "steam://run/730" -> "730"
+function steamAppIdFromUri(value) {
+  const m = String(value || '').match(/^steam:\/\/(?:rungameid|run|launch)\/(\d+)/i);
+  return m ? m[1] : '';
+}
+
+// Body of a .url InternetShortcut -> the URL= value.
+function parseInternetShortcut(text) {
+  const m = String(text || '').match(/^\s*URL\s*=\s*(.+?)\s*$/im);
+  return m ? m[1] : '';
+}
+
+// `reg query HKCU\Software\Valve\Steam /v RunningAppID` -> number (0 = none)
+function parseRunningAppId(regText) {
+  const m = String(regText || '').match(/RunningAppID\s+REG_DWORD\s+(0x[0-9a-f]+|\d+)/i);
+  if (!m) return 0;
+  return Number(m[1]) || 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +629,19 @@ module.exports = {
   pickRunner,
   matchesGameProcess,
   readLinuxProcesses,
+  runHelper,
+  runHelperSync,
+  parseCsvLine,
+  parseTasklistCsv,
+  pidsForNames,
+  listWindowsProcesses,
+  isGenericProcessName,
+  isLaunchUri,
+  isShellAppsFolder,
+  isFilesystemPath,
+  steamAppIdFromUri,
+  parseInternetShortcut,
+  parseRunningAppId,
   findProton,
   autostartDesktopEntry,
   parseCliArgs,

@@ -12,7 +12,9 @@ function p(...parts) { return path.join(...parts); }
 function steamRoots() {
   const roots = [];
   if (IS_WIN) {
-    for (const c of ['C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam']) if (has(c)) roots.push(c);
+    // Registry SteamPath first (Steam is often on another drive), then the defaults.
+    try { for (const r of require('../scanner.js').getSteamRoots()) if (has(r) && !roots.includes(r)) roots.push(r); } catch (_) {}
+    for (const c of ['C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam']) if (has(c) && !roots.includes(c)) roots.push(c);
   } else {
     for (const c of [p(HOME, '.steam', 'steam'), p(HOME, '.local', 'share', 'Steam'), p(HOME, '.var', 'app', 'com.valvesoftware.Steam', '.steam', 'steam')]) {
       if (has(c)) roots.push(c);

@@ -54,9 +54,9 @@ function listSources() {
   let cfg = {};
   try { cfg = require('./data.js').loadConfig() || {}; } catch (_) {}
 
-  const steamFound = IS_WIN
-    ? has('C:\\Program Files (x86)\\Steam\\steamapps')
-    : has(p(HOME, '.steam', 'steam')) || has(p(HOME, '.local', 'share', 'Steam'));
+  // Same detection the Steam scanner uses (registry path on Windows, Flatpak on Linux).
+  let steamFound = false;
+  try { steamFound = require('./sources/steam.js').detect(); } catch (_) {}
   sources.push({ id: 'steam', label: 'Steam', found: steamFound, hint: 'Installed Steam games' });
 
   if (IS_LINUX) {

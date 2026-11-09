@@ -16,11 +16,19 @@
   document.getElementById('win-min').onclick = () => api.minimize();
   document.getElementById('win-max').onclick = () => api.maximize();
   document.getElementById('win-close').onclick = () => api.close();
-  api.onMaximizedChange((isMax) => {
+  const applyMaximized = (isMax) => {
+    const max = !!isMax;
     const b = document.getElementById('win-max');
-    b.title = isMax ? 'Restore' : 'Maximize';
-    b.classList.toggle('is-max', isMax);
-  });
+    const label = max ? 'Restore' : 'Maximize';
+    if (b) {
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.classList.toggle('is-max', max);
+    }
+    document.documentElement.classList.toggle('is-maximized', max);
+  };
+  if (api.onMaximizedChange) api.onMaximizedChange(applyMaximized);
+  if (api.isMaximized) Promise.resolve().then(() => api.isMaximized()).then(applyMaximized).catch(() => {});
 
   const state = {
     games: [],
@@ -51,9 +59,48 @@
 
   const fmtHours = (h) => {
     const n = Number(h) || 0;
-    if (!n) return '0h';
+    if (n <= 0) return '0h';
+    if (n < 1) {
+      const mins = Math.round(n * 60);
+      if (mins < 1) return '<1m';
+      if (mins < 60) return `${mins}m`;
+    }
     return n >= 100 ? `${Math.round(n)}h` : `${n.toFixed(1).replace(/\.0$/, '')}h`;
   };
+
+  const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+
+  const newGameId = () => ((window.crypto && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`);
+
+  // Local path (C:\…, \\server\share\…, /home/…) -> proper file:/// URL with
+  // encoded segments. Anything that already has a scheme (http, https, file,
+  // data, blob, custom protocols) is returned untouched.
+  function toFileUrl(value) {
+    if (value == null) return '';
+    const s = String(value).trim();
+    if (!s) return '';
+    if (/^[a-z][a-z0-9+.-]+:/i.test(s) && !/^[a-z]:[\\/]/i.test(s)) return s;
+    let p = s.replace(/\\/g, '/');
+    let prefix;
+    let keepFirst = false;
+    if (/^\/\/[^/]/.test(p)) { prefix = 'file://'; p = p.slice(2); }          // UNC: file://server/share/…
+    else if (/^[a-z]:(\/|$)/i.test(p)) { prefix = 'file:///'; keepFirst = true; } // drive letter
+    else if (p.startsWith('/')) { prefix = 'file://'; }                       // POSIX
+    else return s;                                                            // relative / unknown
+    const encoded = p.split('/').map((seg, i) => ((i === 0 && keepFirst) ? seg : encodeURIComponent(seg))).join('/');
+    return prefix + encoded;
+  }
+
+  // CSS url("…") with the value escaped for a double-quoted CSS string.
+  function cssUrl(value) {
+    const u = toFileUrl(value);
+    if (!u) return '';
+    return `url("${u.replace(/[\\"]/g, '\\$&').replace(/[\n\r\f]/g, '')}")`;
+  }
+
+  const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(p || '');
 
   const fmtDate = (ts) => {
     if (!ts) return '—';
@@ -96,23 +143,44 @@
   // Performance tiers + governor
   // ---------------------------------------------------------------------------
 
-  function applyTier(tier, { announce = false } = {}) {
-    const t = ['cinematic', 'standard', 'lite'].includes(tier) ? tier : 'standard';
+  // config.json is owned by main; saveConfig is a merge-patch. Send only the
+  // keys that change and adopt the merged config main sends back. Patches go
+  // out one at a time so a stale reply can never overwrite a newer one.
+  let configChain = Promise.resolve();
+  function saveConfigPatch(patch) {
+    if (!patch || typeof patch !== 'object') return Promise.resolve(state.config);
+    Object.assign(state.config, patch);
+    const run = configChain.then(async () => {
+      const merged = await api.saveConfig(patch);
+      if (merged && typeof merged === 'object' && !Array.isArray(merged)) state.config = merged;
+      return state.config;
+    }).catch((e) => { console.warn('config save failed', e); return state.config; });
+    configChain = run;
+    return run;
+  }
+
+  const lsSet = (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} };
+  const lsGet = (key) => { try { return localStorage.getItem(key); } catch (_) { return null; } };
+
+  const TIERS = ['cinematic', 'standard', 'lite'];
+
+  function applyTier(tier, { announce = false, persist = false } = {}) {
+    const t = TIERS.includes(tier) ? tier : 'standard';
     state.tier = t;
     document.documentElement.dataset.tier = t;
-    state.config.tier = t;
-    localStorage.setItem('gv.tier', t);
+    lsSet('gv.tier', t);
+    if (persist && state.config.tier !== t) saveConfigPatch({ tier: t });
     if (announce) toast(`Visual quality: ${t}`, 'ok');
   }
 
   const PALETTES = ['midnight', 'paper'];
 
-  function applyPalette(name, { announce = false } = {}) {
+  function applyPalette(name, { announce = false, persist = false } = {}) {
     const p = PALETTES.includes(name) ? name : 'midnight';
     state.palette = p;
     document.documentElement.dataset.palette = p;
-    state.config.palette = p;
-    localStorage.setItem('gv.palette', p);
+    lsSet('gv.palette', p);
+    if (persist && state.config.palette !== p) saveConfigPatch({ palette: p });
     if (announce) toast(`Palette: ${p}`, 'ok');
   }
 
@@ -150,11 +218,34 @@
     return g.status === 'Finished' ? 'Finished' : 'Playing';
   }
 
+  // Every games.json write goes through one promise chain: the snapshot is
+  // taken when the write is queued, and writes leave in queue order, so an
+  // older snapshot can never land after a newer one.
+  let saveChain = Promise.resolve();
+  let saveTimer = null;
+
+  function queueGamesSave() {
+    const snapshot = cleanGames();
+    const run = saveChain
+      .then(() => api.saveGames(snapshot))
+      .catch((e) => { console.warn('save failed', e); });
+    saveChain = run;
+    return run;
+  }
+
   function saveGamesSoon() {
-    clearTimeout(saveGamesSoon._t);
-    saveGamesSoon._t = setTimeout(async () => {
-      try { await api.saveGames(cleanGames()); } catch (e) { console.warn('save failed', e); }
-    }, 400);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saveTimer = null; queueGamesSave(); }, 400);
+  }
+
+  // Main calls this right before quitting: write anything still pending.
+  function flushGames() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      queueGamesSave();
+    }
+    return saveChain.then(() => true, () => true);
   }
 
   function filteredGames() {
@@ -184,7 +275,7 @@
         return (b.lastPlayed || 0) - (a.lastPlayed || 0) || (b.added || 0) - (a.added || 0);
       }
       if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
-      if (sort === 'hours') return (b.hours || 0) - (a.hours || 0);
+      if (sort === 'hours') return (Number(b.hours) || 0) - (Number(a.hours) || 0);
       if (sort === 'status') {
         const d = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
         return d !== 0 ? d : String(a.name || '').localeCompare(String(b.name || ''));
@@ -208,19 +299,38 @@
     }
     state.counts = c;
     for (const el of $$('[data-count]')) el.textContent = String(c[el.dataset.count] ?? 0);
+
+    const hoursOf = (pred) => Math.round(state.games.reduce((sum, g) => sum + (pred(g) ? (Number(g.hours) || 0) : 0), 0));
+    const inFilter = (g) => {
+      const wanted = gvIsWishlisted(g);
+      if (state.filter === 'Want') return wanted;
+      if (state.filter === 'All') return !wanted;
+      return !wanted && g.status === state.filter;
+    };
+    const gamesWord = (n) => `${n.toLocaleString()} game${n === 1 ? '' : 's'}`;
+
+    // Header title + subtitle follow the active filter.
+    const label = filterLabel(state.filter);
+    const libTitle = $('#library .lib-title');
+    if (libTitle) libTitle.textContent = label;
+    const topTitle = $('#filter-title');
+    if (topTitle) topTitle.textContent = label;
     const libSub = $('#lib-sub');
     if (libSub) {
-      const hrs = Math.round(state.games.filter((g) => !gvIsWishlisted(g)).reduce((sum, g) => sum + (Number(g.hours) || 0), 0));
-      libSub.textContent = `${c.All} game${c.All === 1 ? '' : 's'} · ${hrs.toLocaleString()} h`;
+      const n = c[state.filter] ?? 0;
+      libSub.textContent = state.filter === 'Want'
+        ? gamesWord(n)
+        : `${gamesWord(n)} · ${hoursOf(inFilter).toLocaleString()} h`;
     }
+
     const totalEl = $('#side-total');
     const hoursEl = $('#side-hours');
-    if (totalEl) totalEl.textContent = `${c.All} game${c.All === 1 ? '' : 's'}`;
-    if (hoursEl) {
-      const hours = Math.round(state.games.filter((g) => !gvIsWishlisted(g)).reduce((sum, g) => sum + (Number(g.hours) || 0), 0));
-      hoursEl.textContent = `${hours.toLocaleString()} h`;
-    }
+    if (totalEl) totalEl.textContent = gamesWord(c.All);
+    if (hoursEl) hoursEl.textContent = `${hoursOf((g) => !gvIsWishlisted(g)).toLocaleString()} h`;
   }
+
+  const FILTER_LABELS = { All: 'Library', Playing: 'Playing', Finished: 'Finished', Want: 'Wishlist' };
+  function filterLabel(filter) { return FILTER_LABELS[filter] || 'Library'; }
 
   // ---------------------------------------------------------------------------
   // Library rendering: shelf (default) or grid
@@ -274,7 +384,7 @@
       const img = new Image();
       img.onload = () => done(img.naturalHeight ? img.naturalWidth / img.naturalHeight : 0);
       img.onerror = () => done(0);
-      img.src = url;
+      img.src = toFileUrl(url);
     });
   }
 
@@ -354,7 +464,36 @@
   }
 
   function persistGames() {
-    api.saveGames(cleanGames()).catch(() => {});
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    return queueGamesSave();
+  }
+
+  // Boot-time repair: drop junk entries, give every game a unique id, and
+  // coerce the fields the UI does arithmetic on. `changed` says whether the
+  // caller has to write the repaired list back.
+  function normalizeGames(list) {
+    const out = [];
+    const seen = new Set();
+    let changed = !Array.isArray(list);
+    for (const g of Array.isArray(list) ? list : []) {
+      if (!g || typeof g !== 'object' || Array.isArray(g)) { changed = true; continue; }
+      const validId = (typeof g.id === 'string' && g.id.trim() !== '') || (typeof g.id === 'number' && Number.isFinite(g.id));
+      if (!validId || seen.has(String(g.id))) {
+        let id = newGameId();
+        while (seen.has(id)) id = newGameId();
+        g.id = id;
+        changed = true;
+      }
+      seen.add(String(g.id));
+      if (typeof g.name !== 'string') { g.name = g.name == null ? '' : String(g.name); changed = true; }
+      const hours = Number(g.hours);
+      const fixedHours = Number.isFinite(hours) && hours > 0 ? hours : 0;
+      if (g.hours !== fixedHours) { g.hours = fixedHours; changed = true; }
+      if (!Array.isArray(g.sessions)) { g.sessions = []; changed = true; }
+      out.push(g);
+    }
+    return { games: out, changed };
   }
 
   async function refreshArt(g, { focus = false } = {}) {
@@ -369,6 +508,7 @@
       else if (thumb) { g._hero = thumb; g._noHero = false; }
     }
     state._shelfKey = '';
+    updateCard(g);
     if (state.view === 'shelf') {
       // rebuild the stage/poster even if the shelf is currently hidden behind
       // the detail page, otherwise it comes back with stale artwork
@@ -414,6 +554,9 @@
     if (state.selectedId) {
       $('#shelf').hidden = true;
       $('#library').hidden = true;
+      // sidebar counts still have to follow status/wishlist edits made on
+      // the game page
+      refreshCounts();
       return;
     }
     if (state.view === 'shelf') {
@@ -427,6 +570,41 @@
     }
   }
 
+  function emptyFilterText() {
+    if (state.query && state.query.trim()) {
+      return { title: 'No matches', sub: 'Try a different search term.', line: 'Nothing matches this search.' };
+    }
+    if (state.filter === 'Want') {
+      return { title: 'Your wishlist is empty', sub: 'Star a game to save it here.', line: 'Your wishlist is empty — star a game to save it here.' };
+    }
+    if (state.filter === 'Finished') {
+      return { title: 'Nothing finished yet', sub: 'Mark a game as finished from its page.', line: 'Nothing finished yet — mark a game as finished from its page.' };
+    }
+    if (state.filter === 'Playing') {
+      return { title: 'Nothing in Playing', sub: 'Games you are playing show up here.', line: 'Nothing in Playing right now.' };
+    }
+    return { title: 'No matches', sub: 'Try a different filter or search term.', line: 'Nothing matches this filter.' };
+  }
+
+  // Tiles are reused by id; repaint the cover/title only when they changed.
+  function paintShelfTile(tile, g) {
+    const src = g._cover || g.coverUrl || '';
+    const name = String(g.name || '');
+    if (tile._src === src && tile._name === name) return;
+    tile._src = src;
+    tile._name = name;
+    tile.title = name;
+    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>`;
+    const img = tile.querySelector('img');
+    if (img) {
+      img.addEventListener('error', () => {
+        if (!img.isConnected) return;
+        img.insertAdjacentHTML('afterend', coverFallbackMarkup());
+        img.remove();
+      }, { once: true });
+    }
+  }
+
   function renderShelf() {
     const list = filteredGames();
     const stage = $('#shelf-stage');
@@ -434,6 +612,7 @@
 
     if (!list.length) {
       const firstRun = state.games.length === 0;
+      const empty = emptyFilterText();
       stage.innerHTML = firstRun
         ? `<div class="onboard">
              <span class="onboard-kicker">GameVault</span>
@@ -445,7 +624,7 @@
              </div>
              <p class="onboard-hint">Press <kbd>Ctrl K</kbd> any time to search or run a command.</p>
            </div>`
-        : '<div class="shelf-empty">Nothing matches this filter.</div>';
+        : `<div class="shelf-empty">${esc(empty.line)}</div>`;
       strip.innerHTML = '';
       shelfDom.built = false;
       state._shelfKey = '';
@@ -489,19 +668,23 @@
           tile.className = 'shelf-tile';
           tile.dataset.id = id;
           tile.setAttribute('role', 'option');
-          tile.title = g.name;
-          tile.innerHTML = `${(g._cover || g.coverUrl) ? `<img src="${esc(g._cover || g.coverUrl)}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(g.name)}</span>`;
           tile.onclick = () => { if (shelfDragMoved) return; selectShelfGame(tile.dataset.id); };
           tile.ondblclick = () => openDetail(tile.dataset.id);
         }
+        paintShelfTile(tile, g);
         tile.classList.toggle('is-active', id === state.shelfId);
+        tile.setAttribute('aria-selected', String(id === state.shelfId));
         frag.appendChild(tile);
       }
       for (const leftover of existing.values()) leftover.remove();
       strip.appendChild(frag);
     } else {
+      const byId = new Map(list.map((g) => [String(g.id), g]));
       for (const tile of strip.querySelectorAll('.shelf-tile')) {
+        const g = byId.get(tile.dataset.id);
+        if (g) paintShelfTile(tile, g);
         tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
+        tile.setAttribute('aria-selected', String(tile.dataset.id === state.shelfId));
       }
     }
 
@@ -536,10 +719,24 @@
     state.shelfId = String(id);
     for (const tile of $('#shelf-strip').querySelectorAll('.shelf-tile')) {
       tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
+      tile.setAttribute('aria-selected', String(tile.dataset.id === state.shelfId));
     }
     const g = state.games.find((x) => String(x.id) === state.shelfId);
-    if (g) { await preloadHero(heroUrlOf(g)); renderShelfStage(g); }
+    if (g) {
+      await preloadHero(heroUrlOf(g));
+      // another tile may have been picked while the hero decoded: the stage
+      // must always show the game that Play acts on
+      if (state.shelfId !== String(g.id)) return;
+      renderShelfStage(g);
+    }
     revealShelfTile(state.shelfId);
+  }
+
+  // Repaint the shelf stage only if it is showing this game.
+  function refreshStage(g) {
+    if (!g || state.view !== 'shelf' || !shelfDom.built) return;
+    if (state.shelfId !== String(g.id)) return;
+    renderShelfStage(g);
   }
 
   // Critically-damped spring on scrollLeft. Retargetable, no fixed duration,
@@ -549,6 +746,14 @@
     target = Math.max(0, Math.min(max, target));
     const st = el._spring || (el._spring = { x: el.scrollLeft, v: 0, raf: null, target });
     st.target = target;
+    if (prefersReducedMotion()) {
+      if (st.raf) cancelAnimationFrame(st.raf);
+      st.raf = null;
+      st.v = 0;
+      st.x = target;
+      el.scrollLeft = target;
+      return;
+    }
     if (st.raf) return;
 
     let last = performance.now();
@@ -680,11 +885,11 @@
     const cached = await api.sgdbCache({ url: remote, kind: 'hero' }).catch(() => null);
     g.heroUrl = cached && cached.ok ? cached.data : remote;
     g._noHero = false;
-    const thumb = await api.thumb(g.heroUrl, 1400, 'hero');
+    const thumb = api.thumb ? await api.thumb(g.heroUrl, 1400, 'hero').catch(() => null) : g.heroUrl;
     if (thumb && thumb !== '__reject__') g._hero = thumb;
     else { g._hero = null; g._noHero = true; }
     persistGames();
-    renderShelfStage(g);
+    refreshStage(g);
     toast('Banner changed', 'ok');
   }
 
@@ -705,9 +910,9 @@
     if (state._stageVisual !== visualKey) {
       const oldArt = shelfDom.arts[shelfDom.front];
       state._stageVisual = visualKey;
-      artBack.style.backgroundImage = art ? `url('${art}')` : '';
+      artBack.style.backgroundImage = art ? cssUrl(art) : '';
       artBack.classList.toggle('is-fallback', !heroArt && !!art);
-      posterBack.style.backgroundImage = posterSrc ? `url('${posterSrc}')` : '';
+      posterBack.style.backgroundImage = posterSrc ? cssUrl(posterSrc) : '';
       posterBack.innerHTML = posterSrc ? '' : coverFallbackMarkup();
       posterBack.classList.toggle('is-empty', !posterSrc);
       posterBack.style.display = '';
@@ -735,15 +940,26 @@
       }
     }
 
-    shelfDom.kicker.textContent = `${running ? 'Now playing' : statusLabel(g)} · ${fmtHours(running ? (g.hours || 0) + live / 60 : g.hours)}`;
+    const wish = gvIsWishlisted(g);
+    const base = Number(g.hours) || 0;
+    shelfDom.kicker.textContent = wish
+      ? statusLabel(g)
+      : `${running ? 'Now playing' : statusLabel(g)} · ${fmtHours(running ? base + live / 60 : base)}`;
     shelfDom.title.textContent = g.name || '';
+    const sessionCount = gvSessions(g).length;
     shelfDom.meta.innerHTML = [
       g.source ? `<span>${esc(g.source)}</span>` : '',
-      `<span>${(g.sessions || []).length} sessions</span>`,
-      g.lastPlayed ? `<span>played ${fmtDate(g.lastPlayed)}</span>` : '',
+      wish ? '' : `<span>${sessionCount} session${sessionCount === 1 ? '' : 's'}</span>`,
+      g.lastPlayed ? `<span>played ${esc(fmtDate(g.lastPlayed))}</span>` : '',
     ].filter(Boolean).join('<span class="card-dot">•</span>');
 
-    shelfDom.playLabel.textContent = running ? 'Stop' : 'Play';
+    // wishlisted games are not in the library yet: nothing to play
+    shelfDom.playBtn.hidden = wish;
+    shelfDom.playLabel.textContent = running ? 'Stop'
+      : live === 'launching' ? 'Launching…'
+        : live === 'stopping' ? 'Stopping…' : 'Play';
+    shelfDom.playBtn.classList.toggle('is-busy', live === 'launching' || live === 'stopping');
+    shelfDom.playBtn.title = live === 'launching' ? 'Launching — click to cancel' : '';
   }
 
   // ---------------------------------------------------------------------------
@@ -769,23 +985,6 @@
     const media = document.createElement('div');
     media.className = 'card-media';
 
-    if (g.coverUrl) {
-      const img = document.createElement('img');
-      img.className = 'card-img';
-      img.loading = index < 12 ? 'eager' : 'lazy';
-      img.decoding = 'async';
-      img.alt = '';
-      img.src = g.coverUrl;
-      img.addEventListener('load', () => img.classList.add('is-loaded'), { once: true });
-      img.addEventListener('error', () => {
-        img.remove();
-        media.insertAdjacentHTML('afterbegin', coverFallbackMarkup());
-      }, { once: true });
-      media.appendChild(img);
-    } else {
-      media.insertAdjacentHTML('afterbegin', coverFallbackMarkup());
-    }
-
     const shade = document.createElement('div');
     shade.className = 'card-shade';
     media.appendChild(shade);
@@ -806,6 +1005,7 @@
     const play = document.createElement('button');
     play.className = 'card-play';
     play.title = 'Launch';
+    play.dataset.kind = 'play';
     play.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
     media.appendChild(play);
 
@@ -836,7 +1036,8 @@
 
     el.append(media, body);
 
-    const refs = { el, img: media.querySelector('.card-img'), hours, status, play, title };
+    const refs = { el, media, img: null, src: null, eager: index < 12, hours, status, play, title };
+    setCardImage(refs, g._cover || g.coverUrl || '');
 
     play.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(g.id); });
     el.addEventListener('click', () => openDetail(g.id));
@@ -846,6 +1047,37 @@
     el.addEventListener('dblclick', () => togglePlay(g.id));
 
     return refs;
+  }
+
+  // Swap a card's cover in place when the artwork changes (refresh, edit,
+  // thumbnail cache filling in) instead of keeping the first URL forever.
+  function setCardImage(ref, src) {
+    const want = src || '';
+    if (ref.src === want) return;
+    ref.src = want;
+    const media = ref.media;
+    if (ref.img) { ref.img.remove(); ref.img = null; }
+    const oldFallback = media.querySelector('.cover-fallback');
+    if (oldFallback) oldFallback.remove();
+    if (!want) {
+      media.insertAdjacentHTML('afterbegin', coverFallbackMarkup());
+      return;
+    }
+    const img = document.createElement('img');
+    img.className = 'card-img';
+    img.loading = ref.eager ? 'eager' : 'lazy';
+    img.decoding = 'async';
+    img.alt = '';
+    img.addEventListener('load', () => img.classList.add('is-loaded'), { once: true });
+    img.addEventListener('error', () => {
+      if (ref.img !== img) return;
+      img.remove();
+      ref.img = null;
+      media.insertAdjacentHTML('afterbegin', coverFallbackMarkup());
+    }, { once: true });
+    img.src = toFileUrl(want);
+    media.insertBefore(img, media.firstChild);
+    ref.img = img;
   }
 
   function ensureCards() {
@@ -886,25 +1118,31 @@
     const hasAny = state.games.length > 0;
     empty.hidden = list.length > 0;
     if (!list.length) {
-      $('#empty-title').textContent = hasAny ? 'No matches' : 'Your vault is empty';
+      const text = emptyFilterText();
+      $('#empty-title').textContent = hasAny ? text.title : 'Your vault is empty';
       $('#empty-sub').textContent = hasAny
-        ? 'Try a different filter or search term.'
-        : 'Import a Steam library, scan Lutris, or add a game by hand.';
+        ? text.sub
+        : 'Import from Steam or another launcher, scan a folder, or add a game by hand.';
       $('#empty-cta').style.display = hasAny ? 'none' : '';
     }
 
     refreshCounts();
   }
 
+  // Card + open game page. The page is updated even when no grid card exists
+  // (cards are only built once the grid layout has been shown).
   function updateCard(g) {
     const id = String(g.id);
+    if (state.selectedId === id) updateDetailLive(g);
     const ref = cards.get(id);
     if (!ref) return;
     const live = state.live[id];
     const running = typeof live === 'number';
     const launching = live === 'launching';
+    const wish = gvIsWishlisted(g);
 
     ref.title.textContent = g.name || 'Untitled';
+    setCardImage(ref, g._cover || g.coverUrl || '');
     ref.el.classList.toggle('is-running', running || launching);
 
     const base = Number(g.hours) || 0;
@@ -914,12 +1152,22 @@
     ref.status.textContent = running ? 'Running' : statusLabel(g);
     ref.status.dataset.status = running ? 'Playing' : statusLabel(g);
 
-    ref.play.title = running ? 'Stop' : launching ? 'Launching…' : 'Launch';
-    ref.play.innerHTML = running
-      ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
-      : '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    ref.play.hidden = wish && !running;
+    ref.play.title = running ? 'Stop' : launching ? 'Launching… (click to cancel)' : live === 'stopping' ? 'Stopping…' : 'Launch';
+    const playKind = running ? 'stop' : 'play';
+    if (ref.play.dataset.kind !== playKind) {
+      ref.play.dataset.kind = playKind;
+      ref.play.innerHTML = running
+        ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    }
+  }
 
-    if (state.selectedId === id) updateDetailLive(g);
+  // One place to repaint everything that shows a game's live state.
+  function refreshGameUi(g) {
+    if (!g) return;
+    updateCard(g);
+    refreshStage(g);
   }
 
   // ---------------------------------------------------------------------------
@@ -933,7 +1181,7 @@
   function openDetail(id) {
     window.__gvPerfMark && window.__gvPerfMark('detail');
     const active = document.activeElement;
-    state._focusReturn = (active && active.id === 'cmd-input') ? null : active;
+    state._focusReturn = (active && active.id === 'q') ? null : active;
     state.selectedId = String(id);
     renderDetail();
     $('#topbar').hidden = false;
@@ -995,7 +1243,7 @@
   function detailMeta(g) {
     const live = state.live[String(g.id)];
     const running = typeof live === 'number';
-    const total = (g.hours || 0) + (running ? live / 60 : 0);
+    const total = (Number(g.hours) || 0) + (running ? live / 60 : 0);
     const parts = [];
     if (gvIsWishlisted(g)) {
       parts.push('Wishlist');
@@ -1026,10 +1274,11 @@
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
+  // Whether the rail has anything beyond the always-present "At a glance"
+  // card (pulse or specs). The rail itself is always rendered for owned games.
   function railHasData(g) {
     const meta = g.steamMeta || {};
-    return true;
-    return !!((meta.metacritic && meta.metacritic.score) || Number(g.timeToBeat) > 0
+    return !!((meta.metacritic && meta.metacritic.score) || Number(g.timeToBeat) > 0 || Number(g.rating) > 0
       || (meta.recommended && meta.recommended.length) || (meta.minimum && meta.minimum.length));
   }
 
@@ -1049,7 +1298,7 @@
     const facts = [];
     const liveMins = state.live[String(g.id)];
     const liveHours = typeof liveMins === 'number' ? liveMins / 60 : 0;
-    const totalHours = (g.hours || 0) + liveHours;
+    const totalHours = (Number(g.hours) || 0) + liveHours;
     facts.push(['Playtime', totalHours > 0 ? fmtHours(totalHours) : '—']);
     facts.push(['Sessions', String(gvSessions(g).length)]);
     facts.push(['Last played', g.lastPlayed ? fmtDate(g.lastPlayed) : 'Never']);
@@ -1083,12 +1332,15 @@
     if (fresh) return;
     const res = await api.steamDetails(g.steamAppId).catch(() => null);
     if (!res || !res.ok || !res.data) return;
-    const hadRail = railHasData(g);
+    const hadData = railHasData(g);
     g.steamMeta = { ...res.data, version: 2, at: Date.now() };
     saveGamesSoon();
-    if (state.selectedId !== String(g.id)) return;
-    if (!hadRail && railHasData(g)) renderDetail();
-    else paintRail(g);
+    if (state.selectedId !== String(g.id) || gvIsWishlisted(g)) return;
+    // the rail element always exists on an owned game's page: repaint it in
+    // place (no full re-render) when there is something new to show
+    const rail = document.querySelector('#game-view [data-rail]');
+    if (!rail) renderDetail();
+    else if (hadData || railHasData(g)) paintRail(g);
   }
 
   const heroDecodes = new Map();
@@ -1097,7 +1349,7 @@
     if (heroDecodes.has(url)) return heroDecodes.get(url);
     const img = new Image();
     img.decoding = 'async';
-    img.src = url;
+    img.src = toFileUrl(url);
     const p = (img.decode ? img.decode() : Promise.resolve()).catch(() => {});
     heroDecodes.set(url, p);
     if (heroDecodes.size > 20) heroDecodes.delete(heroDecodes.keys().next().value);
@@ -1136,7 +1388,7 @@
 
     view.innerHTML = `
       <div class="gvx-hero">
-        ${hero ? `<img class="gvx-hero-art" src="${esc(hero)}" alt="" />` : '<div class="gvx-hero-art is-empty"></div>'}
+        ${hero ? `<img class="gvx-hero-art" src="${esc(toFileUrl(hero))}" alt="" />` : '<div class="gvx-hero-art is-empty"></div>'}
         <div class="gvx-scrim"></div>
         <div class="gvx-hero-inner">
         <div class="gvx-top">
@@ -1164,7 +1416,7 @@
 
         <div class="gvx-hero-body" tabindex="-1" aria-label="${esc(g.name)}">
           ${logo
-            ? `<img class="gvx-logo" src="${esc(logo)}" alt="${esc(g.name)}" />`
+            ? `<img class="gvx-logo" src="${esc(toFileUrl(logo))}" alt="${esc(g.name)}" />`
             : `<h1 class="gvx-title">${esc(g.name)}</h1>`}
           <div class="gvx-meta">${detailMeta(g)}</div>
           <div class="gvx-play-row">
@@ -1222,6 +1474,7 @@
     if (!wish) paintLedger(g);
     wireDetail(g, wish);
     startDetailTick(g);
+    state._detailRunning = { id: String(g.id), running: typeof state.live[String(g.id)] === 'number' };
     if (!wish) loadSteamMeta(g);
   }
 
@@ -1278,7 +1531,7 @@
     const paint = () => {
       const valueEl = document.querySelector('[data-timer-value]');
       const liveDur = document.querySelector('[data-live-dur]');
-      if (!valueEl) { stopDetailTick(); return; }
+      if (!valueEl || typeof state.live[String(g.id)] !== 'number') { stopDetailTick(); return; }
       const elapsed = Math.max(0, Date.now() - state.liveStart[String(g.id)]);
       valueEl.textContent = Sessions.formatClock(elapsed);
       if (liveDur) liveDur.textContent = Sessions.formatClock(elapsed);
@@ -1288,9 +1541,33 @@
     detailTick = setInterval(paint, 1000);
   }
 
+  // Ledger, session count and at-a-glance after a session started/ended.
+  function repaintDetailHistory(g) {
+    const view = $('#game-view');
+    if (!view || view.hidden || state.selectedId !== String(g.id) || gvIsWishlisted(g)) return;
+    paintLedger(g);
+    paintRail(g);
+    const countEl = view.querySelector('.gvx-ledger-count');
+    if (countEl) {
+      const n = Sessions.sessionStats(gvSessions(g)).count;
+      countEl.textContent = `${n} session${n === 1 ? '' : 's'}`;
+    }
+  }
+
   function updateDetailLive(g) {
     const view = $('#game-view');
     if (!view || view.hidden) return;
+    const id = String(g.id);
+    const running = typeof state.live[id] === 'number';
+    if (running) {
+      if (!detailTick) startDetailTick(g);
+    } else {
+      stopDetailTick();
+      if (state.liveStart) delete state.liveStart[id];
+    }
+    const flipped = state._detailRunning && state._detailRunning.id === id && state._detailRunning.running !== running;
+    state._detailRunning = { id, running };
+    if (flipped) repaintDetailHistory(g);
     const timerEl = view.querySelector('[data-timer]');
     if (timerEl) timerEl.innerHTML = detailTimerHtml(g);
     const metaEl = view.querySelector('.gvx-meta');
@@ -1301,7 +1578,9 @@
       const running = typeof live === 'number';
       const busy = live === 'launching' || live === 'stopping';
       playBtn.classList.toggle('is-live', running);
-      playBtn.disabled = busy;
+      playBtn.classList.toggle('is-busy', busy);
+      // launching stays clickable: a second click cancels it
+      playBtn.disabled = live === 'stopping';
       const label = playBtn.querySelector('[data-play-label]');
       if (label) label.textContent = busy ? (live === 'launching' ? 'Launching…' : 'Stopping…') : running ? 'Stop' : 'Play';
       const icon = playBtn.querySelector('svg');
@@ -1314,10 +1593,18 @@
   }
 
   function setFinished(g, value) {
+    const wasWish = gvIsWishlisted(g);
     g.status = value ? 'Finished' : 'Playing';
     if (value) g.wishlisted = false;
     saveGamesSoon();
     state._shelfKey = '';
+    // a wishlisted game's page has a different layout (no Play/Finish row):
+    // leaving the wishlist needs a full re-render, not a button patch
+    if (wasWish && !gvIsWishlisted(g) && state.selectedId === String(g.id)) {
+      renderDetail();
+      renderLibrary();
+      return;
+    }
     const view = $('#game-view');
     const btn = view.querySelector('[data-finish]');
     if (btn) {
@@ -1331,7 +1618,21 @@
   }
 
   function toggleDetailWish(g) {
-    g.wishlisted = !gvIsWishlisted(g);
+    if (gvIsWishlisted(g)) {
+      // Leaving the wishlist: the migration left status null (and legacy
+      // data may still say 'Want'); give it a real library status so it
+      // shows up in the Playing tab and counts.
+      g.wishlisted = false;
+      g.status = g._prevStatus === 'Finished' ? 'Finished' : 'Playing';
+      delete g._prevStatus;
+    } else {
+      // A wishlisted game is not owned yet, so it cannot stay Finished.
+      // Keep the old status for this session (not persisted: '_' keys are
+      // stripped on save) so pressing W twice is a no-op.
+      g._prevStatus = g.status;
+      g.wishlisted = true;
+      if (g.status === 'Finished') g.status = 'Playing';
+    }
     saveGamesSoon();
     state._shelfKey = '';
     renderDetail();
@@ -1420,7 +1721,11 @@
     card.classList.add('is-open');
     enableSheetDrag(card);
     requestAnimationFrame(() => {
-      const target = card.querySelector('[autofocus], input, select, textarea, button, [href]');
+      // an explicit [data-autofocus] wins over document order (the close X
+      // comes first in every header)
+      if (!card.isConnected) return;
+      const target = card.querySelector('[data-autofocus], [autofocus]')
+        || card.querySelector('input, select, textarea, button, [href]');
       (target || card).focus({ preventScroll: true });
     });
     wrap.onclick = (e) => { if (e.target === wrap) closeModal(); };
@@ -1474,6 +1779,9 @@
     head.style.touchAction = 'none';
     let startY = 0, dy = 0, lastY = 0, lastT = 0, vel = 0, active = false;
     head.addEventListener('pointerdown', (e) => {
+      // touch/pen only: a quick mouse flick across the header must never
+      // throw away a half-filled form
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
       if (e.button !== 0 || e.target.closest('button, a, input, select, textarea')) return;
       active = true; startY = e.clientY; dy = 0; lastY = e.clientY; lastT = performance.now(); vel = 0;
       try { head.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1578,7 +1886,7 @@
         <div class="field">
           <label for="f-name">Title</label>
           <div class="combo">
-            <input class="input" id="f-name" value="${esc(g.name)}" placeholder="Start typing a game name"
+            <input class="input" id="f-name" value="${esc(g.name)}" placeholder="Start typing a game name" data-autofocus
                    autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="f-name-list" />
             <div id="f-name-list" class="combo-menu" role="listbox" hidden></div>
           </div>
@@ -1653,10 +1961,11 @@
         </div>
         <div class="field">
           <label>Wishlist</label>
-          <div class="field-row" style="align-items:center">
-            <span class="hint" style="flex:1">Not in your library yet — no play tracking</span>
-            <input type="checkbox" data-wish-edit ${gvIsWishlisted(g) ? 'checked' : ''} />
-          </div>
+          <label class="gv-check">
+            <input type="checkbox" data-wish-edit aria-describedby="f-wish-hint" ${gvIsWishlisted(g) ? 'checked' : ''} />
+            <span>On my wishlist</span>
+          </label>
+          <div class="hint" id="f-wish-hint">Not in your library yet — no play tracking</div>
         </div>
         <div class="field">
           <label for="f-notes">Notes</label>
@@ -1670,6 +1979,12 @@
     `, { className: 'game-modal' });
 
     let chosen = g.sgdbId ? { id: g.sgdbId, name: g.name } : null;
+
+    // Every await below re-checks that this dialog is still the open one:
+    // closeModal() bumps modalSeq immediately, while the card itself stays in
+    // the DOM for the close animation.
+    const modalToken = modalSeq;
+    const alive = () => modalToken === modalSeq && card.isConnected;
 
     const nameInput = card.querySelector('#f-name');
     const comboMenu = card.querySelector('#f-name-list');
@@ -1695,7 +2010,7 @@
     function renderStrip() {
       for (const el of card.querySelectorAll('[data-slot]')) {
         const slot = el.dataset.slot;
-        el.style.backgroundImage = art[slot] ? `url('${art[slot]}')` : '';
+        el.style.backgroundImage = art[slot] ? cssUrl(art[slot]) : '';
         el.classList.toggle('is-empty', !art[slot]);
       }
       const filled = SLOTS.filter((slot) => art[slot]).length;
@@ -1717,6 +2032,9 @@
     let comboItems = [];
     let comboIndex = -1;
     let comboTimer = null;
+    let comboSeq = 0;      // latest title search; older replies are dropped
+    let autofillSeq = 0;   // latest artwork autofill
+    let artSeq = 0;        // latest artwork grid request
 
     function closeCombo() {
       comboMenu.hidden = true;
@@ -1724,7 +2042,7 @@
       comboIndex = -1;
     }
 
-    function renderCombo(groups) {
+    function renderCombo(groups, emptyText = 'No match') {
       comboItems = [];
       let html = '';
       for (const group of groups) {
@@ -1741,7 +2059,7 @@
         }
       }
       if (!html) {
-        comboMenu.innerHTML = '<div class="combo-empty">No match</div>';
+        comboMenu.innerHTML = `<div class="combo-empty">${esc(emptyText)}</div>`;
       } else {
         comboMenu.innerHTML = html;
         for (const el of comboMenu.querySelectorAll('.combo-item')) {
@@ -1761,7 +2079,8 @@
     }
 
     async function searchCombo(query) {
-      const q = query.trim();
+      const seq = ++comboSeq;
+      const q = String(query || '').trim();
       if (q.length < 2) { closeCombo(); return; }
 
       const localHits = window.Fuzzy.bestMatch(q, state.games.filter((x) => x.id !== g.id), (x) => x.name, { limit: 4 })
@@ -1770,20 +2089,26 @@
         }));
 
       let sgdbHits = [];
+      let noKey = false;
       if (api.sgdbGames) {
         const res = await api.sgdbGames(q).catch(() => null);
-        if (res && res.ok) {
+        // a newer search, a closed dialog, an edited title or a blurred
+        // input all make this reply stale: never reopen the menu for it
+        if (seq !== comboSeq || !alive() || nameInput.value.trim() !== q || document.activeElement !== nameInput) return;
+        if (res && res.ok && Array.isArray(res.data)) {
           sgdbHits = res.data.slice(0, 6).map((hit) => ({
             kind: 'sgdb', id: hit.id, name: hit.name,
             meta: hit.releaseDate ? String(hit.releaseDate).slice(0, 4) : 'SteamGridDB',
           }));
+        } else if (res && res.error && res.error.code === 'NO_KEY') {
+          noKey = true;
         }
       }
 
       renderCombo([
         { title: 'In your library', items: localHits },
         { title: 'SteamGridDB', items: sgdbHits },
-      ]);
+      ], noKey ? 'Add a SteamGridDB key in Settings to search artwork' : 'No match');
     }
 
     async function chooseCombo(index) {
@@ -1822,13 +2147,27 @@
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCombo(); }
     });
 
-    nameInput.addEventListener('blur', () => setTimeout(closeCombo, 150));
+    nameInput.addEventListener('blur', () => {
+      clearTimeout(comboTimer);
+      setTimeout(() => {
+        if (document.activeElement === nameInput) return;   // focus came back
+        comboSeq += 1;                                      // drop in-flight searches
+        closeCombo();
+      }, 150);
+    });
 
     // ---- artwork autofill ---------------------------------------------
     async function autofill(id, name) {
       if (!api.sgdbAutofill) return;
+      const seq = ++autofillSeq;
+      const wantName = nameInput.value.trim();
       if (artStatus) artStatus.textContent = 'Fetching artwork…';
       const res = await api.sgdbAutofill({ id, name }).catch(() => null);
+      // stale: a newer pick, a closed dialog, or the title was edited since
+      if (seq !== autofillSeq || !alive() || nameInput.value.trim() !== wantName) {
+        if (alive() && seq === autofillSeq) renderStrip();   // clear "Fetching…"
+        return;
+      }
       if (!res || !res.ok) {
         if (artStatus) {
           artStatus.textContent = res && res.error && res.error.code === 'NO_KEY'
@@ -1851,24 +2190,24 @@
     }
 
     // ---- artwork grid --------------------------------------------------
-    function renderArtGrid(append) {
-      const tab = art.tab;
+    function renderArtGrid(tab, append) {
       const items = art.items[tab];
       if (!items.length) {
         artResults.innerHTML = '<div class="art-empty">No artwork found.</div>';
         artMore.hidden = true;
         return;
       }
-      const html = items.map((asset) => `
+      const thumbHtml = (list) => list.map((asset) => `
         <button type="button" class="sg-thumb ${tab}" data-url="${esc(asset.url)}">
           <img src="${esc(asset.thumb || asset.url)}" alt="" loading="lazy" decoding="async" />
         </button>`).join('');
 
-      let container = artResults.querySelector('.art-grid');
-      if (append && container) {
-        container.insertAdjacentHTML('beforeend', html);
+      // append: the number of items already on screen; only the rest is added
+      let container = artResults.querySelector(`.art-grid.${tab}`);
+      if (typeof append === 'number' && append >= 0 && container) {
+        container.insertAdjacentHTML('beforeend', thumbHtml(items.slice(append)));
       } else {
-        artResults.innerHTML = `<div class="art-grid ${tab}">${html}</div>`;
+        artResults.innerHTML = `<div class="art-grid ${tab}">${thumbHtml(items)}</div>`;
         container = artResults.querySelector('.art-grid');
       }
       for (const el of container.querySelectorAll('[data-url]')) {
@@ -1882,21 +2221,35 @@
     }
 
     async function loadArtTab(slot, page = 0, append = false) {
+      const seq = ++artSeq;
       if (!chosen || !chosen.id) {
         artResults.innerHTML = '<div class="art-empty">Search for the game above first.</div>';
         return;
       }
-      artResults.innerHTML = '<div class="art-empty">Loading…</div>';
-      const res = await api.sgdbAssets({ kind: KIND[slot], id: chosen.id, page, styles: art.style ? [art.style] : undefined }).catch(() => null);
+      const gameId = chosen.id;
+      const style = art.style;
+      // "Load more" keeps the current grid on screen while the page loads
+      if (!append) artResults.innerHTML = '<div class="art-empty">Loading…</div>';
+      else artMore.disabled = true;
+      const res = await api.sgdbAssets({ kind: KIND[slot], id: gameId, page, styles: style ? [style] : undefined }).catch(() => null);
+      if (append && artMore.isConnected) artMore.disabled = false;
+      // stale: a newer request, a closed dialog, another tab/style/game since
+      if (seq !== artSeq || !alive() || art.tab !== slot || art.style !== style || !chosen || chosen.id !== gameId) return;
       if (!res || !res.ok) {
         artResults.innerHTML = `<div class="art-empty">${res && res.error ? esc(res.error.message) : 'Could not load artwork'}</div>`;
         return;
       }
       const list = (res.data.items || []).map((item) => ({ url: item.url, thumb: item.thumb, id: item.id }));
       art.hasMore = !!res.data.hasMore;
-      art.items[slot] = append ? art.items[slot].concat(list.filter((n) => !art.items[slot].some((o) => o.url === n.url))) : list;
+      const shown = append ? art.items[slot].length : -1;
+      if (append) {
+        const have = new Set(art.items[slot].map((o) => o.url));
+        art.items[slot] = art.items[slot].concat(list.filter((n) => !have.has(n.url)));
+      } else {
+        art.items[slot] = list;
+      }
       art.page[slot] = page;
-      renderArtGrid(append);
+      renderArtGrid(slot, shown);
       if (!append) artPanel.scrollIntoView({ block: 'start' });
     }
 
@@ -1938,6 +2291,7 @@
         const name = (nameInput.value || g.name || '').trim();
         if (name) {
           await autofill(null, name);
+          if (!alive() || !art.expanded) return;
           if (!chosen || !chosen.id) {
             artResults.innerHTML = '<div class="art-empty">No SteamGridDB match. Pick the game from the title dropdown.</div>';
             return;
@@ -1986,13 +2340,22 @@
       // Editing an existing game with art already: just fill the strip.
     }
 
-    let finished = gvStatusOf(g) === 'Finished';
+    // Finished and Wishlist are mutually exclusive: a wishlisted game is not
+    // owned yet, so it cannot be finished (legacy status 'Want' = wishlisted).
     let wishlisted = gvIsWishlisted(g);
+    let finished = !wishlisted && gvStatusOf(g) === 'Finished';
     const finishedToggle = card.querySelector('[data-finished-edit]');
-    if (finishedToggle) finishedToggle.onchange = () => { finished = finishedToggle.checked; };
-
     const wishToggle = card.querySelector('[data-wish-edit]');
-    if (wishToggle) wishToggle.onchange = () => { wishlisted = wishToggle.checked; };
+    if (finishedToggle) finishedToggle.checked = finished;
+    if (wishToggle) wishToggle.checked = wishlisted;
+    if (finishedToggle) finishedToggle.onchange = () => {
+      finished = finishedToggle.checked;
+      if (finished && wishToggle) { wishToggle.checked = false; wishlisted = false; }
+    };
+    if (wishToggle) wishToggle.onchange = () => {
+      wishlisted = wishToggle.checked;
+      if (wishlisted && finishedToggle) { finishedToggle.checked = false; finished = false; }
+    };
 
     card.querySelector('[data-browse]').onclick = async () => {
       const file = await api.pickExe();
@@ -2004,7 +2367,7 @@
     let saving = false;
     const saveBtnEl = card.querySelector('[data-save]');
     saveBtnEl.onclick = async () => {
-      if (saving) return;
+      if (saving || !alive()) return;
       saving = true;
       saveBtnEl.disabled = true;
       const name = card.querySelector('#f-name').value.trim();
@@ -2034,7 +2397,12 @@
         localize(iconUrl, 'icon'),
       ]);
 
-      if (!card.isConnected) return;
+      // Cancel / Esc / backdrop while the artwork downloaded: the user backed
+      // out, so nothing is saved even though the card is still animating out.
+      if (!alive()) return;
+
+      const isWish = !!wishlisted && !finished;
+      const nextStatus = finished ? 'Finished' : 'Playing';
 
       if (isNew) {
         state.games.unshift({
@@ -2050,8 +2418,8 @@
           timeToBeat,
           artVersion: 2,
           notes,
-          status: finished ? 'Finished' : 'Playing',
-          wishlisted,
+          status: nextStatus,
+          wishlisted: isWish,
           hours: 0,
           sessions: [],
           added: Date.now(),
@@ -2059,7 +2427,7 @@
         });
       } else {
         Object.assign(g, {
-          name, exePath, coverUrl: coverLocal, heroUrl: heroLocal, logoUrl: logoLocal, iconUrl: iconLocal, notes, status: finished ? 'Finished' : (g.status === 'Finished' ? 'Playing' : (g.status || 'Playing')), wishlisted,
+          name, exePath, coverUrl: coverLocal, heroUrl: heroLocal, logoUrl: logoLocal, iconUrl: iconLocal, notes, status: nextStatus, wishlisted: isWish,
           sgdbId: chosen ? chosen.id : (g.sgdbId || null),
           steamAppId,
           timeToBeat,
@@ -2189,21 +2557,80 @@
 
     for (const btn of card.querySelectorAll('[data-close]')) btn.onclick = closeModal;
 
-    const keyOf = (c) => c.sourceId || (c.exePath ? 'exe:' + c.exePath.toLowerCase() : 'name:' + String(c.name || '').toLowerCase());
-    const existingFor = (c) => state.games.find((g) => keyOf(g) === keyOf(c))
-      || (c.exePath && state.games.find((g) => g.exePath && g.exePath.toLowerCase() === c.exePath.toLowerCase()));
+    // Duplicate detection. Paths compare with normalized separators, and
+    // case-insensitively on Windows; Steam entries also match by AppID (so a
+    // wishlist entry for a game you already have is not offered again).
+    const IS_WIN = /Windows/i.test(navigator.userAgent);
+    const normPath = (p) => {
+      let s = String(p || '').trim().replace(/[\\/]+/g, '/').replace(/\/$/, '');
+      if (IS_WIN) s = s.toLowerCase();
+      return s;
+    };
+    const appIdOf = (x) => {
+      const n = Number(x && x.steamAppId);
+      if (Number.isFinite(n) && n > 0) return n;
+      const m = /^steam(?:-owned|-wishlist)?:(\d+)$/.exec(String((x && x.sourceId) || ''));
+      return m ? Number(m[1]) : 0;
+    };
+    const nameKey = (x) => String((x && x.name) || '').trim().toLowerCase();
+    // Lookup maps over the library, built once per review paint instead of
+    // scanning state.games for every candidate on every checkbox change.
+    let libIndex = null;
+    const buildLibIndex = () => {
+      const bySource = new Map(), byPath = new Map(), byApp = new Map(), byName = new Map();
+      for (const g of state.games) {
+        if (g.sourceId) bySource.set(String(g.sourceId), g);
+        const p = normPath(g.exePath);
+        if (p && !byPath.has(p)) byPath.set(p, g);
+        const app = appIdOf(g);
+        if (app && !byApp.has(app)) byApp.set(app, g);
+        // name only identifies entries that have neither a sourceId nor a path
+        if (!g.sourceId && !p && nameKey(g) && !byName.has(nameKey(g))) byName.set(nameKey(g), g);
+      }
+      libIndex = { bySource, byPath, byApp, byName, size: state.games.length };
+      return libIndex;
+    };
+    const existingFor = (c) => {
+      const ix = libIndex && libIndex.size === state.games.length ? libIndex : buildLibIndex();
+      if (c.sourceId && ix.bySource.has(String(c.sourceId))) return ix.bySource.get(String(c.sourceId));
+      const p = normPath(c.exePath);
+      if (p && ix.byPath.has(p)) return ix.byPath.get(p);
+      const app = appIdOf(c);
+      if (app && ix.byApp.has(app)) return ix.byApp.get(app);
+      if (!c.sourceId && !p) return ix.byName.get(nameKey(c)) || null;
+      return null;
+    };
     const isNew = (c) => !existingFor(c);
     const picked = () => candidates.filter((c) => c._checked && isNew(c));
     const labelOf = (id) => (sources.find((s) => s.id === id) || {}).label || id;
 
     let steamUser = null;
 
-    const loadOwned = (games) => {
+    const loadOwned = (games, wishlist) => {
       scanSeq += 1;
       busy = false;
       scanError = null;
       pickedNothing = false;
-      candidates = (games || []).map((g) => ({ ...g, _checked: true }));
+      candidates = (games || []).filter((g) => g && g.name).map((g) => ({ ...g, wishlisted: false, _checked: true }));
+      // Wishlist entries are review candidates too, unchecked by default and
+      // clearly marked; skip anything the account already owns.
+      const ownedApps = new Set(candidates.map(appIdOf).filter(Boolean));
+      const seenWish = new Set();
+      for (const w of wishlist || []) {
+        const appid = Number(w && w.appid);
+        const name = w && typeof w.name === 'string' ? w.name.trim() : '';
+        if (!appid || !name || ownedApps.has(appid) || seenWish.has(appid)) continue;
+        seenWish.add(appid);
+        candidates.push({
+          name,
+          source: 'Steam wishlist',
+          sourceId: `steam-wishlist:${appid}`,
+          steamAppId: appid,
+          exePath: '', installDir: '', hours: 0, iconPath: '',
+          wishlisted: true,
+          _checked: false,
+        });
+      }
       activeId = 'steam-owned';
       inReview = true;
       optionsStep.hidden = true;
@@ -2251,7 +2678,7 @@
           if (d.friends && d.friends.length) bits.push(`${d.friends.length} friends`);
           toast(`Steam signed in · ${bits.join(' · ')}`, 'ok');
           state.steamWishlist = d.wishlist || [];
-          loadOwned(d.owned);
+          loadOwned(d.owned, d.wishlist);
         } else {
           const msg = (res && res.error && res.error.message) || 'Steam sign-in failed';
           hint.textContent = 'Not connected';
@@ -2265,9 +2692,7 @@
       if (save) save.onclick = async () => {
         const key = input.value.trim();
         if (!key) { toast('Paste a Steam Web API key first', 'error'); return; }
-        state.config.steamKey = key;
-        state.config.steamId = steamUser ? steamUser.steamId : state.config.steamId;
-        await api.saveConfig(state.config).catch(() => null);
+        await saveConfigPatch({ steamKey: key, steamId: steamUser ? steamUser.steamId : (state.config.steamId || null) });
         panel.hidden = true;
         toast('Steam connected', 'ok');
         activeId = 'steam-owned';
@@ -2317,7 +2742,8 @@
 
     const metaFor = (c) => {
       const bits = [];
-      if (c.source) bits.push(c.source);
+      if (c.wishlisted) bits.push('Wishlist · not owned yet');
+      else if (c.source) bits.push(c.source);
       if (c.hours > 0) bits.push(`${Number(c.hours).toFixed(1).replace(/\.0$/, '')}h`);
       if (c.kind) bits.push(c.kind);
       return bits.join(' · ') || 'Game';
@@ -2329,17 +2755,24 @@
       if (busy) { listEl.innerHTML = `<div class="imp3-empty">Reading ${esc(labelOf(activeId))}…</div>`; return; }
       if (scanError) { listEl.innerHTML = `<div class="imp3-empty" role="alert">${esc(scanError)}</div>`; return; }
       if (!total) { listEl.innerHTML = `<div class="imp3-empty">${pickedNothing ? 'Nothing was chosen.' : 'No games found.'}</div>`; return; }
+      buildLibIndex();
+      let wishHeader = false;
       listEl.innerHTML = candidates.map((c, idx) => {
         const exists = !isNew(c);
+        let head = '';
+        if (c.wishlisted && !wishHeader) {
+          wishHeader = true;
+          head = `<div class="imp3-group" role="listitem">Steam wishlist <span>· imported to your Wishlist, not the library</span></div>`;
+        }
         if (exists) {
-          return `<div class="imp3-item is-owned" role="listitem" aria-label="${esc(c.name)} — already in your library">
+          return `${head}<div class="imp3-item is-owned${c.wishlisted ? ' is-wish' : ''}" role="listitem" aria-label="${esc(c.name)} — already in your library">
             <span class="import-row-check" aria-hidden="true">✓</span>
             <span class="import-row-main"><span class="import-row-name">${esc(c.name)}</span><span class="import-row-meta">${esc(metaFor(c))}</span></span>
             <button class="import-update" data-update="${idx}" aria-label="Update art for ${esc(c.name)}">Update art</button>
           </div>`;
         }
-        return `<label class="imp3-item" role="listitem">
-          <input type="checkbox" data-idx="${idx}" aria-label="${esc(c.name)}, new" ${c._checked ? 'checked' : ''} />
+        return `${head}<label class="imp3-item${c.wishlisted ? ' is-wish' : ''}" role="listitem">
+          <input type="checkbox" data-idx="${idx}" aria-label="${esc(c.name)}, ${c.wishlisted ? 'wishlist' : 'new'}" ${c._checked ? 'checked' : ''} />
           <span class="import-row-main"><span class="import-row-name">${esc(c.name)}</span><span class="import-row-meta" aria-hidden="true">${esc(metaFor(c))}</span></span>
         </label>`;
       }).join('');
@@ -2405,7 +2838,7 @@
         if (seq !== scanSeq) return;
         if (found && found.error) throw new Error(found.error);
         if (seq !== scanSeq) return;
-        candidates = (found || []).filter((c) => c && c.name).map((c) => ({ ...c, _checked: true }));
+        candidates = (found || []).filter((c) => c && c.name).map((c) => ({ ...c, wishlisted: !!c.wishlisted, _checked: !c.wishlisted }));
         pickedNothing = candidates.length === 0 && (id === 'folder' || id === 'file');
         const src = sources.find((s) => s.id === id);
         if (src && !src.action) src.count = candidates.length;
@@ -2439,6 +2872,7 @@
       if (!list.length) return;
       primaryBtn.disabled = true;
       const total = list.length;
+      const wishCount = list.filter((c) => c.wishlisted).length;
       for (let i = 0; i < total; i++) {
         primaryBtn.textContent = `Importing ${i + 1}/${total}…`;
         const c = list[i];
@@ -2454,7 +2888,7 @@
           hours: Number(c.hours) || 0,
           sessions: [],
           status: 'Playing',
-          wishlisted: false,
+          wishlisted: !!c.wishlisted,
           notes: '',
           added: Date.now(),
           iconUrl: c.iconPath ? fileUrl(c.iconPath) : null,
@@ -2464,7 +2898,11 @@
       closeModal();
       state._shelfKey = '';
       renderLibrary();
-      toast(`Imported ${total} game${total === 1 ? '' : 's'} · fetching artwork`, 'ok');
+      const owned = total - wishCount;
+      const parts = [];
+      if (owned) parts.push(`Imported ${owned} game${owned === 1 ? '' : 's'}`);
+      if (wishCount) parts.push(`${wishCount} added to Wishlist`);
+      toast(`${parts.join(' · ')} · fetching artwork`, 'ok');
       enrichArt().catch(() => {});
     };
 
@@ -2529,10 +2967,10 @@
 
         <div class="field">
           <label>On login</label>
-          <div class="field-row" style="align-items:center">
-            <span class="hint" style="flex:1">Start GameVault when I log in</span>
+          <label class="gv-check">
             <input type="checkbox" data-autostart ${startupOn ? 'checked' : ''} />
-          </div>
+            <span>Start GameVault when I log in</span>
+          </label>
         </div>
 
         ${info.wayland ? `
@@ -2556,7 +2994,11 @@
             <button class="btn" type="button" data-perf-bench>Run 20s benchmark</button>
             <span class="hint" style="flex:1">Don't touch the window until it says done</span>
           </div>
-          <div class="hint" id="s-perf-path">Stats are written every second to perf.log</div>
+          <label class="gv-check" style="margin-top:6px">
+            <input type="checkbox" data-perf-record ${state.config.perfLog === true ? 'checked' : ''} />
+            <span>Record frame stats to perf.log</span>
+          </label>
+          <div class="hint" id="s-perf-path">When on, stats are written every second to perf.log</div>
         </div>
 
         <div class="section-label">About</div>
@@ -2574,7 +3016,7 @@
 
     for (const pill of card.querySelectorAll('[data-palette-opt]')) {
       pill.onclick = () => {
-        applyPalette(pill.dataset.paletteOpt, { announce: true });
+        applyPalette(pill.dataset.paletteOpt, { announce: true, persist: true });
         for (const p of card.querySelectorAll('[data-palette-opt]')) p.classList.toggle('is-active', p === pill);
       };
     }
@@ -2597,22 +3039,36 @@
     }
     const perfPathEl = card.querySelector('#s-perf-path');
     if (perfPathEl && api.perfPath) api.perfPath().then((p) => { perfPathEl.textContent = `Log: ${p}`; }).catch(() => {});
+    const perfRecord = card.querySelector('[data-perf-record]');
+    if (perfRecord) perfRecord.onchange = async () => {
+      await saveConfigPatch({ perfLog: perfRecord.checked });
+      syncPerfRecorder();
+      toast(perfRecord.checked ? 'Recording frame stats to perf.log' : 'Frame stats recording off', 'ok');
+    };
     const benchBtn = card.querySelector('[data-perf-bench]');
     if (benchBtn) benchBtn.onclick = async () => {
       closeModal();
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       const mark = (m) => { if (window.__gvPerfMark) window.__gvPerfMark(m); };
-      await wait(600);
-      for (const f of ['Playing', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
-      mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
-      mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
-      mark('bench:grid'); $('#btn-view').click(); await wait(800);
-      mark('bench:scroll');
-      const lib = $('#library');
-      for (let i = 0; i < 12; i++) { lib.scrollTop += 140; await wait(60); }
-      mark('bench:detail'); if (state.games[0]) openDetail(state.games[0].id); await wait(1000);
-      mark('bench:back'); if (state.selectedId) closeDetail(); await wait(500);
-      if (api.perfLog) api.perfLog({ t: Date.now(), benchmark: 'done', tier: state.tier });
+      // the benchmark always records, whatever the setting says
+      perfForced += 1;
+      syncPerfRecorder();
+      try {
+        await wait(600);
+        for (const f of ['Playing', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
+        mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
+        mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
+        mark('bench:grid'); $('#btn-view').click(); await wait(800);
+        mark('bench:scroll');
+        const lib = $('#library');
+        for (let i = 0; i < 12; i++) { lib.scrollTop += 140; await wait(60); }
+        mark('bench:detail'); if (state.games[0]) openDetail(state.games[0].id); await wait(1000);
+        mark('bench:back'); if (state.selectedId) closeDetail(); await wait(1100);
+        if (api.perfLog) api.perfLog({ t: Date.now(), benchmark: 'done', tier: state.tier });
+      } finally {
+        perfForced -= 1;
+        syncPerfRecorder();
+      }
       toast('Benchmark finished — perf.log updated', 'ok');
     };
 
@@ -2637,7 +3093,7 @@
 
     for (const pill of card.querySelectorAll('[data-tier]')) {
       pill.onclick = () => {
-        applyTier(pill.dataset.tier, { announce: true });
+        applyTier(pill.dataset.tier, { announce: true, persist: true });
         for (const p of card.querySelectorAll('[data-tier]')) p.classList.toggle('is-active', p === pill);
       };
     }
@@ -2680,9 +3136,7 @@
     if (steamSave) steamSave.onclick = async () => {
       const key = card.querySelector('#s-steam-key').value.trim();
       if (!key) { toast('Paste a Steam Web API key first', 'error'); return; }
-      state.config.steamKey = key;
-      state.config.steamId = steamUser ? steamUser.steamId : state.config.steamId;
-      await api.saveConfig(state.config).catch(() => null);
+      await saveConfigPatch({ steamKey: key, steamId: steamUser ? steamUser.steamId : (state.config.steamId || null) });
       card.querySelector('#s-steam-key').value = '';
       if (steamHint) steamHint.textContent = `SteamID ${state.config.steamId || 'not set'} · key saved`;
       toast('Steam key saved', 'ok');
@@ -2710,346 +3164,8 @@
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // Command panel — the surface morphs, then the content fades in at rest
-  // ---------------------------------------------------------------------------
-
-  const cmd = { open: false, index: 0, items: [], anim: null, openedAt: 0 };
-
-  function cmdEls() {
-    return {
-      root: $('#cmd'),
-      input: $('#cmd-input'),
-      list: $('#cmd-list'),
-      count: $('#cmd-count'),
-      dock: $('#search-dock'),
-    };
-  }
-
-  function cmdGeometry() {
-    const { root, dock } = cmdEls();
-    const d = dock.getBoundingClientRect();
-    const t = root.getBoundingClientRect();
-    return {
-      dx: d.left + d.width / 2 - (t.left + t.width / 2),
-      dy: d.top + d.height / 2 - (t.top + t.height / 2),
-      sx: Math.max(0.05, d.width / t.width),
-      sy: Math.max(0.05, d.height / t.height),
-    };
-  }
-
-  const IS_SHOT = new URLSearchParams(location.search).has('shot');
-
-  const reducedMotion = () => !window.__gvForceAnim && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  // Shrink to a bubble, fly, pop, wobble, settle. Only the surface moves.
-  function positionCmd() {
-    const root = $('#cmd');
-    const dock = $('#search-dock');
-    if (!root || !dock) return;
-    const d = dock.getBoundingClientRect();
-    const m = ($('#main') || document.querySelector('.main')).getBoundingClientRect();
-    // the spotlight sits in the middle of the library section, not under the bar
-    root.style.setProperty('--cmd-x', `${Math.round(m.left + m.width / 2)}px`);
-    root.style.setProperty('--cmd-y', `${Math.round(m.top + m.height / 2)}px`);
-  }
-
-  function openCmd() {
-    if (cmd.open) { const { input } = cmdEls(); input.focus(); input.select(); return; }
-    const modal = $('#modal');
-    if (modal && !modal.hidden) return;
-
-    const { root, input } = cmdEls();
-    cmd.open = true;
-    cmd.navigating = false;
-    cmd.openedAt = performance.now();
-    const seq = (cmd.seq = (cmd.seq || 0) + 1);
-
-    const reveal = () => {
-      if (!cmd.open) return;
-      root.classList.add('is-bar', 'is-full');
-    };
-
-    const run = () => {
-      root.hidden = false;
-      root.classList.remove('is-bar', 'is-full', 'is-closing');
-      const dockEl = $('#search-dock');
-      dockEl.classList.add('is-morphing');
-      dockEl.setAttribute('aria-expanded', 'true');
-      renderCmd(input.value || '');
-      positionCmd();
-      // layout exists even at opacity 0: focus now, so typing is never dropped
-      input.focus({ preventScroll: true });
-      input.setSelectionRange(input.value.length, input.value.length);
-      setTimeout(() => document.addEventListener('pointerdown', onCmdOutside, true), 0);
-    };
-
-    const canVT = document.startViewTransition && !reducedMotion() && !IS_SHOT;
-    if (canVT) {
-      const rs = document.documentElement.style;
-      rs.setProperty('--morph-dur', '420ms');
-      rs.setProperty('--morph-old', '160ms');
-      rs.setProperty('--morph-new', '420ms');
-      cmd.vt = document.startViewTransition(run);
-      setTimeout(reveal, 140);
-      cmd.vt.finished.finally(() => { if (cmd.open) reveal(); });
-    } else {
-      run();
-      reveal();
-      if (reducedMotion()) root.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 140 });
-    }
-  }
-
-  function closeCmd() {
-    if (!cmd.open) return;
-    const { root, input } = cmdEls();
-    const dockInput = $('#dock-input');
-    const early = performance.now() - (cmd.openedAt || 0) < 380;
-    cmd.open = false;
-    const seq = (cmd.seq = (cmd.seq || 0) + 1);
-    document.removeEventListener('pointerdown', onCmdOutside, true);
-
-    const finish = () => {
-      root.hidden = true;
-      root.classList.remove('is-closing');
-      input.value = '';
-      cmd.items = [];
-      cmd.index = 0;
-      const dock = $('#search-dock');
-      dock.classList.remove('is-expanded');
-      dock.classList.remove('is-morphing');
-      if (dockInput) dockInput.blur();
-      cmd.navigating = false;
-    };
-
-    const run = () => {
-      root.hidden = true;
-      root.classList.remove('is-bar', 'is-full');
-      const dockEl = $('#search-dock');
-      dockEl.classList.remove('is-morphing');
-      dockEl.setAttribute('aria-expanded', 'false');
-      finish();
-    };
-
-    const focusPill = () => {
-      if (!cmd.navigating && dockInput) dockInput.focus({ preventScroll: true });
-    };
-
-    const canVT = document.startViewTransition && !reducedMotion() && !IS_SHOT && !early;
-    if (canVT) {
-      const rs = document.documentElement.style;
-      rs.setProperty('--morph-dur', '260ms');
-      rs.setProperty('--morph-old', '260ms');
-      rs.setProperty('--morph-new', '120ms');
-      cmd.vt = document.startViewTransition(run);
-      cmd.vt.finished.finally(() => { if (cmd.seq === seq && !cmd.open) focusPill(); });
-    } else {
-      if (cmd.vt && cmd.vt.skipTransition) { try { cmd.vt.skipTransition(); } catch (_) {} }
-      run();
-      focusPill();
-    }
-  }
-
-  function onCmdOutside(e) {
-    if (!cmd.open) return;
-    const { root, dock } = cmdEls();
-    if (root.contains(e.target) || (dock && dock.contains(e.target))) return;
-    closeCmd();
-    // swallow the click that dismissed the panel so it doesn't hit the library
-    document.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); },
-      { capture: true, once: true });
-  }
-
-  function hlMatch(label, query) {
-    const q = query.trim();
-    if (!q) return esc(label);
-    const i = label.toLowerCase().indexOf(q.toLowerCase());
-    if (i < 0) return esc(label);
-    return `${esc(label.slice(0, i))}<mark>${esc(label.slice(i, i + q.length))}</mark>${esc(label.slice(i + q.length))}`;
-  }
-
-  function searchModel(query) {
-    const q = query.trim();
-    if (!q) {
-      const recent = state.games
-        .slice()
-        .sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))
-        .slice(0, 6);
-      return [
-        {
-          title: 'Recently played',
-          items: recent.map((g) => ({
-            kind: 'game', label: String(g.name || ''), game: g,
-            meta: [statusLabel(g), g.hours ? fmtHours(g.hours) : ''].filter(Boolean).join(' · '),
-          })),
-        },
-        { title: 'Actions', items: paletteActions(q) },
-      ];
-    }
-
-    const match = window.Fuzzy.bestMatch(q, state.games, (g) => `${g.name || ''} ${g.source || ''}`, {
-      threshold: 250,
-      limit: 20,
-    });
-
-    const groups = [];
-    if (match.all.length) {
-      groups.push({
-        title: `Games · ${match.all.length}`,
-        items: match.all.slice(0, 12).map(({ item: g, score }) => ({
-          kind: 'game',
-          label: String(g.name || ''),
-          game: g,
-          meta: [statusLabel(g), g.hours ? fmtHours(g.hours) : ''].filter(Boolean).join(' · '),
-          score,
-        })),
-      });
-    }
-
-    const actions = paletteActions(q);
-    if (actions.length) groups.push({ title: 'Actions', items: actions });
-    return groups;
-  }
-
-  function paletteActions(query) {
-    const actions = [
-      { kind: 'action', label: 'Add game', meta: 'A', run: () => openGameModal(null) },
-      { kind: 'action', label: 'Import games', meta: 'I', run: openImportModal },
-      { kind: 'action', label: 'Settings', meta: ',', run: openSettingsModal },
-      { kind: 'action', label: 'Toggle layout', meta: 'L', run: cycleView },
-    ];
-    if (!query.trim()) return actions;
-    return window.Fuzzy.bestMatch(query, actions, (a) => a.label, { threshold: 250 }).all.map((x) => x.item);
-  }
-
-  function renderCmd(query) {
-    const { list, count } = cmdEls();
-    const groups = searchModel(query);
-    cmd.items = [];
-    cmd.index = 0;
-
-    if (!groups.length) {
-      list.innerHTML = `<div class="cmd-empty">No games match “${esc(query)}”</div>`;
-      count.textContent = '0 results';
-      return;
-    }
-
-    let html = '';
-    for (const group of groups) {
-      html += `<div class="cmd-group">${esc(group.title)}</div>`;
-      for (const item of group.items) {
-        const i = cmd.items.length;
-        cmd.items.push(item);
-        html += `
-          <button class="cmd-item" id="cmd-opt-${i}" role="option" data-i="${i}" aria-selected="${i === 0}">
-            ${item.game && (item.game._cover || item.game.coverUrl) ? `<span class="ci-cover" style="background-image:url('${esc(item.game._cover || item.game.coverUrl)}')"></span>` : ''}
-            <span class="ci-label">${hlMatch(item.label, query)}</span>
-            <span class="ci-meta">${esc(item.meta || '')}</span>
-          </button>`;
-      }
-    }
-    list.innerHTML = html;
-    count.textContent = `${cmd.items.length} result${cmd.items.length === 1 ? '' : 's'}`;
-    cmdEls().input.setAttribute('aria-activedescendant', cmd.items.length ? 'cmd-opt-0' : '');
-
-    for (const el of list.querySelectorAll('.cmd-item')) {
-      el.addEventListener('mouseenter', () => setCmdActive(Number(el.dataset.i)));
-      el.addEventListener('click', () => runCmdItem(Number(el.dataset.i)));
-    }
-  }
-
-  function setCmdActive(i) {
-    const { list } = cmdEls();
-    cmd.index = Math.max(0, Math.min(i, cmd.items.length - 1));
-    for (const el of list.querySelectorAll('.cmd-item')) {
-      el.setAttribute('aria-selected', String(Number(el.dataset.i) === cmd.index));
-    }
-    const active = list.querySelector('.cmd-item[aria-selected="true"]');
-    if (active) active.scrollIntoView({ block: 'nearest' });
-    cmdEls().input.setAttribute('aria-activedescendant', `cmd-opt-${cmd.index}`);
-  }
-
-  function runCmdItem(i) {
-    const item = cmd.items[i];
-    if (!item) return;
-    cmd.navigating = true;
-    const dock = $('#search-dock');
-    cmdEls().input.blur();
-    closeCmd();
-    if (item.kind === 'game') {
-      setTimeout(() => {
-        openDetail(item.game.id);
-        state._focusReturn = dock || null;
-      }, 140);
-    } else if (item.run) {
-      setTimeout(item.run, 140);
-    }
-  }
-
-  function wireCmd() {
-    const { root, input, dock } = cmdEls();
-    const dockInput = $('#dock-input');
-    if (!dockInput) return; // spotlight replaced the old dock
-
-    const expandDock = () => {
-      dock.classList.add('is-expanded');
-      dockInput.focus();
-    };
-    const collapseDock = () => {
-      dock.classList.remove('is-expanded');
-      if (dockInput.value) { dockInput.value = ''; state.query = ''; renderLibrary(); }
-    };
-
-    dock.addEventListener('click', (e) => {
-      if (e.target === dockInput) return;
-      expandDock();
-    });
-    dockInput.addEventListener('focus', expandDock);
-    dockInput.addEventListener('blur', () => { if (!dockInput.value) dock.classList.remove('is-expanded'); });
-
-    dockInput.addEventListener('input', () => {
-      state.query = dockInput.value;
-      debouncedSearch();
-    });
-
-    dockInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        collapseDock();
-        dockInput.blur();
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        const first = filteredGames()[0];
-        if (first) { dockInput.blur(); openDetail(first.id); }
-      }
-    });
-
-    input.addEventListener('input', () => {
-      renderCmd(input.value);
-    });
-
-    input.addEventListener('compositionstart', () => { cmd.composing = true; });
-    input.addEventListener('compositionend', () => { cmd.composing = false; renderCmd(input.value); });
-
-    input.addEventListener('keydown', (e) => {
-      if (e.isComposing || e.keyCode === 229 || cmd.composing) return;
-      if (e.key === 'ArrowDown') { e.preventDefault(); setCmdActive(cmd.index + 1); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); setCmdActive(cmd.index - 1); }
-      else if (e.key === 'Home') { e.preventDefault(); setCmdActive(0); }
-      else if (e.key === 'End') { e.preventDefault(); setCmdActive(cmd.items.length - 1); }
-      else if (e.key === 'Enter') { e.preventDefault(); runCmdItem(cmd.index); }
-      else if (e.key === 'Tab') { e.preventDefault(); closeCmd(); }
-      else if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        if (input.value) { input.value = ''; renderCmd(''); }
-        else closeCmd();
-      }
-    });
-
-    input.addEventListener('focus', () => { if (!cmd.open && root.hidden) openCmd(); });
-  }
+  // Spotlight hooks: filled in by the spotlight block at the end of the file.
+  const spotHooks = { open: () => {}, close: () => {}, isOpen: () => false, resync: () => {} };
 
   // ---------------------------------------------------------------------------
   // Actions
@@ -3060,8 +3176,11 @@
   function cycleView() {
     const next = VIEWS[(VIEWS.indexOf(state.view) + 1) % VIEWS.length];
     state.view = next;
-    localStorage.setItem('gv.view', next);
-    if (next === 'shelf') state.sort = 'lastPlayed';
+    lsSet('gv.view', next);
+    // the user's sort choice survives layout changes (the shelf renders any
+    // order); keep the toolbar label in step with what is actually applied
+    state._shelfKey = '';
+    updateSortUi();
     applyView();
     renderLibrary();
     fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
@@ -3153,7 +3272,7 @@
     state.filter = filter;
     for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === filter);
     const title = $('#filter-title');
-    if (title) title.textContent = filter === 'Want' ? 'Wishlist' : filter;
+    if (title) title.textContent = filterLabel(filter);
     syncSidePill();
     state._gridAnimate = true;
     const next = filteredGames()[0];
@@ -3168,22 +3287,71 @@
     apply();
   }
 
+  // "Launching…" must never stick: if the tracker never reports the game
+  // (e.g. Steam opened an install dialog instead), give up after 45 s.
+  const LAUNCH_TIMEOUT_MS = 45000;
+  const launchWatchdogs = new Map();
+
+  function clearLaunchWatchdog(id) {
+    const key = String(id);
+    const t = launchWatchdogs.get(key);
+    if (t) { clearTimeout(t); launchWatchdogs.delete(key); }
+  }
+
+  function armLaunchWatchdog(g) {
+    const id = String(g.id);
+    clearLaunchWatchdog(id);
+    launchWatchdogs.set(id, setTimeout(() => {
+      launchWatchdogs.delete(id);
+      if (state.live[id] !== 'launching') return;
+      delete state.live[id];
+      refreshGameUi(state.games.find((x) => String(x.id) === id));
+      toast(`${g.name || 'The game'} was launched, but GameVault couldn't detect it running — playtime isn't being tracked`, 'error');
+    }, LAUNCH_TIMEOUT_MS));
+  }
+
+  // One readable line: "Executable not found: game.exe" rather than just the
+  // first line of a multi-line message.
+  function launchErrorText(error) {
+    const lines = String(error == null ? '' : error).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (!lines.length) return 'Could not launch the game';
+    const isPath = (s) => /^([a-z]:[\\/]|\\\\|\/)/i.test(s) && !/\s{2,}/.test(s);
+    const parts = lines.slice(0, 2).map((s) => (isPath(s) ? baseName(s) : s));
+    const text = parts.join(' ');
+    return text.length > 200 ? `${text.slice(0, 197)}…` : text;
+  }
+
   function togglePlay(id) {
     const g = state.games.find((x) => String(x.id) === String(id));
     if (!g) return;
-    const live = state.live[String(id)];
+    const key = String(g.id);
+    const live = state.live[key];
 
     if (typeof live === 'number' || live === 'stopping') {
-      state.live[String(id)] = 'stopping';
-      updateCard(g);
-      if (state.selectedId === String(id)) updateDetailLive(g);
+      state.live[key] = 'stopping';
+      refreshGameUi(g);
+      const done = () => {
+        if (state.live[key] === 'stopping') delete state.live[key];
+        refreshGameUi(g);
+      };
       api.killGame(g.id, g.exePath, g.installDir, g.steamAppId, g.launcherPath)
-        .then(() => { delete state.live[String(id)]; updateCard(g); if (state.view === 'shelf') renderShelfStage(g); if (state.selectedId === String(id)) updateDetailLive(g); })
-        .catch(() => { delete state.live[String(id)]; updateCard(g); if (state.selectedId === String(id)) updateDetailLive(g); toast('Could not stop the game', 'error'); });
+        .then(done)
+        .catch(() => { done(); toast('Could not stop the game', 'error'); });
       return;
     }
 
-    if (live === 'launching') return;
+    // a second click while launching cancels the wait
+    if (live === 'launching') {
+      clearLaunchWatchdog(key);
+      delete state.live[key];
+      refreshGameUi(g);
+      return;
+    }
+
+    if (gvIsWishlisted(g)) {
+      toast('Move it to your library to play it', 'error');
+      return;
+    }
 
     if (!g.exePath && !g.steamAppId) {
       toast('No executable set for this game', 'error');
@@ -3191,10 +3359,9 @@
       return;
     }
 
-    state.live[String(id)] = 'launching';
-    updateCard(g);
-    if (state.view === 'shelf') renderShelfStage(g);
-    if (state.selectedId === String(id)) updateDetailLive(g);
+    state.live[key] = 'launching';
+    armLaunchWatchdog(g);
+    refreshGameUi(g);
     api.launchGame(g.exePath, g.steamAppId, g.id, g.installDir, g.launcherPath);
   }
 
@@ -3202,7 +3369,7 @@
   // Wiring
   // ---------------------------------------------------------------------------
 
-  const debouncedSearch = debounce(() => { transition(() => renderLibrary()); }, 120);
+
 
   function wireRail() {
     const strip = $('#shelf-strip');
@@ -3240,6 +3407,8 @@
     const stopMomentum = () => { if (momentum) cancelAnimationFrame(momentum); momentum = null; };
 
     const glide = (velocity) => {
+      // reduced motion: the rail stops where the finger/mouse let go
+      if (prefersReducedMotion()) return;
       let v = velocity;
       let last = performance.now();
       const step = (now) => {
@@ -3311,7 +3480,6 @@
   }
 
   function wire() {
-    wireCmd();
     wireRail();
 
     const sortBtn = $('#sort-btn');
@@ -3336,7 +3504,9 @@
       sortMenu.addEventListener('click', (e) => {
         const item = e.target.closest('.sort-item');
         if (!item) return;
+        if (!Object.prototype.hasOwnProperty.call(SORT_LABELS, item.dataset.sort)) return;
         state.sort = item.dataset.sort;
+        lsSet('gv.sort', state.sort);
         state._shelfKey = '';
         updateSortUi();
         closeSort();
@@ -3372,14 +3542,17 @@
     });
 
     document.addEventListener('keydown', (e) => {
-      const meta = e.ctrlKey || e.metaKey;
+      if (e.isComposing || e.keyCode === 229) return;
       const modalOpen = !$('#modal').hidden;
       if (e.key === 'Escape') {
         if (e.defaultPrevented) return;
-        if (cmd.open) closeCmd();
-        else if (!$('#modal').hidden) closeModal();
+        if (spotHooks.isOpen()) spotHooks.close();
+        else if (modalOpen) closeModal();
         else if (state.selectedId) closeDetail();
+        return;
       }
+      // a dialog owns the keyboard: nothing below may act on the page under it
+      if (modalOpen || spotHooks.isOpen()) return;
       const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
       if (!typing && state.view === 'shelf' && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
@@ -3395,23 +3568,26 @@
         e.preventDefault();
         closeDetail();
       }
-      if (e.key === '/' && !typing && modalOpen === false) {
+      if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        openCmd();
+        spotHooks.open();
+        return;
       }
 
       // ---- game page shortcuts ------------------------------------------
-      if (state.selectedId && !typing && !cmd.open && $('#modal').hidden
+      if (state.selectedId && !typing && !spotHooks.isOpen() && $('#modal').hidden
           && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !e.isComposing) {
         const g = state.games.find((x) => String(x.id) === state.selectedId);
         if (g) {
           const onControl = ['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
           const key = e.key.toLowerCase();
-          if (e.key === ' ' && !onControl) { e.preventDefault(); togglePlay(g.id); return; }
+          // wishlisted games have no Play button, so Space must not launch them either
+          if (e.key === ' ' && !onControl) { e.preventDefault(); if (!gvIsWishlisted(g)) togglePlay(g.id); return; }
           if (key === 'e') { e.preventDefault(); openGameModal(g); return; }
           if (key === 'w') { e.preventDefault(); toggleDetailWish(g); return; }
           if (key === 'o' && g.exePath) { e.preventDefault(); api.showInFolder(g.exePath); return; }
-          if (key === 'f') { e.preventDefault(); setFinished(g, !(g.status === 'Finished')); return; }
+          // on a wishlisted game F always means "finished" (it leaves the wishlist)
+          if (key === 'f') { e.preventDefault(); setFinished(g, gvIsWishlisted(g) || g.status !== 'Finished'); return; }
           if (e.key === '?') {
             e.preventDefault();
             toast('Space play · E edit · W wishlist · F mark finished · Esc back', 'ok');
@@ -3421,67 +3597,93 @@
       }
     });
 
+    const findGame = (gameId) => state.games.find((x) => String(x.id) === String(gameId));
+
+    const markRunning = (gameId) => {
+      const id = String(gameId);
+      clearLaunchWatchdog(id);
+      state.live[id] = 0;
+      if (!state.liveStart) state.liveStart = {};
+      state.liveStart[id] = Date.now();
+      return findGame(id);
+    };
+
     if (api.onTrackingStarted) api.onTrackingStarted(({ gameId }) => {
-      state.live[String(gameId)] = 0;
-      const started = state.games.find((x) => String(x.id) === String(gameId));
-      if (started && started.status !== 'Finished' && started.status !== 'Playing') {
-        started.status = 'Playing';
+      const g = markRunning(gameId);
+      if (g && g.status !== 'Finished' && g.status !== 'Playing' && !gvIsWishlisted(g)) {
+        g.status = 'Playing';
         saveGamesSoon();
       }
-      if (!state.liveStart) state.liveStart = {};
-      state.liveStart[String(gameId)] = Date.now();
-      const g = state.games.find((x) => String(x.id) === String(gameId));
-      if (g) {
-        updateCard(g);
-        if (state.view === 'shelf' && state.shelfId === String(gameId)) renderShelfStage(g);
-        if (state.selectedId === String(gameId)) updateDetailLive(g);
-      }
+      refreshGameUi(g);
       toast(`Launched ${g ? g.name : 'game'}`, 'ok');
     });
 
     if (api.onTrackingTick) api.onTrackingTick(({ gameId, sessionMins }) => {
-      state.live[String(gameId)] = sessionMins;
+      const id = String(gameId);
+      const mins = Number(sessionMins) || 0;
+      clearLaunchWatchdog(id);
+      const wasRunning = typeof state.live[id] === 'number';
+      state.live[id] = mins;
       if (!state.liveStart) state.liveStart = {};
-      state.liveStart[String(gameId)] = Date.now() - sessionMins * 60000;
-      const g = state.games.find((x) => String(x.id) === String(gameId));
-      if (g) updateCard(g);
+      state.liveStart[id] = Date.now() - mins * 60000;
+      const g = findGame(id);
+      if (!g) return;
+      updateCard(g);
+      if (!wasRunning) refreshStage(g);
     });
 
     if (api.onTrackingSessionEnd) api.onTrackingSessionEnd(({ gameId, sessionHours, sessionStart, sessionEnd }) => {
-      delete state.live[String(gameId)];
-      const g = state.games.find((x) => String(x.id) === String(gameId));
-      if (g) {
-        g.hours = (g.hours || 0) + (sessionHours || 0);
-        if (!g.sessions) g.sessions = [];
-        g.sessions.push({ start: sessionStart, end: sessionEnd, duration: sessionHours });
-        g.lastPlayed = sessionEnd || Date.now();
-        saveGamesSoon();
-        updateCard(g);
-        if (state.view === 'shelf' && state.shelfId === String(g.id)) renderShelfStage(g);
-        if (state.selectedId === String(gameId)) updateDetailLive(g);
-      }
+      const id = String(gameId);
+      clearLaunchWatchdog(id);
+      delete state.live[id];
+      if (state.liveStart) delete state.liveStart[id];
+      const g = findGame(id);
+      if (!g) return;
+      const hours = Number(sessionHours) || 0;
+      g.hours = (Number(g.hours) || 0) + Math.max(0, hours);
+      if (!Array.isArray(g.sessions)) g.sessions = [];
+      // sub-minute blips (crash on start, launcher hand-off) count towards
+      // the total but are not listed as sessions
+      if (hours * 3600 >= 60) g.sessions.push({ start: sessionStart, end: sessionEnd, duration: hours });
+      g.lastPlayed = sessionEnd || Date.now();
+      saveGamesSoon();
+      refreshGameUi(g);
+      repaintDetailHistory(g);
     });
 
     if (api.onLaunchError) api.onLaunchError(({ gameId, error }) => {
       const id = String(gameId || '');
+      if (id) clearLaunchWatchdog(id);
       if (id && Object.prototype.hasOwnProperty.call(state.live, id)) delete state.live[id];
       if (id && state.liveStart) delete state.liveStart[id];
-      toast(String(error).split('\n')[0], 'error');
-      const g = state.games.find((x) => String(x.id) === id);
-      if (g) {
-        updateCard(g);
-        if (state.selectedId === id) updateDetailLive(g);
-        if (state.view === 'shelf' && state.shelfId === id) renderShelfStage(g);
-      }
+      toast(launchErrorText(error), 'error');
+      refreshGameUi(findGame(id));
     });
+
     if (api.onTrackingDetected) api.onTrackingDetected(({ gameId, gameName }) => {
       toast(`Detected ${gameName || 'a game'} running`, 'ok');
-      state.live[String(gameId)] = 0;
-      if (!state.liveStart) state.liveStart = {};
-      state.liveStart[String(gameId)] = Date.now();
-      const g = state.games.find((x) => String(x.id) === String(gameId));
-      if (g) { updateCard(g); if (state.selectedId === String(gameId)) updateDetailLive(g); }
+      refreshGameUi(markRunning(gameId));
     });
+
+    // Main changed a game itself (e.g. launched from the tray): merge, repaint,
+    // and do not write it back — main already saved it.
+    if (api.onGamesUpdated) api.onGamesUpdated((patch) => {
+      if (!patch || typeof patch !== 'object' || patch.id == null) return;
+      const g = findGame(patch.id);
+      if (!g) return;
+      for (const key of ['lastPlayed', 'installDir', 'exePath']) {
+        if (patch[key] !== undefined) g[key] = patch[key];
+      }
+      if (state.selectedId === String(g.id)) {
+        updateDetailLive(g);
+        if (!gvIsWishlisted(g)) paintRail(g);
+      }
+      if (!state.selectedId) renderLibrary();
+      else updateCard(g);
+    });
+
+    // Main is quitting: write everything that is still pending.
+    if (api.onAppFlush) api.onAppFlush(() => flushGames());
   }
 
   // ---------------------------------------------------------------------------
@@ -3489,17 +3691,27 @@
   // ---------------------------------------------------------------------------
 
   async function boot() {
-    state.tier = localStorage.getItem('gv.tier') || 'standard';
-    state.palette = localStorage.getItem('gv.palette') || 'midnight';
-    state.view = localStorage.getItem('gv.view') || 'shelf';
+    state.tier = lsGet('gv.tier') || 'standard';
+    state.palette = lsGet('gv.palette') || 'midnight';
+    const storedView = lsGet('gv.view');
+    state.view = storedView || 'shelf';
+    const storedSort = lsGet('gv.sort');
+    // no saved choice yet: the shelf has always opened on "Last played"
+    state.sort = Object.prototype.hasOwnProperty.call(SORT_LABELS, storedSort)
+      ? storedSort
+      : (state.view === 'shelf' ? 'lastPlayed' : state.sort);
 
     try {
       const [games, config] = await Promise.all([api.loadGames(), api.loadConfig()]);
-      state.games = Array.isArray(games) ? games : [];
-      state.config = config || {};
-      if (config && config.tier) state.tier = config.tier;
-      if (config && config.palette) state.palette = config.palette;
-      if (config && config.view) state.view = config.view;
+      const norm = normalizeGames(games);
+      state.games = norm.games;
+      state.config = (config && typeof config === 'object') ? config : {};
+      // palette/tier are saved to config on change, so config wins; the view
+      // is only kept in localStorage, so localStorage wins for the view
+      if (TIERS.includes(state.config.tier)) state.tier = state.config.tier;
+      if (PALETTES.includes(state.config.palette)) state.palette = state.config.palette;
+      state.view = storedView || state.config.view || 'shelf';
+      if (norm.changed && Array.isArray(games) && games.length) persistGames();
     } catch (e) {
       console.error('boot:', e);
       toast('Could not load the library', 'error');
@@ -3512,14 +3724,13 @@
         if (changed.dropped || changed.want) {
           if (api.backupGames) await api.backupGames().catch(() => null);
           state.games = migrated;
-          await api.saveGames(cleanGames());
+          await persistGames();
           const bits = [];
           if (changed.dropped) bits.push(`${changed.dropped} Dropped → Playing`);
           if (changed.want) bits.push(`${changed.want} Want → Wishlist`);
           toast(`Statuses updated: ${bits.join('; ')}.`, 'ok');
         }
-        state.config.statusModel = 2;
-        api.saveConfig(state.config).catch(() => {});
+        saveConfigPatch({ statusModel: 2 });
       }
 
       if (Number(state.config.statusModel || 0) < 3) {
@@ -3529,11 +3740,10 @@
           if (g.status !== 'Finished' && g.status !== 'Playing') { g.status = 'Playing'; moved += 1; }
         }
         if (moved) {
-          await api.saveGames(cleanGames());
+          await persistGames();
           toast(`Moved ${moved} unplayed game${moved === 1 ? '' : 's'} to Playing.`, 'ok');
         }
-        state.config.statusModel = 3;
-        api.saveConfig(state.config).catch(() => {});
+        saveConfigPatch({ statusModel: 3 });
       }
     } catch (e) {
       console.warn('status migration failed', e);
@@ -3544,8 +3754,8 @@
     applyView();
     wire();
 
-    if (state.view === 'shelf') state.sort = 'lastPlayed';
     updateSortUi();
+    syncPerfRecorder();
     renderLibrary();
     refreshCounts();
     prepareThumbs();
@@ -3596,7 +3806,7 @@
       const g = state.games.find((x) => x.status === 'Want' || x.wishlisted) || state.games[0];
       openDetail(g.id);
     }
-    if (name === 'palette') openCmd();
+    if (name === 'palette') setTimeout(() => spotHooks.open(), 150);
     if (name === 'spot') setTimeout(() => window.__spotOpen && window.__spotOpen(), 150);
     if (name === 'detailfilter') {
       setTimeout(() => {
@@ -3605,7 +3815,6 @@
         setTimeout(() => setFilter('Finished'), 700);
       }, 300);
     }
-    if (name === 'docked') { $('#search-dock').classList.add('is-expanded'); }
     if (name === 'sortforce') { $('#sort-menu').hidden = false; }
     if (name === 'wishlist') {
       state.filter = 'Want';
@@ -4068,29 +4277,44 @@
   }
 
   // Ctrl+Shift+F toggles a frame-rate HUD for reporting jank.
+  // The loop only runs while the HUD is on and the window is visible: main
+  // disables background throttling, so a free-running rAF would keep the
+  // renderer busy in the tray and while a game is running.
   let fpsOn = false;
   let fpsEl = null;
   let fpsFrames = 0;
   let fpsStart = 0;
+  let fpsRaf = 0;
+  const fpsLoop = (now) => {
+    fpsRaf = 0;
+    if (!fpsOn || !fpsEl || document.hidden) return;
+    fpsFrames += 1;
+    if (!fpsStart) fpsStart = now;
+    if (now - fpsStart > 500) {
+      fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsStart))} fps`;
+      fpsFrames = 0; fpsStart = now;
+    }
+    fpsRaf = requestAnimationFrame(fpsLoop);
+  };
+  function syncFpsHud() {
+    const want = fpsOn && !!fpsEl && !document.hidden;
+    if (want && !fpsRaf) {
+      fpsFrames = 0; fpsStart = 0;   // don't average across the paused gap
+      fpsRaf = requestAnimationFrame(fpsLoop);
+    } else if (!want && fpsRaf) {
+      cancelAnimationFrame(fpsRaf);
+      fpsRaf = 0;
+    }
+  }
   window.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f')) return;
     e.preventDefault();
     fpsOn = !fpsOn;
     if (!fpsEl) { fpsEl = document.createElement('div'); fpsEl.className = 'fps-hud'; document.body.appendChild(fpsEl); }
     fpsEl.hidden = !fpsOn;
+    if (fpsOn) fpsEl.textContent = '… fps';
+    syncFpsHud();
   });
-  const fpsLoop = (now) => {
-    if (fpsOn && fpsEl) {
-      fpsFrames += 1;
-      if (!fpsStart) fpsStart = now;
-      if (now - fpsStart > 500) {
-        fpsEl.textContent = `${Math.round((fpsFrames * 1000) / (now - fpsStart))} fps`;
-        fpsFrames = 0; fpsStart = now;
-      }
-    }
-    requestAnimationFrame(fpsLoop);
-  };
-  requestAnimationFrame(fpsLoop);
 
   const sideEl = document.querySelector('.sidebar');
   const sideToggle = $('#side-toggle');
@@ -4123,7 +4347,7 @@
     const toW = sideEl.getBoundingClientRect().width; // one layout at the final state
     if (!animate || !mainEl || prefersReducedMotion() || Math.abs(toW - fromW) < 1) {
       syncSidePill();
-      if (cmd.open) positionCmd();
+      spotHooks.resync();
       return;
     }
 
@@ -4145,7 +4369,7 @@
       mainEl.classList.remove('is-side-moving');
       pinned.forEach((el) => { el.style.width = ''; });
       syncSidePill();
-      if (cmd.open) positionCmd();
+      spotHooks.resync();
     };
     sideEl.addEventListener('transitionend', onEnd);
     timer = setTimeout(finishSideAnim, 500); // safety if transitionend never fires
@@ -4174,12 +4398,17 @@
     }, { passive: true });
   }
 
-  // ---- continuous performance recorder (1 s samples, 500 ms-ish frame stats)
+  // ---- performance recorder (1 s samples, 500 ms-ish frame stats)
+  // Opt-in (Settings → "Record frame stats", config.perfLog) or forced on
+  // for the duration of the benchmark; always paused while the window is
+  // hidden. See syncPerfRecorder().
   const perf = { frames: 0, sum: 0, n: 0, worst: 0, jank: 0, longTasks: 0, events: [], last: performance.now() };
-  try {
-    new PerformanceObserver((list) => { perf.longTasks += list.getEntries().length; }).observe({ entryTypes: ['longtask'] });
-  } catch (_) {}
+  let perfForced = 0;
+  let perfRaf = 0;
+  let perfTimer = 0;
+  let perfObserver = null;
   const perfFrame = (now) => {
+    perfRaf = requestAnimationFrame(perfFrame);
     const dt = now - perf.last;
     perf.last = now;
     if (dt > 0 && dt < 5000) {
@@ -4189,15 +4418,43 @@
       if (dt > perf.worst) perf.worst = dt;
       if (dt > 50) perf.jank += 1;
     }
-    requestAnimationFrame(perfFrame);
   };
-  requestAnimationFrame(perfFrame);
   window.__gvPerfMark = (label) => {
+    if (!perfRaf) return;
     perf.events.push(label);
     if (perf.events.length > 8) perf.events.shift();
   };
-  setInterval(() => {
-    if (!api.perfLog) return;
+  function perfWanted() {
+    return !!api.perfLog && (state.config.perfLog === true || perfForced > 0) && !document.hidden;
+  }
+  function syncPerfRecorder() {
+    const want = perfWanted();
+    if (want && !perfRaf) {
+      perf.sum = 0; perf.n = 0; perf.worst = 0; perf.jank = 0; perf.longTasks = 0;
+      perf.last = performance.now();
+      perfRaf = requestAnimationFrame(perfFrame);
+      perfTimer = setInterval(perfSample, 1000);
+      if (!perfObserver) {
+        try {
+          perfObserver = new PerformanceObserver((list) => { perf.longTasks += list.getEntries().length; });
+          perfObserver.observe({ entryTypes: ['longtask'] });
+        } catch (_) { perfObserver = null; }
+      }
+    } else if (!want && perfRaf) {
+      cancelAnimationFrame(perfRaf);
+      perfRaf = 0;
+      clearInterval(perfTimer);
+      perfTimer = 0;
+      if (perfObserver) { try { perfObserver.disconnect(); } catch (_) {} perfObserver = null; }
+      perf.events.length = 0;
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    syncFpsHud();
+    syncPerfRecorder();
+  });
+  function perfSample() {
+    if (!api.perfLog || !perfRaf) return;
     const avg = perf.n ? perf.sum / perf.n : 0;
     const sample = {
       t: Date.now(),
@@ -4213,12 +4470,13 @@
     };
     api.perfLog(sample);
     perf.sum = 0; perf.n = 0; perf.worst = 0; perf.jank = 0;
-  }, 1000);
+  }
+  syncPerfRecorder();   // boot() calls it again once config.perfLog is known
 
   syncSidePill();
   window.addEventListener('resize', () => {
     syncSidePill();
-    if (cmd.open) positionCmd();
+    spotHooks.resync();
   });
   const libScroll = $('#library');
   if (libScroll) {
@@ -4249,7 +4507,20 @@
       star: '<path d="m12 4 2.4 5 5.4.7-4 3.8 1 5.4-4.8-2.7-4.8 2.7 1-5.4-4-3.8 5.4-.7z"/>'
     };
     const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const initials = (t) => String(t || '?').split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase();
+    // First letter of the first two words that have one: letters only (any
+    // script), combining marks kept with their base so "Å" written as A+ring
+    // stays whole; punctuation, dashes, digits and emoji are skipped.
+    // "Ørkenvandrer — Ångström" → "ØÅ".
+    const LETTER = /\p{L}\p{M}*/u;
+    const initials = (t) => {
+      const out = [];
+      for (const word of String(t || '').split(/\s+/)) {
+        const m = LETTER.exec(word);
+        if (m) out.push(m[0].normalize('NFC').toLocaleUpperCase());
+        if (out.length === 2) break;
+      }
+      return out.join('') || '?';
+    };
     const mark = (t, q) => {
       if (!q) return esc(t);
       const i = String(t).toLowerCase().indexOf(String(q).toLowerCase());
@@ -4269,11 +4540,14 @@
       { icon: 'sliders', title: 'Open settings', run: () => $('#btn-settings')?.click() },
     ];
 
+    const MAX_RESULTS = 50;   // rows rendered per section; the count says how many matched
+    const MAX_STAGGER = 12;   // rows past this enter together
+
     const games = () => (state.games || []).map((g) => ({
       kind: 'game',
       id: g.id,
       title: g.name || 'Untitled',
-      status: gvStatusOf(g),
+      status: gvIsWishlisted(g) ? 'Wishlist' : gvStatusOf(g),
       h: Number.isFinite(Number(g.hours)) ? Number(g.hours) : null,
       cover: g._cover || g.coverUrl || g.heroUrl || '',
       last: g.lastPlayed || 0,
@@ -4283,13 +4557,17 @@
       const all = games();
       const acts = actions();
       if (!q) {
-        const recent = all.slice().sort((a, b) => b.last - a.last).slice(0, 6);
-        return [{ label: 'Recently played', items: recent }, { label: 'Actions', items: acts }];
+        // only games that were actually played; no header over an empty list
+        const recent = all.filter((x) => x.last > 0).sort((a, b) => b.last - a.last).slice(0, 6);
+        const out = [];
+        if (recent.length) out.push({ label: 'Recently played', items: recent });
+        out.push({ label: 'Actions', items: acts });
+        return out;
       }
       const g = all.map((x) => [score(x.title, q), x]).filter((a) => a[0]).sort((a, b) => b[0] - a[0]).map((a) => a[1]);
       const a = acts.filter((x) => score(x.title, q));
       const out = [];
-      if (g.length) out.push({ label: 'Games', items: g });
+      if (g.length) out.push({ label: 'Games', items: g.slice(0, MAX_RESULTS), total: g.length });
       if (a.length) out.push({ label: 'Actions', items: a });
       return out;
     }
@@ -4298,14 +4576,14 @@
       const thumb = it.icon
         ? `<span class="thumb act"><svg viewBox="0 0 24 24">${ICON[it.icon]}</svg></span>`
         : it.cover
-          ? `<span class="thumb"><img src="${esc(it.cover)}" alt="" loading="lazy"></span>`
+          ? `<span class="thumb"><img src="${esc(toFileUrl(it.cover))}" alt="" loading="lazy"></span>`
           : `<span class="thumb">${esc(initials(it.title))}</span>`;
       let meta = '';
       if (!it.icon) {
         meta = it.status === 'Finished' ? '<span class="done">Finished</span>' : esc(it.status || '');
-        if (it.h != null && it.h > 0) meta += (meta ? ' · ' : '') + it.h + 'h';
+        if (it.h != null && it.h > 0) meta += (meta ? ' · ' : '') + esc(fmtHours(it.h));
       }
-      return `<div class="item" role="option" data-i="${i}" style="--i:${i}"><div class="in">${thumb}<span class="name">${mark(it.title, q)}</span><span class="meta">${meta}</span></div></div>`;
+      return `<div class="item" role="option" id="spot-opt-${i}" aria-selected="false" data-i="${i}" style="--i:${Math.min(i, MAX_STAGGER)}"><div class="in">${thumb}<span class="name">${mark(it.title, q)}</span><span class="meta">${meta}</span></div></div>`;
     }
 
     function render() {
@@ -4313,13 +4591,17 @@
       const secs = sections(q);
       flat = [];
       let html = '';
+      let matched = 0;
       secs.forEach((s) => {
-        html += `<div class="sec">${s.label}</div>`;
+        html += `<div class="sec" role="presentation">${esc(s.label)}</div>`;
         s.items.forEach((it) => { html += rowHTML(it, flat.push(it) - 1, q); });
+        matched += s.total != null ? s.total : s.items.length;
       });
-      if (!flat.length) html = `<div class="empty">No results for “${esc(q)}”</div>`;
+      if (!flat.length) html = `<div class="empty" role="presentation">No results for “${esc(q)}”</div>`;
       rowsEl.innerHTML = html;
-      countEl.textContent = flat.length ? `${flat.length} result${flat.length > 1 ? 's' : ''}` : '';
+      countEl.textContent = !flat.length ? ''
+        : matched > flat.length ? `${flat.length} of ${matched} results`
+          : `${flat.length} result${flat.length > 1 ? 's' : ''}`;
       sel = 0;
       place(false);
       fit();
@@ -4327,8 +4609,14 @@
 
     function place(animate = true) {
       const els = rowsEl.querySelectorAll('.item');
-      els.forEach((e, i) => e.classList.toggle('sel', i === sel));
+      els.forEach((e, i) => {
+        const on = i === sel;
+        e.classList.toggle('sel', on);
+        e.setAttribute('aria-selected', String(on));
+      });
       const el = els[sel];
+      if (el && isOpen) input.setAttribute('aria-activedescendant', el.id);
+      else input.removeAttribute('aria-activedescendant');
       if (!el) { pill.style.opacity = 0; return; }
       if (!animate) pill.style.transition = 'none';
       pill.style.opacity = 1;
@@ -4357,23 +4645,40 @@
 
     let isOpen = false, sel = 0, flat = [];
 
-    function openSpot() {
-      if (isOpen) return;
+    const modalOpen = () => { const m = document.getElementById('modal'); return !!(m && !m.hidden); };
+
+    // where focus goes back to when the spotlight closes without a choice
+    let returnFocus = null;
+
+    function openSpot({ keepValue = false, from = null } = {}) {
+      if (isOpen || modalOpen()) return;
+      const prev = from || document.activeElement;
+      returnFocus = prev && prev !== input && prev !== document.body && !spot.contains(prev) ? prev : null;
       isOpen = true;
-      spot.classList.add('open'); scrim.classList.add('open'); spot.setAttribute('aria-expanded', 'true');
-      input.value = ''; render();
+      spot.classList.add('open'); scrim.classList.add('open');
+      spot.setAttribute('aria-expanded', 'true'); input.setAttribute('aria-expanded', 'true');
+      if (!keepValue) input.value = '';
+      render();
       input.focus({ preventScroll: true });
     }
-    function closeSpot() {
+    function closeSpot({ restoreFocus = true } = {}) {
       if (!isOpen) return;
       isOpen = false;
-      spot.classList.remove('open'); scrim.classList.remove('open'); spot.setAttribute('aria-expanded', 'false');
+      spot.classList.remove('open'); scrim.classList.remove('open');
+      spot.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      const back = returnFocus;
+      returnFocus = null;
       input.blur(); input.value = '';
       list.style.height = '0px'; geom(restRect());
+      if (restoreFocus && back && back.isConnected && typeof back.focus === 'function' && !back.closest('[inert]')) {
+        back.focus({ preventScroll: true });
+      }
     }
     function choose(i) {
       const it = flat[i]; if (!it) return;
-      closeSpot();
+      // the chosen item moves focus itself (game page, dialog, filter)
+      closeSpot({ restoreFocus: false });
       if (typeof window.onSpotlightSelect === 'function') window.onSpotlightSelect(it);
     }
 
@@ -4383,10 +4688,22 @@
       else if (typeof it.run === 'function') it.run();
     };
 
-    input.addEventListener('focus', openSpot);
-    spot.addEventListener('pointerdown', () => { if (!isOpen) setTimeout(openSpot, 0); });
-    scrim.addEventListener('pointerdown', closeSpot);
-    input.addEventListener('input', render);
+    // Focus alone (e.g. Tab) does not open the panel: a click, typing,
+    // ArrowDown, "/" or Ctrl K does.
+    spot.addEventListener('pointerdown', () => {
+      if (isOpen) return;
+      const from = document.activeElement;   // before the click moves focus
+      setTimeout(() => openSpot({ from }), 0);
+    });
+    scrim.addEventListener('pointerdown', () => closeSpot());
+    input.addEventListener('input', () => {
+      if (!isOpen) { openSpot({ keepValue: true }); return; }
+      render();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (isOpen || e.isComposing) return;
+      if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); openSpot({ keepValue: true }); }
+    });
     rowsEl.addEventListener('mousemove', (e) => {
       const it = e.target.closest('.item'); if (!it) return;
       const i = +it.dataset.i;
@@ -4396,12 +4713,15 @@
 
     window.addEventListener('keydown', (e) => {
       const meta = e.ctrlKey || e.metaKey;
-      if (meta && e.key.toLowerCase() === 'k') {
+      // e.code keeps Ctrl K working on non-Latin keyboard layouts
+      if (meta && !e.shiftKey && !e.altKey && (e.code === 'KeyK' || String(e.key).toLowerCase() === 'k')) {
+        if (!isOpen && modalOpen()) return;   // never open behind a dialog
         e.preventDefault(); e.stopImmediatePropagation();
         isOpen ? closeSpot() : openSpot();
         return;
       }
       if (!isOpen) return;
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeSpot(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopImmediatePropagation(); if (flat.length) { sel = (sel + 1) % flat.length; place(); } }
       else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopImmediatePropagation(); if (flat.length) { sel = (sel - 1 + flat.length) % flat.length; place(); } }
@@ -4417,9 +4737,22 @@
     new ResizeObserver(() => { if (!isOpen) resync(); }).observe(slot);
 
     window.__spotToggle = () => (isOpen ? closeSpot() : openSpot());
-    window.__spotOpen = openSpot;
+    window.__spotOpen = () => openSpot();
+    spotHooks.open = () => openSpot();
+    spotHooks.close = () => closeSpot();
+    spotHooks.isOpen = () => isOpen;
+    spotHooks.resync = () => { if (!isOpen) resync(); };
     geom(restRect());
     requestAnimationFrame(() => requestAnimationFrame(() => spot.classList.remove('snap')));
+    // The first measurement happens mid shell-in entrance animation (the
+    // main column is still translated): measure again once it has settled.
+    const shell = $('#main');
+    if (shell) {
+      shell.addEventListener('animationend', (e) => {
+        if (e.target === shell && !isOpen) resync();
+      });
+    }
+    setTimeout(() => { if (!isOpen) resync(); }, 800);
   })();
 
   boot();
