@@ -622,7 +622,7 @@
                <button class="btn btn-primary" data-onboard-import>Import games</button>
                <button class="btn" data-onboard-add>Add manually</button>
              </div>
-             <p class="onboard-hint">Press <kbd>Ctrl K</kbd> any time to search or run a command.</p>
+             <p class="onboard-hint">Press <kbd>Ctrl F</kbd> any time to search or run a command.</p>
            </div>`
         : `<div class="shelf-empty">${esc(empty.line)}</div>`;
       strip.innerHTML = '';
@@ -976,6 +976,33 @@
     </span>`;
   }
 
+  // Cards without artwork get a tint and initials derived from the title, so
+  // a library of fallbacks still reads as distinct games.
+  const CARD_LETTER = /\p{L}\p{M}*/u;
+  function cardInitials(name) {
+    const out = [];
+    for (const word of String(name || '').split(/\s+/)) {
+      const m = CARD_LETTER.exec(word);
+      if (m) out.push(m[0].normalize('NFC').toLocaleUpperCase());
+      if (out.length === 2) break;
+    }
+    return out.join('') || '?';
+  }
+  function cardHue(name) {
+    let h = 0;
+    for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) % 360;
+    return h;
+  }
+  function relativeDay(ts) {
+    if (!ts) return '';
+    const days = Math.floor((Date.now() - ts) / 86400000);
+    if (days <= 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 7) return `${days} days ago`;
+    if (days < 30) return `${Math.floor(days / 7)} wk ago`;
+    return fmtDate(ts);
+  }
+
   function buildCard(g, index = 0) {
     const el = document.createElement('article');
     el.className = 'card';
@@ -984,6 +1011,8 @@
 
     const media = document.createElement('div');
     media.className = 'card-media';
+    media.dataset.initials = cardInitials(g.name);
+    media.style.setProperty('--card-hue', String(cardHue(g.name)));
 
     const shade = document.createElement('div');
     shade.className = 'card-shade';
@@ -1022,21 +1051,15 @@
     const hours = document.createElement('span');
     hours.className = 'card-hours';
     meta.appendChild(hours);
-    if (g.source) {
-      const dot = document.createElement('span');
-      dot.className = 'card-dot';
-      dot.textContent = '•';
-      const src = document.createElement('span');
-      src.className = 'card-source';
-      src.textContent = g.source;
-      meta.appendChild(dot);
-      meta.appendChild(src);
-    }
+    const last = document.createElement('span');
+    last.className = 'card-last';
+    meta.appendChild(last);
     body.appendChild(meta);
+    if (g.source) el.title = `${g.name || 'Untitled'} · ${g.source}`;
 
     el.append(media, body);
 
-    const refs = { el, media, img: null, src: null, eager: index < 12, hours, status, play, title };
+    const refs = { el, media, img: null, src: null, eager: index < 12, hours, last, status, play, title };
     setCardImage(refs, g._cover || g.coverUrl || '');
 
     play.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(g.id); });
@@ -1142,12 +1165,16 @@
     const wish = gvIsWishlisted(g);
 
     ref.title.textContent = g.name || 'Untitled';
+    ref.media.dataset.initials = cardInitials(g.name);
+    ref.media.style.setProperty('--card-hue', String(cardHue(g.name)));
     setCardImage(ref, g._cover || g.coverUrl || '');
+    ref.el.classList.toggle('has-art', !!ref.src);
     ref.el.classList.toggle('is-running', running || launching);
 
     const base = Number(g.hours) || 0;
     const total = running ? base + live / 60 : base;
-    ref.hours.textContent = fmtHours(total);
+    ref.hours.textContent = wish ? 'Wishlist' : running ? `${fmtHours(total)} · playing now` : fmtHours(total);
+    if (ref.last) ref.last.textContent = running || wish || !g.lastPlayed ? '' : relativeDay(g.lastPlayed);
 
     ref.status.textContent = running ? 'Running' : statusLabel(g);
     ref.status.dataset.status = running ? 'Playing' : statusLabel(g);
@@ -3171,7 +3198,8 @@
   // Actions
   // ---------------------------------------------------------------------------
 
-  const VIEWS = ['shelf', 'poster', 'compact'];
+  const VIEWS = ['shelf', 'poster'];
+  const VIEW_NAMES = { shelf: 'Shelf', poster: 'Cards' };
 
   function cycleView() {
     const next = VIEWS[(VIEWS.indexOf(state.view) + 1) % VIEWS.length];
@@ -3184,7 +3212,7 @@
     applyView();
     renderLibrary();
     fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
-    toast(`Layout: ${next}`, 'ok');
+    toast(`Layout: ${VIEW_NAMES[next] || next}`, 'ok');
   }
 
   const SORT_LABELS = {
@@ -3208,7 +3236,6 @@
     if (lib) lib.scrollTop = 0;
     const grid = $('#grid');
     grid.classList.remove('view-compact', 'view-list');
-    if (state.view === 'compact') grid.classList.add('view-compact');
     $('#btn-view').classList.toggle('is-active', state.view !== 'shelf');
   }
 
@@ -3694,7 +3721,8 @@
     state.tier = lsGet('gv.tier') || 'standard';
     state.palette = lsGet('gv.palette') || 'midnight';
     const storedView = lsGet('gv.view');
-    state.view = storedView || 'shelf';
+    state.view = VIEWS.includes(storedView) ? storedView : (storedView ? 'poster' : 'shelf');
+    if (storedView && storedView !== state.view) lsSet('gv.view', state.view); // retired "compact" -> cards
     const storedSort = lsGet('gv.sort');
     // no saved choice yet: the shelf has always opened on "Last played"
     state.sort = Object.prototype.hasOwnProperty.call(SORT_LABELS, storedSort)
@@ -3710,7 +3738,9 @@
       // is only kept in localStorage, so localStorage wins for the view
       if (TIERS.includes(state.config.tier)) state.tier = state.config.tier;
       if (PALETTES.includes(state.config.palette)) state.palette = state.config.palette;
-      state.view = storedView || state.config.view || 'shelf';
+      state.view = VIEWS.includes(storedView) ? storedView
+        : storedView ? 'poster'
+          : (VIEWS.includes(state.config.view) ? state.config.view : 'shelf');
       if (norm.changed && Array.isArray(games) && games.length) persistGames();
     } catch (e) {
       console.error('boot:', e);
@@ -4689,7 +4719,7 @@
     };
 
     // Focus alone (e.g. Tab) does not open the panel: a click, typing,
-    // ArrowDown, "/" or Ctrl K does.
+    // ArrowDown, "/" or Ctrl F does.
     spot.addEventListener('pointerdown', () => {
       if (isOpen) return;
       const from = document.activeElement;   // before the click moves focus
@@ -4713,8 +4743,8 @@
 
     window.addEventListener('keydown', (e) => {
       const meta = e.ctrlKey || e.metaKey;
-      // e.code keeps Ctrl K working on non-Latin keyboard layouts
-      if (meta && !e.shiftKey && !e.altKey && (e.code === 'KeyK' || String(e.key).toLowerCase() === 'k')) {
+      // e.code keeps Ctrl F working on non-Latin keyboard layouts (Ctrl+Shift+F stays the FPS HUD)
+      if (meta && !e.shiftKey && !e.altKey && (e.code === 'KeyF' || String(e.key).toLowerCase() === 'f')) {
         if (!isOpen && modalOpen()) return;   // never open behind a dialog
         e.preventDefault(); e.stopImmediatePropagation();
         isOpen ? closeSpot() : openSpot();
