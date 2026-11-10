@@ -1,0 +1,7 @@
+{
+  "lock": false,
+  "tasks": {
+    "test": "deno test tests/functions/",
+    "check": "cd functions/art-lookup && deno check index.ts lib.ts"
+  }
+}

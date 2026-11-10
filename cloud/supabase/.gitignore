@@ -1,0 +1,6 @@
+# Supabase CLI local state
+.branches
+.temp
+# Local secrets (SGDB key, Google OAuth secret)
+.env
+functions/.env
