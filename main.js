@@ -19,6 +19,8 @@ const { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAl
 
 const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
+const { createArtCache, installSgdbImageCaching } = require('./src/backend/art-cache.js');
+const { cloudConfig } = require('./src/backend/cloud-config.js');
 const { httpsGet } = require('./src/backend/api.js');
 const Fuzzy = require('./src/lib/fuzzy.js');
 
@@ -1173,6 +1175,51 @@ function createWindow() {
     return createSgdb(cfg.sgdbKey);
   }
 
+  // Shared artwork cache (Gamevault Cloud) first, the user's own SteamGridDB
+  // key as fallback. The cloud needs no key, so artwork works out of the box.
+  let artCacheInstance = null;
+  function artCache() {
+    if (!artCacheInstance) {
+      const { url, anonKey } = cloudConfig();
+      artCacheInstance = createArtCache({ dir: path.join(app.getPath('userData'), 'art-cache'), cloudUrl: url, anonKey });
+    }
+    return artCacheInstance;
+  }
+  // Cloud answers worth retrying with the user's key (NOT_FOUND is final).
+  const CLOUD_SOFT_FAIL = new Set(['NO_CLOUD', 'NETWORK', 'RATE_LIMIT', 'BUSY', 'SERVER', 'UNAUTHENTICATED', 'AUTH']);
+  const hasUserKey = () => !!loadConfig().sgdbKey;
+  function cloudError(res) {
+    return Object.assign(new Error(res.error.message || 'Artwork unavailable'), { code: res.error.code });
+  }
+  /** Run the cloud call; on a soft failure use fallback() if the user has a key. */
+  async function cloudFirst(cloudCall, fallback) {
+    const res = await cloudCall();
+    if (res.ok) return res;
+    if (CLOUD_SOFT_FAIL.has(res.error.code) && hasUserKey()) return { ok: true, data: await fallback(), viaKey: true };
+    return res;
+  }
+  /** Cloud lookup for a game: by SGDB id, Steam app id, or name (fuzzy-checked). */
+  async function cloudLookup({ id, name, steamAppId }) {
+    if (id) return artCache().lookup({ sgdbId: id });
+    if (steamAppId) {
+      const r = await artCache().lookup({ steamAppId });
+      if (r.ok || !name) return r;
+    }
+    if (!name || !String(name).trim()) return { ok: false, error: { code: 'NOT_FOUND', message: 'No name' } };
+    const r = await artCache().lookup({ term: String(name) });
+    if (!r.ok) return r;
+    // The server picked the top search hit; re-ask by id if fuzzy matching disagrees.
+    const cands = r.data.candidates || [];
+    const best = cands.length ? Fuzzy.bestMatch(name, cands, (h) => h.name, { threshold: 0, limit: 3 }) : null;
+    r.data.matchScore = best && best.item ? best.score : null;
+    r.data.alternatives = best ? best.alternatives : [];
+    if (best && best.item && r.data.game && best.item.id !== r.data.game.id) {
+      const again = await artCache().lookup({ sgdbId: best.item.id });
+      if (again.ok) return { ok: true, data: { ...again.data, candidates: cands, matchScore: best.score, alternatives: best.alternatives } };
+    }
+    return r;
+  }
+
   function sgdbWrap(fn) {
     return async (_event, payload) => {
       try {
@@ -1222,12 +1269,30 @@ function createWindow() {
     }
   });
 
+  const unwrap = (res) => { if (!res.ok) throw cloudError(res); return res.data; };
+
   ipcMain.handle('sgdb:games', sgdbWrap(async (term) => {
     if (!term || !String(term).trim()) return [];
-    return sgdbOrThrow().searchGames(String(term).trim());
+    // Typing searches burn the cloud's per-user miss budget, so the user's own
+    // key goes first here; without one, the cloud's candidates (cached per term).
+    if (hasUserKey()) return sgdbOrThrow().searchGames(String(term).trim());
+    if (String(term).trim().length < 3) return [];
+    const r = await artCache().lookup({ term: String(term) });
+    if (!r.ok && r.error.code === 'NOT_FOUND') return [];
+    const data = unwrap(r);
+    return data.candidates && data.candidates.length ? data.candidates : (data.game ? [data.game] : []);
   }));
 
   ipcMain.handle('sgdb:resolve', sgdbWrap(async ({ name, steamAppId } = {}) => {
+    const cloud = await cloudFirst(() => cloudLookup({ name, steamAppId }), () => resolveWithKey({ name, steamAppId }));
+    if (cloud.viaKey) return cloud.data;
+    if (!cloud.ok && cloud.error.code === 'NOT_FOUND') return { match: null, alternatives: [] };
+    const data = unwrap(cloud);
+    const score = data.matchScore != null ? data.matchScore : 1000;
+    return { match: data.game ? { ...data.game, score } : null, alternatives: data.alternatives || [] };
+  }));
+
+  async function resolveWithKey({ name, steamAppId } = {}) {
     const client = sgdbOrThrow();
     if (steamAppId) {
       const byId = await client.gameBySteamAppId(steamAppId).catch(() => null);
@@ -1241,14 +1306,55 @@ function createWindow() {
       match: best.item ? { ...best.item, score: best.score } : null,
       alternatives: best.alternatives,
     };
-  }));
+  }
 
   ipcMain.handle('sgdb:assets', sgdbWrap(async ({ kind, id, page, styles, pageSize } = {}) => {
     if (!id) throw new Error('Missing SteamGridDB game id');
-    return sgdbOrThrow().assets(kind, id, { page, styles, pageSize: pageSize || 50 });
+    const withKey = () => sgdbOrThrow().assets(kind, id, { page, styles, pageSize: pageSize || 50 });
+    // Cloud pages are 50 items in SteamGridDB order; a style filter is applied here.
+    const cloud = await cloudFirst(() => artCache().page(id, kind, page || 0), withKey);
+    if (cloud.viaKey) return cloud.data;
+    const data = unwrap(cloud);
+    if (!styles || !styles.length) return data;
+    const items = data.items.filter((a) => styles.includes(a.style));
+    return { ...data, items, total: items.length };
   }));
 
-  ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name } = {}) => {
+  ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name, steamAppId } = {}) => {
+    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId }), () => autofillWithKey({ id, name }));
+    if (cloud.viaKey) return cloud.data;
+    if (!cloud.ok && cloud.error.code === 'NOT_FOUND') return { match: null, assets: {} };
+    const data = unwrap(cloud);
+    const game = data.game || {};
+    const match = { ...game };
+    if (data.matchScore != null) match.score = data.matchScore;
+    else if (!id) match.score = 1000; // matched by Steam app id
+
+    // Steam games: Steam's own library art wins; SteamGridDB fills the gaps.
+    const picks = { cover: data.top && data.top.cover, hero: data.top && data.top.hero, logo: data.top && data.top.logo, icon: data.top && data.top.icon };
+    const appId = steamAppId || game.steamAppId;
+    if (appId) {
+      const steam = await artCache().steamArt(appId);
+      if (steam.ok) {
+        for (const slot of ['cover', 'hero', 'logo']) {
+          if (steam.data[slot]) picks[slot] = { url: steam.data[slot], width: null, height: null, style: 'official', score: null };
+        }
+      }
+    }
+
+    const assets = {};
+    await Promise.all(Object.entries(picks).map(async ([slot, asset]) => {
+      if (!asset || !asset.url) return;
+      let local = asset.url;
+      try { local = await cacheImage(asset.url, slot); } catch (_) {}
+      assets[slot] = { url: local, remote: asset.url, width: asset.width, height: asset.height, style: asset.style, score: asset.score };
+    }));
+    // Warm the picker's thumbnails in the background.
+    artCache().prefetchThumbs(data).catch(() => {});
+    return { match, assets };
+  }));
+
+  async function autofillWithKey({ id, name } = {}) {
     const client = sgdbOrThrow();
     let gameId = id;
     let match = null;
@@ -1288,7 +1394,7 @@ function createWindow() {
     }));
 
     return { match, assets };
-  }));
+  }
 
   ipcMain.handle('sgdb:cache', sgdbWrap(async ({ url, kind } = {}) => {
     if (!url) throw new Error('Missing image url');
@@ -1644,6 +1750,8 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
     return permission === 'media';
   });
+  // Keep SteamGridDB picker images in Chromium's cache for 3 days.
+  installSgdbImageCaching(session.defaultSession);
 });
 
 app.on('window-all-closed', () => {

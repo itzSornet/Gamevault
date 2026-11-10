@@ -1,0 +1,57 @@
+# Supabase CLI config for GameVault's cloud backend.
+# Run CLI commands from the `cloud/` folder (the one that contains `supabase/`):
+#   cd cloud
+#   supabase start                     # local stack in Docker (needs Docker Desktop)
+#   supabase functions serve           # serves functions/art-lookup with functions/.env
+#   supabase test db                   # pgTAP tests in supabase/tests/database
+# Only settings that differ from the CLI defaults are listed; see cloud/SETUP.md.
+
+project_id = "gamevault"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+# Match your hosted project (Dashboard -> Project Settings -> Infrastructure).
+# New projects run Postgres 17; change to 15 if yours says 15.x.
+major_version = 17
+
+[db.seed]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1"
+# The desktop app finishes OAuth / magic links on a loopback port it picks at runtime.
+additional_redirect_urls = ["http://127.0.0.1/**", "http://127.0.0.1:*/**", "http://localhost:*/**"]
+jwt_expiry = 3600
+enable_signup = true
+# art-lookup needs a user token; anonymous sign-in gives every install one silently.
+enable_anonymous_sign_ins = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+# Google sign-in locally: create supabase/.env with SUPABASE_AUTH_GOOGLE_CLIENT_ID /
+# SUPABASE_AUTH_GOOGLE_SECRET, then uncomment. Hosted project: set it in the Dashboard.
+# [auth.external.google]
+# enabled = true
+# client_id = "env(SUPABASE_AUTH_GOOGLE_CLIENT_ID)"
+# secret = "env(SUPABASE_AUTH_GOOGLE_SECRET)"
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+
+[functions.art-lookup]
+# The gateway's JWT check would accept the bare anon key (it is a JWT) and
+# rejects the newer non-JWT keys, so the function verifies the user itself
+# with supabase.auth.getUser() and refuses tokens without a user.
+verify_jwt = false

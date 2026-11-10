@@ -1,0 +1,49 @@
+# Keeps the free Supabase project awake: free projects pause after 7 days with
+# no activity. Once a day this makes one tiny anon read of the public art cache.
+#
+# Needs repo secrets SUPABASE_URL (https://<ref>.supabase.co) and
+# SUPABASE_ANON_KEY (the public anon / publishable key). If either is missing
+# the job logs a notice and succeeds, so forks and fresh clones stay green.
+#
+# GitHub only runs `schedule` from the default branch (main), and turns
+# scheduled workflows off in repos with no commits for 60 days: re-enable it
+# under Actions if that happens.
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily, 06:17 UTC (off the hour to dodge GitHub's cron rush)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Supabase REST
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::notice::SUPABASE_URL / SUPABASE_ANON_KEY not set; skipping keep-alive."
+            exit 0
+          fi
+          url="${SUPABASE_URL%/}/rest/v1/art_games?select=sgdb_id&limit=1"
+          # apikey header only: works for both the legacy JWT anon key and the
+          # newer sb_publishable_ key. Fails the job (so you get an email) if
+          # the project is already paused or the key is wrong.
+          status=$(curl -sS -o /tmp/body -w '%{http_code}' --retry 3 --retry-delay 10 \
+            -H "apikey: $SUPABASE_ANON_KEY" -H "Accept: application/json" "$url")
+          echo "HTTP $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::Supabase answered HTTP $status"
+            head -c 300 /tmp/body; echo
+            exit 1
+          fi
