@@ -21,6 +21,27 @@ contextBridge.exposeInMainWorld('api', {
   // Quitting: save now; main waits for 'app:flushed' (max 2.5 s).
   onAppFlush: (cb) => ipcRenderer.on('app:flush', async () => { try { await cb(); } catch (_) {} finally { ipcRenderer.send('app:flushed'); } }),
 
+  // GameVault account (Gamevault Cloud)
+  accountStatus: () => ipcRenderer.invoke('account:status'),
+  accountProviders: () => ipcRenderer.invoke('account:providers'),
+  accountEmail: (email) => ipcRenderer.invoke('account:email', email),
+  accountPassword: (email, password) => ipcRenderer.invoke('account:password', { email, password }),
+  accountSignUp: (email, password) => ipcRenderer.invoke('account:signup', { email, password }),
+  accountReset: (email) => ipcRenderer.invoke('account:reset', email),
+  accountSetPassword: (password) => ipcRenderer.invoke('account:set-password', password),
+  accountOAuth: (provider) => ipcRenderer.invoke('account:oauth', provider),
+  accountCancel: () => ipcRenderer.invoke('account:cancel'),
+  accountSignOut: () => ipcRenderer.invoke('account:signout'),
+  cloudSync: (games) => ipcRenderer.invoke('cloud:sync', games),
+  cloudLastSync: () => ipcRenderer.invoke('cloud:last-sync'),
+  savesFind: (game) => ipcRenderer.invoke('saves:find', game),
+  savesPick: (current) => ipcRenderer.invoke('saves:pick', current),
+  savesBackup: (p) => ipcRenderer.invoke('saves:backup', p),
+  savesList: (gameId) => ipcRenderer.invoke('saves:list', gameId),
+  savesRestore: (p) => ipcRenderer.invoke('saves:restore', p),
+  savesDelete: (id) => ipcRenderer.invoke('saves:delete', id),
+  onAccountChanged: (cb) => ipcRenderer.on('account:changed', (_, st) => cb(st)),
+
   // Config (RAWG key etc)
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (c) => ipcRenderer.invoke('config:save', c),

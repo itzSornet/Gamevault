@@ -117,20 +117,39 @@
     };
   }
 
+  // At most 4 toasts on screen: a repeat of a visible message replaces it
+  // (moves to the newest slot and restarts its timer), and a 5th pushes out
+  // the oldest.
+  const TOAST_MAX = 4;
+  function dismissToast(el) {
+    if (!el || el.classList.contains('is-leaving')) return;
+    clearTimeout(el._gvTimer);
+    el.classList.add('is-leaving');
+    el.classList.remove('is-on');
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(6px)';
+    setTimeout(() => el.remove(), 250);
+  }
   function toast(message, kind) {
     const wrap = $('#toasts');
+    const cls = 'toast' + (kind === 'error' ? ' is-error' : kind === 'ok' ? ' is-ok' : '');
+    const live = () => [...wrap.children].filter((t) => !t.classList.contains('is-leaving'));
+    for (const t of live()) {
+      if (t.textContent === String(message) && t.className.replace(' is-on', '') === cls) {
+        clearTimeout(t._gvTimer);
+        t.classList.add('is-leaving');   // removed instantly: the fresh copy takes its place
+        t.remove();
+      }
+    }
     const el = document.createElement('div');
-    el.className = 'toast' + (kind === 'error' ? ' is-error' : kind === 'ok' ? ' is-ok' : '');
+    el.className = cls;
     el.textContent = message;
     wrap.appendChild(el);
+    const shown = live();
+    for (let i = 0; i < shown.length - TOAST_MAX; i++) dismissToast(shown[i]);
     void el.offsetWidth;
     el.classList.add('is-on');
-    setTimeout(() => {
-      el.classList.remove('is-on');
-      el.style.opacity = '0';
-      el.style.transform = 'translateY(6px)';
-      setTimeout(() => el.remove(), 250);
-    }, 3800);
+    el._gvTimer = setTimeout(() => dismissToast(el), 3800);
   }
 
   function transition(fn) {
@@ -173,7 +192,7 @@
     if (announce) toast(`Visual quality: ${t}`, 'ok');
   }
 
-  const PALETTES = ['midnight', 'paper'];
+  const PALETTES = ['midnight', 'nebula', 'emerald', 'ocean', 'sunset', 'paper'];
 
   function applyPalette(name, { announce = false, persist = false } = {}) {
     const p = PALETTES.includes(name) ? name : 'midnight';
@@ -226,6 +245,8 @@
 
   function queueGamesSave() {
     const snapshot = cleanGames();
+    state._gamesRev = (state._gamesRev || 0) + 1;
+    if (!state._applyingSync) scheduleCloudSync();
     const run = saveChain
       .then(() => api.saveGames(snapshot))
       .catch((e) => { console.warn('save failed', e); });
@@ -1351,7 +1372,7 @@
 
   function paintRail(g) {
     const rail = document.querySelector('#game-view [data-rail]');
-    if (rail) rail.innerHTML = railHtml(g);
+    if (rail) { rail.innerHTML = railHtml(g) + '<div class="gvx-card sv-card" data-saves-card></div>'; paintSavesCard(g); }
   }
 
   async function loadSteamMeta(g) {
@@ -1488,7 +1509,7 @@
             </div>
             <div class="gvx-list" data-ledger role="list" aria-label="Session history"></div>
           </div>
-          <aside class="gvx-rail" data-rail>${railHtml(g)}</aside>
+          <aside class="gvx-rail" data-rail>${railHtml(g)}<div class="gvx-card sv-card" data-saves-card></div></aside>
         `}
       </div>
     `;
@@ -1501,6 +1522,7 @@
 
     if (!wish) paintLedger(g);
     wireDetail(g, wish);
+    if (!wish) paintSavesCard(g);
     startDetailTick(g);
     state._detailRunning = { id: String(g.id), running: typeof state.live[String(g.id)] === 'number' };
     if (!wish) loadSteamMeta(g);
@@ -1836,16 +1858,18 @@
     head.addEventListener('pointercancel', end);
   }
 
-  // Two springs, one per edge. The edge leading the move is stiff, the
-  // trailing edge is loose, so the pill stretches toward the new item and
-  // then gathers itself in — the accent bar (pill::before) rides along.
+  // Slingshot: two springs, one per edge. On a move the trailing edge first
+  // pulls back the other way (wind-up), the leading edge fires and overshoots,
+  // then the trailing edge snaps in after it. The accent bar rides along.
   const pillSpring = {
     top: { x: 0, v: 0, to: 0 },
     bot: { x: 0, v: 0, to: 0 },
     raf: null, init: false, down: true,
   };
-  const PILL_LEAD = { k: 620, c: 34 };   // ζ ≈ 0.68: lands with a hint of overshoot
-  const PILL_TRAIL = { k: 260, c: 26 };  // ζ ≈ 0.81: follows, never bounces
+  const PILL_LEAD = { k: 900, c: 30 };   // ζ ≈ 0.5: fires and overshoots
+  const PILL_TRAIL = { k: 420, c: 24 };  // ζ ≈ 0.59: lags, then snaps in with a small bounce
+  const PILL_WINDUP_MS = 70;             // trailing edge pulls back this long before it lets go
+  const PILL_WINDUP_PX = 6;              // ...and this far
 
   function drawSidePill(pill) {
     const t = pillSpring.top.x;
@@ -1876,6 +1900,11 @@
 
     S.down = top > S.top.x;
     S.top.to = top; S.bot.to = bot;
+    // pull the slingshot back: for a moment the trailing edge is aimed a few
+    // px away from the target, then released
+    const trailEdge = S.down ? S.top : S.bot;
+    S.windupTo = trailEdge.x + (S.down ? -PILL_WINDUP_PX : PILL_WINDUP_PX);
+    S.windupUntil = performance.now() + PILL_WINDUP_MS;
     if (S.raf) return;
 
     let last = performance.now();
@@ -1884,12 +1913,14 @@
       last = now;
       const lead = S.down ? S.bot : S.top;
       const trail = S.down ? S.top : S.bot;
+      const winding = now < (S.windupUntil || 0);
       for (const [edge, p] of [[lead, PILL_LEAD], [trail, PILL_TRAIL]]) {
-        const a = -p.k * (edge.x - edge.to) - p.c * edge.v;
+        const goal = (winding && edge === trail) ? S.windupTo : edge.to;
+        const a = -p.k * (edge.x - goal) - p.c * edge.v;
         edge.v += a * dt;
         edge.x += edge.v * dt;
       }
-      const settled = [S.top, S.bot].every((e) => Math.abs(e.v) < 0.4 && Math.abs(e.x - e.to) < 0.35);
+      const settled = !winding && [S.top, S.bot].every((e) => Math.abs(e.v) < 0.4 && Math.abs(e.x - e.to) < 0.35);
       if (settled) {
         S.top.x = S.top.to; S.bot.x = S.bot.to; S.top.v = S.bot.v = 0;
         S.raf = null;
@@ -3058,6 +3089,457 @@
       ${options.map(([value, label]) => `<button type="button" class="pill ${value === active ? 'is-active' : ''}" data-value="${esc(value)}" ${opts.disabled ? 'disabled' : ''}>${esc(label)}</button>`).join('')}
     </div>`;
 
+  // ---- GameVault account card (sign-in lives in main: src/backend/account.js)
+  const GOOGLE_G = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.63h6.46a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.27-2.09 3.56-5.17 3.56-8.8z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.9l-3.88-3.02c-1.07.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.71-4.95H1.28v3.11A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.29 14.28a7.2 7.2 0 0 1 0-4.56V6.61H1.28a12 12 0 0 0 0 10.78l4.01-3.11z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.61 4.59 1.8l3.44-3.44A11.97 11.97 0 0 0 12 0 12 12 0 0 0 1.28 6.61l4.01 3.11C6.23 6.88 8.88 4.77 12 4.77z"/></svg>';
+  const acctTitle = '<h2 class="st-card-title">GameVault account</h2>';
+  const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const MAIL_ICON = '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/>';
+
+  const acctInput = (name, type, placeholder, opts = {}) =>
+    `<input class="input" type="${type}" name="${name}" placeholder="${esc(placeholder)}" aria-label="${esc(opts.label || placeholder)}"` +
+    ` autocomplete="${opts.autocomplete || 'off'}" spellcheck="false"${opts.value != null ? ` value="${esc(opts.value)}"` : ''} />`;
+
+  function accountFormHtml() {
+    const mode = state._acctMode || 'signin';
+    const prov = state.accountProviders || {};
+    const email = acctInput('email', 'email', 'Email', { autocomplete: 'email', value: state._acctEmail || '' });
+    const link = (act, text) => `<button type="button" class="acct-link" data-acct="${act}">${text}</button>`;
+    let title, desc, fields, submit, foot;
+    if (mode === 'signup') {
+      title = 'Create your account';
+      desc = 'Free. We send one email to confirm it’s you.';
+      fields = email + acctInput('password', 'password', 'Password (8+ characters)', { autocomplete: 'new-password', label: 'Password' });
+      submit = 'Create account';
+      foot = `<span>Already have one?</span> ${link('mode-signin', 'Sign in')}`;
+    } else if (mode === 'forgot') {
+      title = 'Reset your password';
+      desc = 'We email you a link. Open it on this PC, then pick a new password here.';
+      fields = email;
+      submit = 'Send reset link';
+      foot = link('mode-signin', 'Back to sign in');
+    } else if (mode === 'link') {
+      title = 'Sign in without a password';
+      desc = 'We email you a sign-in link. Open it in a browser on this PC.';
+      fields = email;
+      submit = 'Email me a link';
+      foot = link('mode-signin', 'Use a password instead');
+    } else {
+      title = 'Sign in';
+      desc = 'One free account for cloud features. Everything else in GameVault works without it.';
+      fields = email + acctInput('password', 'password', 'Password', { autocomplete: 'current-password' });
+      submit = 'Sign in';
+      foot = `${link('mode-forgot', 'Forgot password?')}<span class="acct-dot">·</span>${link('mode-link', 'Email me a link instead')}<span class="acct-grow"></span><span>New here?</span> ${link('mode-signup', 'Create an account')}`;
+    }
+    const google = prov.google && mode !== 'forgot'
+      ? `<button type="button" class="btn acct-google" data-acct="google">${GOOGLE_G}<span>Continue with Google</span></button><div class="acct-or"><span>or</span></div>`
+      : '';
+    return `
+      <div class="st-row is-wide acct-in">
+        <div class="st-row-text">
+          <div class="st-row-title">${title}</div>
+          <div class="st-row-desc">${desc}</div>
+        </div>
+        <div class="st-row-control acct-form">
+          ${google}
+          <form class="acct-fields" data-acct-form="${mode}" novalidate>
+            ${fields}
+            <button type="submit" class="btn btn-primary">${submit}</button>
+          </form>
+          <div class="acct-foot">${foot}</div>
+        </div>
+      </div>`;
+  }
+
+  function accountCardHtml() {
+    const st = state.account;
+    const err = st && st.error ? `<p class="st-note acct-err" role="alert">${esc(st.error)}</p>` : '';
+    if (st && st.needsRestart) {
+      return acctTitle + stRow('Restart GameVault', 'Sign-in was added in an update that finishes loading on the next start. Quit GameVault fully (also from the tray) and open it again.', '', { disabled: true });
+    }
+    if (!st || !st.configured) {
+      return acctTitle + stRow('Cloud is off', 'This build of GameVault isn’t connected to Gamevault Cloud, so there is nothing to sign in to. Everything else works as usual.', '', { disabled: true });
+    }
+    if (st.signedIn) {
+      const u = st.user || {};
+      const who = u.email || u.name || 'Signed in';
+      const via = u.provider === 'google' ? 'Google' : u.provider === 'email' ? 'email' : (u.provider || '');
+      const initial = esc((u.name || u.email || '?').trim().charAt(0).toUpperCase());
+      const pwForm = st.mustSetPassword || state._acctChangePw;
+      const me = `
+        <div class="st-row acct-me">
+          <div class="acct-avatar" aria-hidden="true">${initial}</div>
+          <div class="st-row-text">
+            <div class="st-row-title">${esc(who)}</div>
+            <div class="st-row-desc">Signed in${via ? ` with ${esc(via)}` : ''}. Artwork lookups now run on your account.</div>
+          </div>
+          <div class="st-row-control">
+            ${pwForm || u.provider === 'google' ? '' : '<button type="button" class="btn btn-ghost" data-acct="change-pw">Change password</button>'}
+            <button type="button" class="btn btn-ghost acct-out" data-acct="signout">Sign out</button>
+          </div>
+        </div>`;
+      const pw = pwForm ? `
+        <div class="st-row is-wide acct-in">
+          <div class="st-row-text">
+            <div class="st-row-title">${st.mustSetPassword ? 'Choose a new password' : 'Change password'}</div>
+            <div class="st-row-desc">At least 8 characters.${st.mustSetPassword ? ' You’re signed in through the reset link; this finishes the reset.' : ''}</div>
+          </div>
+          <div class="st-row-control acct-form">
+            <form class="acct-fields" data-acct-form="setpw" novalidate>
+              ${acctInput('password', 'password', 'New password', { autocomplete: 'new-password' })}
+              <button type="submit" class="btn btn-primary">Save password</button>
+              ${st.mustSetPassword ? '' : '<button type="button" class="btn btn-ghost" data-acct="change-pw-cancel">Cancel</button>'}
+            </form>
+          </div>
+        </div>` : '';
+      return acctTitle + me + pw + err;
+    }
+    if (st.pending && st.pending.kind !== 'oauth') {
+      const k = st.pending.kind;
+      const head = k === 'signup' ? 'Confirm your email' : 'Check your inbox';
+      const what = k === 'signup' ? 'a link to confirm your account' : k === 'recovery' ? 'a password reset link' : 'a sign-in link';
+      return acctTitle + `
+        <div class="st-row acct-wait">
+          <div class="acct-mail" aria-hidden="true">${stIcon(MAIL_ICON)}</div>
+          <div class="st-row-text">
+            <div class="st-row-title">${head}</div>
+            <div class="st-row-desc">We sent ${what} to <b>${esc(st.pending.email)}</b>. Open it in a browser on this PC and GameVault picks it up by itself. Not there after a minute? Check spam.</div>
+          </div>
+          <div class="st-row-control">
+            ${k === 'signup' ? '' : '<button type="button" class="btn btn-ghost" data-acct="resend">Resend</button>'}
+            <button type="button" class="btn btn-ghost" data-acct="cancel">Back</button>
+          </div>
+        </div>` + err;
+    }
+    if (st.pending && st.pending.kind === 'oauth') {
+      return acctTitle + stRow('Finish in your browser', 'A sign-in page opened in your default browser. Come back here when you’re done.',
+        '<button type="button" class="btn btn-ghost" data-acct="cancel">Cancel</button>') + err;
+    }
+    return acctTitle + accountFormHtml() + err;
+  }
+
+  function renderAccountCard(focus) {
+    const card = document.querySelector('[data-account]');
+    if (!card) return;
+    card.innerHTML = accountCardHtml();
+    wireAccountCard(card);
+    renderCloudCard();
+    if (focus) {
+      const want = typeof focus === 'string' ? card.querySelector(`input[name=${focus}]`) : null;
+      const input = want || [...card.querySelectorAll('input')].find((i) => !i.value) || card.querySelector('input');
+      if (input) input.focus();
+    }
+  }
+
+  function wireAccountCard(card) {
+    if (!card) return;
+    const setError = (msg, focus) => {
+      state.account = { ...(state.account || {}), error: msg };
+      renderAccountCard(focus || true);
+    };
+    const run = async (call, btn, label) => {
+      if (btn) { btn.disabled = true; if (label) btn.textContent = label; }
+      const res = await call().catch((e) => ({ ok: false, error: { message: e.message } }));
+      if (res && res.ok) state.account = res.data;
+      else state.account = { ...(state.account || {}), error: (res && res.error && res.error.message) || 'Something went wrong' };
+      renderAccountCard(!(res && res.ok) && 'password');
+      return res;
+    };
+    const form = card.querySelector('[data-acct-form]');
+    if (form) {
+      const mode = form.dataset.acctForm;
+      const emailIn = form.querySelector('input[name=email]');
+      const pwIn = form.querySelector('input[name=password]');
+      if (emailIn) emailIn.addEventListener('input', () => { state._acctEmail = emailIn.value; });
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const btn = form.querySelector('button[type=submit]');
+        const pw = pwIn ? pwIn.value : '';
+        if (mode === 'setpw') {
+          if (pw.length < 8) return setError('Pick a longer password: at least 8 characters.', 'password');
+          run(() => window.api.accountSetPassword(pw), btn, 'Saving…').then((res) => {
+            if (res && res.ok) { state._acctChangePw = false; renderAccountCard(); toast('Password saved', 'ok'); }
+          });
+          return;
+        }
+        const email = emailIn.value.trim();
+        state._acctEmail = email;
+        if (!EMAIL_OK.test(email)) return setError('Enter your email address.', 'email');
+        if (mode === 'signin') {
+          if (!pw) return setError('Enter your password.', 'password');
+          run(() => window.api.accountPassword(email, pw), btn, 'Signing in…');
+        } else if (mode === 'signup') {
+          if (pw.length < 8) return setError('Pick a longer password: at least 8 characters.', 'password');
+          run(() => window.api.accountSignUp(email, pw), btn, 'Creating…');
+        } else if (mode === 'forgot') {
+          run(() => window.api.accountReset(email), btn, 'Sending…');
+        } else {
+          run(() => window.api.accountEmail(email), btn, 'Sending…');
+        }
+      });
+    }
+    card.querySelectorAll('[data-acct]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const act = btn.dataset.acct;
+        if (act.startsWith('mode-')) {
+          state._acctMode = act.slice(5);
+          if (state.account) state.account = { ...state.account, error: null };
+          renderAccountCard(true);
+        } else if (act === 'google') run(() => window.api.accountOAuth('google'), btn);
+        else if (act === 'resend') {
+          const p = state.account.pending;
+          const res = await run(() => (p.kind === 'recovery' ? window.api.accountReset(p.email) : window.api.accountEmail(p.email)), btn, 'Sending…');
+          if (res && res.ok) toast('Sent a new link', 'ok');
+        } else if (act === 'cancel') {
+          state.account = await window.api.accountCancel();
+          renderAccountCard(true);
+        } else if (act === 'change-pw' || act === 'change-pw-cancel') {
+          state._acctChangePw = act === 'change-pw';
+          if (state.account) state.account = { ...state.account, error: null };
+          renderAccountCard(state._acctChangePw && 'password');
+        } else if (act === 'signout') {
+          state._acctChangePw = false;
+          state._acctMode = 'signin';
+          const res = await run(() => window.api.accountSignOut(), btn, 'Signing out…');
+          if (res && res.ok) toast('Signed out of GameVault');
+        }
+      });
+    });
+  }
+
+  // ---- Cloud features: library sync + save backups (main: src/backend/cloud.js)
+  const signedIn = () => !!(state.account && state.account.signedIn);
+  const cloudOn = (k) => signedIn() && !!state.config[k];
+  const gameById = (id) => state.games.find((x) => String(x.id) === String(id));
+
+  function agoLabel(t) {
+    if (!t) return 'never';
+    const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
+    if (s < 45) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: s > 300 * 86400 ? 'numeric' : undefined });
+  }
+  const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+  function cloudCardHtml() {
+    const on = signedIn();
+    const sync = !!state.config.cloudSync;
+    const saves = !!state.config.cloudSaves;
+    const last = state._lastSync;
+    const syncDesc = `Your games, playtime, status and notes on every PC you sign in to. Never your file paths or API keys.${
+      on && sync ? `<br><span class="cloud-meta">${state._syncing ? 'Syncing…' : `Last synced ${agoLabel(last)}`}${state._syncError ? ` · <span class="cloud-bad">${esc(state._syncError)}</span>` : ''}</span>` : ''}`;
+    return `<h2 class="st-card-title">Cloud features</h2>` +
+      stRow('Sync my library', syncDesc,
+        (on && sync ? '<button type="button" class="btn btn-ghost" data-cloud="sync-now">Sync now</button>' : '') +
+        stSwitch('data-cloud-sync', on && sync, { disabled: !on, label: 'Sync my library' }), { disabled: !on }) +
+      stRow('Back up my game saves', 'Saves are packed and encrypted on this PC before upload, with a key tied to your account. Up to 50 MB per backup, the latest 3 copies of each game. Backs up after you play; restore from the game’s page.',
+        stSwitch('data-cloud-saves', on && saves, { disabled: !on, label: 'Back up my game saves' }), { disabled: !on }) +
+      `<p class="st-note">${on ? 'Both stay off until you turn them on.' : 'Sign in above to turn these on.'}</p>`;
+  }
+
+  function renderCloudCard() {
+    const card = document.querySelector('[data-cloud-card]');
+    if (!card) return;
+    card.innerHTML = cloudCardHtml();
+    wireCloudCard(card);
+  }
+
+  function wireCloudCard(card) {
+    if (!card) return;
+    const syncSw = card.querySelector('[data-cloud-sync]');
+    const savesSw = card.querySelector('[data-cloud-saves]');
+    if (syncSw) syncSw.addEventListener('change', async () => {
+      await saveConfigPatch({ cloudSync: syncSw.checked });
+      renderCloudCard();
+      if (syncSw.checked) runCloudSync({ announce: true });
+    });
+    if (savesSw) savesSw.addEventListener('change', async () => {
+      await saveConfigPatch({ cloudSaves: savesSw.checked });
+      renderCloudCard();
+      if (savesSw.checked) toast('Save backups on. Pick a save folder on each game’s page.', 'ok');
+      if (state.selectedId) paintSavesCard(gameById(state.selectedId));
+    });
+    const now = card.querySelector('[data-cloud="sync-now"]');
+    if (now) now.addEventListener('click', () => runCloudSync({ announce: true, force: true }));
+  }
+
+  // -- library sync engine
+  let cloudSyncJob = null;
+  let cloudSyncTimer = null;
+  function scheduleCloudSync(ms = 20000) {
+    if (!cloudOn('cloudSync')) return;
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(() => runCloudSync({}), ms);
+  }
+
+  function runCloudSync({ announce = false } = {}) {
+    if (!cloudOn('cloudSync') || !api.cloudSync) return Promise.resolve(null);
+    if (cloudSyncJob) return cloudSyncJob;
+    clearTimeout(cloudSyncTimer);
+    state._syncing = true;
+    renderCloudCard();
+    cloudSyncJob = (async () => {
+      const rev = state._gamesRev || 0;
+      const res = await api.cloudSync(cleanGames()).catch((e) => ({ ok: false, error: { message: e.message } }));
+      state._syncing = false;
+      if (!res || !res.ok) {
+        state._syncError = (res && res.error && res.error.message) || 'Sync failed';
+        if (announce) toast(state._syncError, 'error');
+        renderCloudCard();
+        return null;
+      }
+      state._syncError = null;
+      state._lastSync = res.data.at;
+      if ((state._gamesRev || 0) !== rev) { scheduleCloudSync(1500); renderCloudCard(); return res.data; } // edited meanwhile: go again
+      const { added, removed, updated } = res.data.stats || {};
+      if (added || removed || updated) {
+        const old = new Map(state.games.map((g) => [String(g.id), g]));
+        const next = normalizeGames(res.data.games).games;
+        for (const g of next) {
+          const prev = old.get(String(g.id));
+          if (prev) for (const k of Object.keys(prev)) if (k.startsWith('_')) g[k] = prev[k];
+        }
+        state.games = next;
+        state._applyingSync = true;
+        try { await persistGames(); } finally { state._applyingSync = false; }
+        if (state.selectedId && !gameById(state.selectedId)) closeDetail();
+        state._shelfKey = '';
+        renderLibrary();
+        if (state.selectedId) renderDetail();
+        for (const g of next) if (!old.has(String(g.id))) refreshArt(g);
+        const bits = [];
+        if (added) bits.push(`${added} added`);
+        if (updated) bits.push(`${updated} updated`);
+        if (removed) bits.push(`${removed} removed`);
+        toast(`Library synced: ${bits.join(', ')}`, 'ok');
+      } else if (announce) {
+        toast('Library is up to date', 'ok');
+      }
+      renderCloudCard();
+      return res.data;
+    })().finally(() => { cloudSyncJob = null; state._syncing = false; });
+    return cloudSyncJob;
+  }
+
+  // -- save backups, per game (rail card on the game page)
+  function savesCardHtml(g) {
+    const head = '<div class="gvx-card-head">CLOUD SAVES</div>';
+    if (!signedIn()) return head + '<p class="sv-text">Sign in to back up this game’s saves.</p><button type="button" class="sv-link" data-sv="settings">Open account settings</button>';
+    if (!state.config.cloudSaves) return head + '<p class="sv-text">Save backups are off.</p><button type="button" class="sv-link" data-sv="settings">Turn on in settings</button>';
+    const ui = state._sv && state._sv.id === String(g.id) ? state._sv : (state._sv = { id: String(g.id) });
+    if (ui.finding) return head + '<p class="sv-text">Looking up where it saves…</p>';
+    if (ui.found) {
+      const list = ui.found.length
+        ? ui.found.map((c, i) => `<button type="button" class="sv-pick" data-sv="use" data-i="${i}" title="${esc(c.path)}"><b>${esc(c.path.split('\\').slice(-2).join('\\'))}</b><span>${c.files} file${c.files === 1 ? '' : 's'} · ${mb(c.bytes)} · changed ${agoLabel(c.newest)}</span></button>`).join('')
+        : '<p class="sv-text">No save folder found on this PC. Play once so the game makes one, or choose it yourself.</p>';
+      return head + list + '<div class="sv-row"><button type="button" class="sv-link" data-sv="pick">Choose folder…</button><button type="button" class="sv-link" data-sv="cancel">Cancel</button></div>';
+    }
+    if (!g.saveDir) {
+      return head + '<p class="sv-text">Where does this game keep its saves?</p>' +
+        '<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>';
+    }
+    const backups = ui.backups;
+    const rows = !backups ? '<p class="sv-text">Loading backups…</p>'
+      : !backups.length ? '<p class="sv-text">No backups yet.</p>'
+        : backups.map((b) => `<div class="sv-backup"><span><b>${agoLabel(b.created_at)}</b>${esc(b.device || '')} · ${mb(b.size)}</span>` +
+          `<button type="button" class="sv-link${ui.confirm === b.id ? ' is-danger' : ''}" data-sv="restore" data-id="${esc(b.id)}">${ui.confirm === b.id ? 'Replace current saves?' : 'Restore'}</button></div>`).join('');
+    return head +
+      `<div class="sv-folder" title="${esc(g.saveDir)}">${esc(g.saveDir.split('\\').slice(-2).join('\\'))}</div>` +
+      rows +
+      (ui.error ? `<p class="sv-text cloud-bad">${esc(ui.error)}</p>` : '') +
+      `<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="backup" ${ui.busy ? 'disabled' : ''}>${ui.busy || 'Back up now'}</button><button type="button" class="sv-link" data-sv="pick">Change folder</button></div>`;
+  }
+
+  function paintSavesCard(g) {
+    const el = document.querySelector('#game-view [data-saves-card]');
+    if (!el || !g) return;
+    el.innerHTML = savesCardHtml(g);
+    const ui = state._sv;
+    if (g.saveDir && cloudOn('cloudSaves') && ui && ui.id === String(g.id) && !ui.backups && !ui.loading) {
+      ui.loading = true;
+      api.savesList(String(g.id)).then((res) => {
+        ui.loading = false;
+        ui.backups = res && res.ok ? res.data : [];
+        if (!(res && res.ok)) ui.error = res && res.error && res.error.message;
+        if (state.selectedId === String(g.id)) paintSavesCard(g);
+      });
+    }
+    el.querySelectorAll('[data-sv]').forEach((btn) => btn.addEventListener('click', () => savesAction(g, btn)));
+  }
+
+  async function setSaveDir(g, dir) {
+    g.saveDir = dir;
+    state._sv = { id: String(g.id) };
+    saveGamesSoon();
+    paintSavesCard(g);
+    if (dir) backupNow(g, { quiet: false });
+  }
+
+  async function backupNow(g, { quiet = true, force = false } = {}) {
+    if (!g || !g.saveDir || !cloudOn('cloudSaves')) return;
+    const ui = state._sv && state._sv.id === String(g.id) ? state._sv : null;
+    if (ui) { ui.busy = 'Backing up…'; ui.error = null; paintSavesCard(g); }
+    const res = await api.savesBackup({ gameId: String(g.id), gameName: g.name, saveDir: g.saveDir, force });
+    if (ui) { ui.busy = null; ui.backups = null; }
+    if (res && res.ok) {
+      if (!quiet) toast(res.data.skipped ? 'Saves haven’t changed since the last backup' : `Backed up ${g.name} saves`, 'ok');
+    } else {
+      const msg = (res && res.error && res.error.message) || 'Backup failed';
+      if (ui) ui.error = msg;
+      if (!quiet || (res && res.error && res.error.code === 'NO_FOLDER')) toast(`${g.name}: ${msg}`, 'error');
+    }
+    if (state.selectedId === String(g.id)) paintSavesCard(g);
+  }
+
+  async function savesAction(g, btn) {
+    const act = btn.dataset.sv;
+    const ui = state._sv;
+    if (act === 'settings') { openSettings('account'); return; }
+    if (act === 'find') {
+      ui.finding = true; paintSavesCard(g);
+      const res = await api.savesFind({ name: g.name, steamAppId: g.steamAppId, installDir: g.installDir });
+      ui.finding = false;
+      ui.found = res && res.ok ? res.data.candidates : [];
+      if (!(res && res.ok)) toast(`Couldn’t look it up: ${(res && res.error && res.error.message) || 'PCGamingWiki is unreachable'}`, 'error');
+      paintSavesCard(g);
+    } else if (act === 'use') {
+      const c = ui.found && ui.found[Number(btn.dataset.i)];
+      ui.found = null;
+      if (c) setSaveDir(g, c.path);
+    } else if (act === 'pick') {
+      const dir = await api.savesPick(g.saveDir || null);
+      ui.found = null;
+      if (dir) setSaveDir(g, dir); else paintSavesCard(g);
+    } else if (act === 'cancel') {
+      ui.found = null; paintSavesCard(g);
+    } else if (act === 'backup') {
+      backupNow(g, { quiet: false, force: true });
+    } else if (act === 'restore') {
+      const id = btn.dataset.id;
+      if (ui.confirm !== id) { ui.confirm = id; paintSavesCard(g); return; }
+      ui.confirm = null;
+      if (typeof state.live[String(g.id)] === 'number') { toast('Close the game before restoring its saves', 'error'); paintSavesCard(g); return; }
+      ui.busy = 'Restoring…'; paintSavesCard(g);
+      const res = await api.savesRestore({ gameId: String(g.id), backupId: id, saveDir: g.saveDir });
+      ui.busy = null;
+      if (res && res.ok) toast(`Restored ${res.data.files} file${res.data.files === 1 ? '' : 's'}. Your previous saves were kept in GameVault’s cloud folder.`, 'ok');
+      else toast((res && res.error && res.error.message) || 'Restore failed', 'error');
+      paintSavesCard(g);
+    }
+  }
+
+  if (window.api && window.api.onAccountChanged) {
+    window.api.onAccountChanged((st) => {
+      const was = !!(state.account && state.account.signedIn);
+      state.account = st;
+      if (st.signedIn && !was) toast(st.mustSetPassword ? 'Now choose a new password' : `Signed in as ${(st.user && (st.user.email || st.user.name)) || 'you'}`, 'ok');
+      else if (!st.signedIn && was && st.error) toast(st.error);
+      renderAccountCard();
+      if (st.signedIn && !was) runCloudSync({});
+      if (state.selectedId) paintSavesCard(gameById(state.selectedId));
+    });
+  }
+
   function settingsView() { return $('#settings-view'); }
 
   async function openSettings(section) {
@@ -3163,6 +3645,56 @@
   }
 
   // Pills: one active option; calls onPick(value).
+  // Palette: a compact dropdown with a swatch per theme (pills got too long).
+  const palName = (p) => p[0].toUpperCase() + p.slice(1);
+  const stPalettePicker = (active) => `
+    <div class="sort-wrap pal-wrap">
+      <button type="button" class="sort-btn pal-btn" aria-haspopup="listbox" aria-expanded="false" aria-label="Palette">
+        <i class="pal-sw" data-value="${esc(active)}"></i><span class="pal-label">${esc(palName(active))}</span>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="sort-menu pal-menu" role="listbox" hidden>
+        ${PALETTES.map((p) => `<button type="button" class="sort-item pal-item" role="option" data-value="${esc(p)}" aria-selected="${p === active}"><span><i class="pal-sw" data-value="${esc(p)}"></i>${esc(palName(p))}</span></button>`).join('')}
+      </div>
+    </div>`;
+
+  function wirePalettePicker(panel, onPick) {
+    const wrap = panel.querySelector('.pal-wrap');
+    if (!wrap) return;
+    const btn = wrap.querySelector('.pal-btn');
+    const menu = wrap.querySelector('.pal-menu');
+    const items = () => [...menu.querySelectorAll('.pal-item')];
+    const close = (focus) => {
+      menu.hidden = true; btn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', outside, true);
+      if (focus) btn.focus({ preventScroll: true });
+    };
+    const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
+    const open = () => {
+      menu.hidden = false; btn.setAttribute('aria-expanded', 'true');
+      document.addEventListener('pointerdown', outside, true);
+      (menu.querySelector('[aria-selected="true"]') || items()[0]).focus({ preventScroll: true });
+    };
+    btn.onclick = () => (menu.hidden ? open() : close(false));
+    menu.onclick = (e) => {
+      const item = e.target.closest('.pal-item');
+      if (!item) return;
+      const v = item.dataset.value;
+      for (const it of items()) it.setAttribute('aria-selected', String(it === item));
+      btn.querySelector('.pal-sw').dataset.value = v;
+      btn.querySelector('.pal-label').textContent = palName(v);
+      close(true);
+      onPick(v);
+    };
+    menu.onkeydown = (e) => {
+      const list = items();
+      const i = list.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown') { e.preventDefault(); list[Math.min(i + 1, list.length - 1)].focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); list[Math.max(i - 1, 0)].focus(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+    };
+  }
+
   function wirePills(panel, selector, onPick) {
     const group = panel.querySelector(selector);
     if (!group) return;
@@ -3212,11 +3744,11 @@
       const reduced = prefersReducedMotion();
       return {
         html: stCard('Look',
-          stRow('Palette', 'Midnight: near-black and electric blue. Paper: light canvas and vermilion.', stPills('data-palette-group', PALETTES.map((p) => [p, p[0].toUpperCase() + p.slice(1)]), state.palette)) +
+          stRow('Palette', 'Sets the accent and the colors of the moving background. Paper is the light one.', stPalettePicker(state.palette)) +
           stRow('Visual quality', 'Cinematic adds the animated background. Lite turns off blur and motion — best on older PCs.', stPills('data-tier-group', [['cinematic', 'Cinematic'], ['standard', 'Standard'], ['lite', 'Lite']], state.tier)) +
           stRow('Motion', `Follows your system’s “reduce motion” setting — currently <b>${reduced ? 'reduced' : 'full'}</b>.`, '')),
         wire(panel) {
-          wirePills(panel, '[data-palette-group]', (v) => applyPalette(v, { announce: true, persist: true }));
+          wirePalettePicker(panel, (v) => applyPalette(v, { announce: true, persist: true }));
           wirePills(panel, '[data-tier-group]', (v) => applyTier(v, { announce: true, persist: true }));
         },
       };
@@ -3326,14 +3858,18 @@
     },
 
     async account() {
+      const [st, prov] = await Promise.all([
+        window.api.accountStatus().catch(() => ({ needsRestart: true })),
+        window.api.accountProviders().catch(() => ({ email: true, google: false })),
+      ]);
+      state.account = st;
+      state.accountProviders = prov;
+      if (api.cloudLastSync) state._lastSync = await api.cloudLastSync().catch(() => null);
       return {
         html:
-          stCard('GameVault account',
-            stRow('Sign in', 'One free account for cloud features. Everything else in GameVault works without it.', '<button type="button" class="btn btn-primary" disabled>Sign in</button>', { disabled: true }), { soon: true }) +
-          stCard('Cloud features',
-            stRow('Back up my game saves', 'Saves are encrypted on this PC before upload — only you can read them. Up to 100 MB, the latest 3 copies of each game. Restore any time from the game’s page.', stSwitch('data-cloud-saves', false, { disabled: true, label: 'Back up my game saves' }), { disabled: true }) +
-            stRow('Sync my library', 'Your games, playtime and settings on every PC you sign in to. Never your file paths or API keys.', stSwitch('data-cloud-sync', false, { disabled: true, label: 'Sync my library' }), { disabled: true }) +
-            '<p class="st-note">Both stay off until you turn them on.</p>', { soon: true }),
+          `<section class="st-card acct-card" data-account>${accountCardHtml()}</section>` +
+          `<section class="st-card" data-cloud-card>${cloudCardHtml()}</section>`,
+        wire(panel) { wireAccountCard(panel.querySelector('[data-account]')); wireCloudCard(panel.querySelector('[data-cloud-card]')); },
       };
     },
 
@@ -3963,6 +4499,7 @@
         g.sessions.push({ start: sessionStart, end: sessionEnd, duration: hours });
         g.lastPlayed = sessionEnd || Date.now();
         saveGamesSoon();
+        if (g.saveDir && cloudOn('cloudSaves')) setTimeout(() => backupNow(g, { quiet: true }), 5000);
       }
       refreshGameUi(g);
       repaintDetailHistory(g);
@@ -4049,6 +4586,13 @@
         : storedView ? 'poster'
           : (VIEWS.includes(state.config.view) ? state.config.view : 'shelf');
       if (norm.changed && Array.isArray(games) && games.length) persistGames();
+      if (api.accountStatus) {
+        api.accountStatus().then((st) => {
+          state.account = st;
+          if (api.cloudLastSync) api.cloudLastSync().then((t) => { state._lastSync = t; }).catch(() => {});
+          setTimeout(() => runCloudSync({}), 3000);
+        }).catch(() => {});
+      }
     } catch (e) {
       console.error('boot:', e);
       toast('Could not load the library', 'error');
@@ -4691,6 +5235,7 @@
     const pinned = [...mainEl.children].filter((el) => !el.hidden && !el.classList.contains('topbar'));
     pinned.forEach((el) => { el.style.width = `${el.getBoundingClientRect().width}px`; });
     mainEl.classList.add('is-side-moving');
+    document.documentElement.dataset.busy = '1';   // ambient.js holds the fluid still
     // Start from the old width, then release to the class width with the transition on.
     sideEl.style.width = sideEl.style.flexBasis = `${fromW}px`;
     void sideEl.offsetWidth;
@@ -4704,17 +5249,28 @@
       sideEl.removeEventListener('transitionend', onEnd);
       sideEl.classList.remove('side-anim');
       mainEl.classList.remove('is-side-moving');
+      delete document.documentElement.dataset.busy;
       pinned.forEach((el) => { el.style.width = ''; });
       syncSidePill();
       spotHooks.resync();
     };
     sideEl.addEventListener('transitionend', onEnd);
-    timer = setTimeout(finishSideAnim, 500); // safety if transitionend never fires
+    timer = setTimeout(finishSideAnim, 400); // safety if transitionend never fires
   };
   applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })(), false);
   if (sideToggle) sideToggle.onclick = () => {
     window.__gvPerfMark && window.__gvPerfMark('sidebar');
     applySidebar(sideEl.classList.contains('is-collapsed'), true);
+    const brandEl = sideEl.querySelector('.brand');
+    if (brandEl) {   // replay the 1.3.1 shapeshift spin on every toggle
+      brandEl.classList.remove('is-shifting');
+      void brandEl.offsetWidth;
+      // the hexagon spins back in, then (if the pointer is still on it) the
+      // hover morph takes over and shows the new direction's arrow
+      brandEl.classList.add('is-shifting', 'hover-lock');
+      clearTimeout(brandEl._gvShift);
+      brandEl._gvShift = setTimeout(() => brandEl.classList.remove('is-shifting', 'hover-lock'), 480);
+    }
   };
 
   const gridEl = $('#grid');

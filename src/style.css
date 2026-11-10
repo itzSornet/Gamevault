@@ -3496,7 +3496,7 @@ body { font-size: 13.5px; }
   z-index: 0;
   opacity: 0;
   transform-origin: top left;
-  background: radial-gradient(55% 100% at 22% 100%, rgba(120, 160, 255, 0.32), transparent 72%);
+  background: radial-gradient(55% 100% at 22% 100%, rgba(var(--accent-rgb), 0.32), transparent 72%);
   filter: blur(24px);
   mix-blend-mode: screen;
 }
@@ -3527,15 +3527,15 @@ body { font-size: 13.5px; }
 .cmd-bg {
   border-radius: 22px;
   background:
-    radial-gradient(120% 90% at 18% 0%, rgba(96, 136, 255, 0.16), transparent 58%),
-    radial-gradient(90% 80% at 100% 0%, rgba(140, 96, 255, 0.10), transparent 62%),
+    radial-gradient(120% 90% at 18% 0%, rgba(var(--accent-rgb), 0.16), transparent 58%),
+    radial-gradient(90% 80% at 100% 0%, rgba(var(--accent-rgb), 0.10), transparent 62%),
     linear-gradient(150deg, rgba(30, 36, 54, 0.74), rgba(13, 16, 25, 0.66));
   -webkit-backdrop-filter: blur(30px) saturate(180%);
   backdrop-filter: blur(30px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.20),
-    inset 0 0 0 1px rgba(120, 160, 255, 0.06),
+    inset 0 0 0 1px rgba(var(--accent-rgb), 0.06),
     0 40px 120px rgba(0, 0, 0, 0.66),
     0 0 60px rgba(var(--accent-rgb), 0.10);
 }
@@ -3555,16 +3555,16 @@ body { font-size: 13.5px; }
   height: 190px;
   transform-origin: top center;
   transform: translateX(-50%) scaleY(0.25);
-  background: radial-gradient(55% 100% at 50% 100%, rgba(120, 160, 255, 0.30), transparent 72%);
+  background: radial-gradient(55% 100% at 50% 100%, rgba(var(--accent-rgb), 0.30), transparent 72%);
 }
 .topbar #search-dock {
   background:
-    linear-gradient(160deg, rgba(100, 140, 255, 0.10), transparent 55%),
+    linear-gradient(160deg, rgba(var(--accent-rgb), 0.10), transparent 55%),
     rgba(20, 24, 36, 0.58);
   -webkit-backdrop-filter: blur(20px) saturate(170%);
   backdrop-filter: blur(20px) saturate(170%);
   border-color: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(120, 160, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(var(--accent-rgb), 0.04);
 }
 
 /* ============================================================================
@@ -3573,16 +3573,16 @@ body { font-size: 13.5px; }
 .cmd-bg {
   border-radius: 22px;
   background:
-    radial-gradient(90% 55% at 12% 0%, rgba(88, 132, 255, 0.16), transparent 62%),
+    radial-gradient(90% 55% at 12% 0%, rgba(var(--accent-rgb), 0.16), transparent 62%),
     linear-gradient(180deg, rgba(26, 31, 45, 0.90), rgba(11, 13, 20, 0.88));
   -webkit-backdrop-filter: blur(32px) saturate(150%);
   backdrop-filter: blur(32px) saturate(150%);
   border: 1px solid rgba(255, 255, 255, 0.11);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    inset 0 0 0 1px rgba(90, 130, 255, 0.05),
+    inset 0 0 0 1px rgba(var(--accent-rgb), 0.05),
     0 34px 100px rgba(0, 0, 0, 0.72),
-    0 0 80px rgba(60, 110, 255, 0.08);
+    0 0 80px rgba(var(--accent-rgb), 0.08);
 }
 /* film grain: kills the flat “plastic panel” look */
 .cmd-bg::after {
@@ -3638,7 +3638,7 @@ body { font-size: 13.5px; }
   pointer-events: none;
   background: conic-gradient(from 200deg at 50% 50%,
     rgba(255, 236, 214, 0.55),
-    rgba(120, 170, 255, 0.10) 18%,
+    rgba(var(--accent-rgb), 0.10) 18%,
     rgba(255, 120, 180, 0.22) 32%,
     rgba(255, 255, 255, 0.05) 52%,
     rgba(120, 255, 230, 0.18) 70%,
@@ -3972,7 +3972,8 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 .sidebar { width: 216px; flex-basis: 216px; padding-left: 11px; padding-right: 11px; }
 .sidebar.is-collapsed { width: 62px; flex-basis: 62px; padding-left: 11px; padding-right: 11px; }
 .sidebar.side-anim {
-  transition: width 340ms var(--ease-spring), flex-basis 340ms var(--ease-spring);
+  /* crisp ease-out, no spring overshoot: the rail lands where it's going */
+  transition: width 210ms cubic-bezier(0.2, 0.9, 0.25, 1), flex-basis 210ms cubic-bezier(0.2, 0.9, 0.25, 1);
 }
 
 /* brand row: icon pinned left (centered in the rail), toggle pinned right */
@@ -4005,8 +4006,8 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 .side-item > span,
 .side-item > b {
   transition:
-    opacity 220ms var(--ease-out-quart) calc(70ms + var(--i, 0) * 18ms),
-    transform 300ms var(--ease-spring) calc(70ms + var(--i, 0) * 18ms);
+    opacity 170ms var(--ease-out-quart) calc(40ms + var(--i, 0) * 8ms),
+    transform 200ms cubic-bezier(0.2, 0.9, 0.25, 1) calc(40ms + var(--i, 0) * 8ms);
 }
 
 /* collapsed state (toggle) and auto-rail (narrow window) share one look */
@@ -4015,8 +4016,8 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 .sidebar.is-collapsed .side-item > b {
   opacity: 0;
   transform: translateX(-8px);
-  transition-duration: 110ms, 160ms;
-  transition-delay: calc(var(--i, 0) * 12ms);
+  transition-duration: 90ms, 120ms;
+  transition-delay: calc(var(--i, 0) * 6ms);
 }
 /* hairlines sit midway between the groups they separate; the first one
    also counts the brand row's bottom padding as part of its gap */
@@ -4057,6 +4058,9 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 
 /* main column content is pinned to a px width while the sidebar animates */
 .main.is-side-moving > :not(.topbar) { flex-shrink: 0; }
+/* (the main glass keeps its blur while the rail moves: swapping it out for a
+   flat tint read as a flash. The fluid is paused instead, so the blur only
+   follows the panel's size, not moving content.) */
 /* the pinned content's scrollbar would hang mid-column for a moment — hide it */
 .main.is-side-moving ::-webkit-scrollbar-thumb { background: transparent; }
 
@@ -4081,9 +4085,9 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
   --wave-alpha: 0.8;
 }
 :root[data-palette='paper'] {
-  --wave-1: 228, 87, 46;    /* accent */
-  --wave-2: 240, 168, 72;
-  --wave-3: 96, 146, 214;
+  --wave-1: 236, 120, 84;   /* accent, softened */
+  --wave-2: 246, 190, 110;
+  --wave-3: 232, 146, 168;  /* rose, not blue: blue over cream went muddy */
   --wave-alpha: 0.55;
 }
 
@@ -4139,6 +4143,36 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
   50%  { transform: translate3d(8vw, -6vh, 0) rotate(6deg) scaleY(1.2); }
   100% { transform: translate3d(2vw, 4vh, 0) rotate(-3deg) scaleY(0.95); }
 }
+
+/* Fluid background (src/lib/ambient.js): a low-res WebGL canvas of
+   palette-colored blobs. While it runs, the CSS bands above step aside and
+   stay as the fallback for Lite / software rendering / no WebGL. */
+:root, :root[data-palette='midnight'] { --fluid-amt: 0.85; }
+:root[data-palette='paper'] { --fluid-amt: 0.55; }
+#ambient .ambient-fluid {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+}
+#ambient.has-fluid i { display: none !important; animation: none !important; }
+/* thinner tint on the sidebar glass so the blobs visibly swim through its blur */
+#ambient.has-fluid ~ .app .sidebar {
+  background: rgba(var(--main-glass), var(--side-glass-a));
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
+  backdrop-filter: blur(22px) saturate(170%);
+}
+:root[data-palette='paper'] #ambient.has-fluid ~ .app .sidebar { background: rgba(255, 255, 255, var(--side-glass-a)); }
+/* the main panel is glass too: half the sidebar's blur under a heavy tint,
+   so the blobs only glow faintly behind the library */
+:root { --main-glass: 6, 7, 10; --main-glass-a: 0.91; --side-glass-a: 0.56; }
+:root[data-palette='paper'] { --main-glass: 243, 240, 233; --main-glass-a: 0.88; --side-glass-a: 0.64; }
+#ambient.has-fluid ~ .app .main {
+  background: rgba(var(--main-glass), var(--main-glass-a));
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+}
+#ambient.has-fluid ~ .app .topbar { background: rgba(var(--main-glass), 0.35) !important; }
+#ambient.has-fluid ~ .app .main::after { background: linear-gradient(to top, rgba(var(--main-glass), 0.9), rgba(var(--main-glass), 0)); }
 
 /* the waves are only worth moving when glass is there to soften them */
 [data-tier='lite'] #ambient i,
@@ -4653,3 +4687,183 @@ input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; marg
   .st-row:not(.is-wide) { flex-wrap: wrap; }
 }
 .st-row .btn:disabled { opacity: 0.5; box-shadow: none !important; cursor: not-allowed; filter: grayscale(0.4); }
+
+/* ============================================================================
+   More palettes. All dark: they inherit Midnight's surfaces and only swap the
+   accent, the fluid colors (--wave-*) and a hint of hue in the glass tint.
+   ========================================================================= */
+:root[data-palette='nebula'] {
+  --accent: #7c4dff; --accent-hi: #9873ff; --accent-dim: rgba(124, 77, 255, 0.18); --accent-rgb: 124, 77, 255;
+  --wave-1: 86, 6, 255; --wave-2: 254, 137, 137; --wave-3: 150, 40, 200;
+  --main-glass: 8, 6, 14;
+}
+:root[data-palette='emerald'] {
+  --accent: #1fa774; --accent-hi: #36c08b; --accent-dim: rgba(31, 167, 116, 0.18); --accent-rgb: 31, 167, 116;
+  --wave-1: 11, 122, 83; --wave-2: 51, 200, 150; --wave-3: 16, 88, 110;
+  --main-glass: 5, 10, 9;
+}
+:root[data-palette='ocean'] {
+  --accent: #2f7bff; --accent-hi: #4f93ff; --accent-dim: rgba(47, 123, 255, 0.18); --accent-rgb: 47, 123, 255;
+  --wave-1: 29, 111, 255; --wave-2: 94, 231, 255; --wave-3: 24, 50, 150;
+  --main-glass: 5, 8, 14;
+}
+:root[data-palette='sunset'] {
+  --accent: #f0603a; --accent-hi: #ff7a52; --accent-dim: rgba(240, 96, 58, 0.18); --accent-rgb: 240, 96, 58;
+  --wave-1: 255, 106, 61; --wave-2: 255, 200, 100; --wave-3: 150, 36, 110;
+  --main-glass: 12, 7, 8;
+}
+
+/* palette dropdown (Settings → Appearance): a swatch of each theme's fluid */
+.pal-btn { height: 34px; min-width: 168px; padding: 0 12px; font-size: 13px; color: var(--text); }
+.pal-btn .pal-label { flex: 1; text-align: left; }
+.pal-menu { width: 200px; z-index: 60; }
+.pal-item > span { display: inline-flex; align-items: center; gap: 9px; }
+.pal-item[aria-selected='true'] { color: var(--text); background: var(--accent-dim); }
+.pal-sw {
+  display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.pal-sw[data-value='midnight'] { background: linear-gradient(135deg, #4c7dff, #7c5cff 60%, #20bea0); }
+.pal-sw[data-value='paper']    { background: linear-gradient(135deg, #f3f0e9, #ec7854 60%, #f6be6e); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2); }
+.pal-sw[data-value='nebula']   { background: linear-gradient(135deg, #5606ff, #fe8989); }
+.pal-sw[data-value='emerald']  { background: linear-gradient(135deg, #0b7a53, #33c896); }
+.pal-sw[data-value='ocean']    { background: linear-gradient(135deg, #1d6fff, #5ee7ff); }
+.pal-sw[data-value='sunset']   { background: linear-gradient(135deg, #ff6a3d, #ffc864); }
+
+/* the palette dropdown must be able to hang past the card's edge */
+.st-card:has(.pal-wrap) { overflow: visible; }
+.st-card:has(.pal-wrap) .pal-menu { z-index: 80; }
+
+/* tighter gap between the logo and the first category */
+.sidebar { --brand-pb: 6px; }
+.side-brand + .side-sec { padding-top: 8px; }
+/* collapsed rail: hairlines stay visible over bright fluid behind the glass */
+.sidebar.is-collapsed .side-sec::after { background: rgba(255, 255, 255, 0.26); }
+:root[data-palette='paper'] .sidebar.is-collapsed .side-sec::after { background: rgba(22, 21, 26, 0.22); }
+@media (max-width: 900px) {
+  .sidebar .side-sec::after { background: rgba(255, 255, 255, 0.26); }
+  :root[data-palette='paper'] .sidebar .side-sec::after { background: rgba(22, 21, 26, 0.22); }
+}
+
+/* ============================================================================
+   Logo = sidebar toggle (the 1.3.1 "shapeshift" button).
+   A bold accent hexagon, no tile. Hover morphs it into the chevron that says
+   what a click will do (< collapse, > expand); clicking replays the spin and
+   the hexagon comes back. The hit area is larger than the mark itself.
+   ========================================================================= */
+:root { --shapeshift: cubic-bezier(0.68, -0.55, 0.27, 1.55); }
+.brand.brand-btn {
+  position: relative;
+  width: 30px; height: 30px; padding: 0; margin: 0;
+  border: none; border-radius: 10px;
+  background: none; box-shadow: none;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.brand.brand-btn::before {           /* bigger hit box than the hexagon */
+  content: ''; position: absolute; inset: -7px; border-radius: 12px;
+}
+.brand.brand-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.brand-btn svg {
+  position: absolute; left: 50%; top: 50%;
+  margin: -12px 0 0 -12px;
+  transition: transform 0.4s var(--shapeshift), opacity 0.3s ease;
+  pointer-events: none;
+}
+.brand-btn .brand-chev { margin: -10px 0 0 -10px; }
+.brand-btn .brand-hex { filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.35)); }
+
+/* resting: hexagon in, chevron parked out */
+.brand-btn .brand-chev { opacity: 0; transform: rotate(-180deg) scale(0.5); }
+.sidebar.is-collapsed .brand-btn .brand-hex { transform: scale(1.1); }
+
+/* hover (not right after a click): hexagon spins out, chevron spins in */
+.brand-btn:not(.hover-lock):hover .brand-hex,
+.brand-btn:not(.hover-lock):focus-visible .brand-hex { opacity: 0; transform: rotate(180deg) scale(0.5); }
+.brand-btn:not(.hover-lock):hover .brand-chev,
+.brand-btn:not(.hover-lock):focus-visible .brand-chev { opacity: 1; transform: rotate(0deg) scale(1); }
+.sidebar.is-collapsed .brand-btn:not(.hover-lock):hover .brand-chev,
+.sidebar.is-collapsed .brand-btn:not(.hover-lock):focus-visible .brand-chev { transform: rotate(180deg) scale(1); }
+
+/* click: the hexagon spins back in */
+.brand-btn.is-shifting .brand-hex { animation: gv-shapeshift 0.45s var(--shapeshift); }
+.sidebar.is-collapsed .brand-btn.is-shifting .brand-hex { animation-name: gv-shapeshift-in; }
+@keyframes gv-shapeshift {
+  from { transform: rotate(-180deg) scale(0.5); opacity: 0; }
+  to   { transform: rotate(0) scale(1); opacity: 1; }
+}
+@keyframes gv-shapeshift-in {
+  from { transform: rotate(-180deg) scale(0.5); opacity: 0; }
+  to   { transform: rotate(0) scale(1.1); opacity: 1; }
+}
+
+/* the name no longer makes room for a separate toggle */
+.side-name { padding-right: 0; }
+
+/* narrow window: the rail is automatic, so the mark is just a mark */
+@media (max-width: 900px) {
+  .brand.brand-btn { pointer-events: none; }
+}
+
+/* 1.3.1's glowing accent bar on the selected item */
+.side-pill::before { box-shadow: 0 0 8px var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  .brand-btn.is-shifting .brand-hex { animation: none; }
+  .brand-btn svg { transition: opacity 0.15s; }
+}
+
+/* ---- GameVault account card ---- */
+.acct-form { flex-direction: column; align-items: stretch; gap: 10px; }
+.acct-email { display: flex; gap: 8px; }
+.acct-email .input { flex: 1; min-width: 0; height: 34px; }
+.acct-email .btn { flex: none; }
+.acct-google { justify-content: center; gap: 10px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line-2); color: var(--text); font-weight: 600; }
+.acct-google:hover { background: rgba(255, 255, 255, 0.1); }
+.acct-or { display: flex; align-items: center; gap: 10px; color: var(--text-mute); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; }
+.acct-or::before, .acct-or::after { content: ''; flex: 1; height: 1px; background: var(--line-2); }
+.acct-me, .acct-wait { align-items: center; gap: 14px; }
+.acct-avatar, .acct-mail {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(var(--accent-rgb), 0.16); color: var(--accent-hi, var(--accent));
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
+  font-weight: 700; font-size: 16px;
+}
+.acct-wait .st-row-desc b { color: var(--text); font-weight: 600; }
+.acct-err { color: #ff8a8a; }
+[data-palette="paper"] .acct-google { background: rgba(0, 0, 0, 0.04); }
+[data-palette="paper"] .acct-err { color: #c43c3c; }
+.acct-fields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+.acct-fields .input { min-width: 0; height: 34px; }
+.acct-fields .input:only-of-type { grid-column: span 2; }
+.acct-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-mute); }
+.acct-grow { flex: 1; }
+.acct-dot { opacity: 0.6; }
+.acct-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-hi, var(--accent)); cursor: pointer; }
+.acct-link:hover { text-decoration: underline; }
+.acct-me .st-row-control { gap: 8px; }
+@media (max-width: 760px) { .acct-fields { grid-template-columns: 1fr; } .acct-fields .input:only-of-type { grid-column: auto; } }
+.acct-fields[data-acct-form="setpw"] { grid-template-columns: 1fr auto auto; }
+.acct-fields[data-acct-form="setpw"] .input { grid-column: auto; }
+
+/* ---- Cloud features ---- */
+.cloud-meta { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--text-mute); }
+.cloud-bad { color: #ff8a8a; }
+[data-palette="paper"] .cloud-bad { color: #c43c3c; }
+.sv-card { display: flex; flex-direction: column; gap: 8px; }
+.sv-card .gvx-card-head { margin-bottom: 0; }
+.sv-text { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--text-dim); }
+.sv-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sv-btn { height: 28px; padding: 0 12px; font-size: 12px; border: 1px solid var(--line-2); }
+.sv-link { background: none; border: 0; padding: 0; font: inherit; font-size: 11.5px; color: var(--accent-hi, var(--accent)); cursor: pointer; text-align: left; }
+.sv-link:hover { text-decoration: underline; }
+.sv-link.is-danger { color: #ff8a8a; font-weight: 600; }
+.sv-folder { font-size: 11px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.sv-backup { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-mute); }
+.sv-backup span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-backup b { color: var(--text); font-weight: 600; margin-right: 6px; }
+.sv-pick { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line-2); background: rgba(255, 255, 255, 0.03); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.sv-pick:hover { border-color: rgba(var(--accent-rgb), 0.6); background: rgba(var(--accent-rgb), 0.08); }
+.sv-pick b { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-pick span { font-size: 11px; color: var(--text-mute); }
+.st-row-control .btn + .st-switch { margin-left: 4px; }
