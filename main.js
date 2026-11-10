@@ -1,5 +1,5 @@
 // GameVault v1.3.1 - Main Process
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage, safeStorage } = require('electron');
 app.name = 'GameVault Experimental';
 if (app.setName) app.setName('GameVault Experimental');
 // Cap Chromium's disk caches: headless capture runs used to inflate them to GBs.
@@ -21,6 +21,9 @@ const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
 const { createArtCache, installSgdbImageCaching } = require('./src/backend/art-cache.js');
 const { cloudConfig } = require('./src/backend/cloud-config.js');
+const { createAccount } = require('./src/backend/account.js');
+const { createCloud } = require('./src/backend/cloud.js');
+const { findSaveFolders } = require('./src/backend/save-locations.js');
 const { httpsGet } = require('./src/backend/api.js');
 const Fuzzy = require('./src/lib/fuzzy.js');
 
@@ -1181,10 +1184,80 @@ function createWindow() {
   function artCache() {
     if (!artCacheInstance) {
       const { url, anonKey } = cloudConfig();
-      artCacheInstance = createArtCache({ dir: path.join(app.getPath('userData'), 'art-cache'), cloudUrl: url, anonKey });
+      artCacheInstance = createArtCache({
+        dir: path.join(app.getPath('userData'), 'art-cache'), cloudUrl: url, anonKey,
+        // Signed in: art lookups count against the user's account, not an anonymous one.
+        userToken: (o) => account().token(o).catch(() => null),
+      });
     }
     return artCacheInstance;
   }
+  // GameVault account (src/backend/account.js). Session encrypted with the OS keychain.
+  let accountInstance = null;
+  function account() {
+    if (!accountInstance) {
+      const { url, anonKey } = cloudConfig();
+      const canEnc = () => { try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; } };
+      accountInstance = createAccount({
+        dir: path.join(app.getPath('userData'), 'account'), cloudUrl: url, anonKey,
+        encrypt: (text) => (canEnc() ? 'v1:' + safeStorage.encryptString(text).toString('base64') : 'p1:' + Buffer.from(text, 'utf8').toString('base64')),
+        decrypt: (raw) => (raw.startsWith('v1:') ? (canEnc() ? safeStorage.decryptString(Buffer.from(raw.slice(3), 'base64')) : '') : raw.startsWith('p1:') ? Buffer.from(raw.slice(3), 'base64').toString('utf8') : ''),
+        openExternal: (u) => shell.openExternal(u).catch(() => {}),
+        onChange: (st) => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('account:changed', st);
+          if (st.signedIn) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+        },
+      });
+    }
+    return accountInstance;
+  }
+  const accountReply = async (fn) => {
+    try { return { ok: true, data: await fn() }; } catch (e) { return { ok: false, error: { code: e.code || 'ERROR', message: e.message } }; }
+  };
+  ipcMain.handle('account:status', () => account().status());
+  ipcMain.handle('account:providers', () => account().providers());
+  ipcMain.handle('account:email', (_, email) => accountReply(() => account().startEmail(email)));
+  ipcMain.handle('account:password', (_, p) => accountReply(() => account().signInPassword(p && p.email, p && p.password)));
+  ipcMain.handle('account:signup', (_, p) => accountReply(() => account().signUp(p && p.email, p && p.password)));
+  ipcMain.handle('account:reset', (_, email) => accountReply(() => account().resetPassword(email)));
+  ipcMain.handle('account:set-password', (_, pw) => accountReply(() => account().setPassword(pw)));
+  ipcMain.handle('account:oauth', (_, provider) => accountReply(() => account().startOAuth(provider)));
+  ipcMain.handle('account:cancel', () => { account().cancel(); account().clearError(); return account().status(); });
+  ipcMain.handle('account:signout', () => accountReply(() => account().signOut()));
+
+  // Library sync + encrypted save backups (src/backend/cloud.js).
+  let cloudInstance = null;
+  function cloud() {
+    if (!cloudInstance) {
+      const { url, anonKey } = cloudConfig();
+      const canEnc = () => { try { return safeStorage.isEncryptionAvailable(); } catch (_) { return false; } };
+      cloudInstance = createCloud({
+        dir: path.join(app.getPath('userData'), 'cloud'), cloudUrl: url, anonKey, account: account(),
+        device: require('os').hostname(),
+        protect: (t) => (canEnc() ? 'v1:' + safeStorage.encryptString(t).toString('base64') : 'p1:' + Buffer.from(t, 'utf8').toString('base64')),
+        unprotect: (raw) => (raw.startsWith('v1:') ? (canEnc() ? safeStorage.decryptString(Buffer.from(raw.slice(3), 'base64')) : '') : raw.startsWith('p1:') ? Buffer.from(raw.slice(3), 'base64').toString('utf8') : ''),
+      });
+    }
+    return cloudInstance;
+  }
+  ipcMain.handle('cloud:sync', (_, games) => accountReply(() => {
+    if (!Array.isArray(games)) throw Object.assign(new Error('Nothing to sync'), { code: 'BAD_INPUT' });
+    return cloud().syncLibrary(games);
+  }));
+  ipcMain.handle('cloud:last-sync', () => cloud().lastSync());
+  ipcMain.handle('saves:find', (_, g) => accountReply(() => findSaveFolders({
+    name: g && g.name, steamAppId: g && g.steamAppId, installDir: g && g.installDir,
+  }, { documents: app.getPath('documents') })));
+  ipcMain.handle('saves:pick', async (_, current) => {
+    const r = await dialog.showOpenDialog(win, { title: 'Choose the game’s save folder', defaultPath: current || app.getPath('documents'), properties: ['openDirectory'] });
+    return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+  });
+  ipcMain.handle('saves:backup', (_, p) => accountReply(() => cloud().backupSaves(p || {})));
+  ipcMain.handle('saves:list', (_, gameId) => accountReply(() => cloud().listBackups(gameId)));
+  ipcMain.handle('saves:restore', (_, p) => accountReply(() => cloud().restoreBackup(p || {})));
+  ipcMain.handle('saves:delete', (_, id) => accountReply(() => cloud().deleteBackup(id)));
+
   // Cloud answers worth retrying with the user's key (NOT_FOUND is final).
   const CLOUD_SOFT_FAIL = new Set(['NO_CLOUD', 'NETWORK', 'RATE_LIMIT', 'BUSY', 'SERVER', 'UNAUTHENTICATED', 'AUTH']);
   const hasUserKey = () => !!loadConfig().sgdbKey;

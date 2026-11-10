@@ -67,6 +67,8 @@ function writeJson(file, value) {
  * @param {string} opts.dir         cache folder (created on demand)
  * @param {string} [opts.cloudUrl]  https://<ref>.supabase.co
  * @param {string} [opts.anonKey]   publishable / anon key (public)
+ * @param {Function} [opts.userToken] ({forceNew}) => Promise<string|null>: a signed-in
+ *                                  user's token; when null the anonymous session is used
  * @param {Function} [opts.fetch]   injectable for tests (defaults to global fetch)
  * @param {Function} [opts.now]
  * @param {number} [opts.maxThumbBytes]
@@ -155,7 +157,7 @@ function createArtCache(opts = {}) {
     for (let attempt = 0; attempt < 2; attempt++) {
       let access;
       try {
-        access = await token({ forceNew: attempt > 0 });
+        access = (opts.userToken && await opts.userToken({ forceNew: attempt > 0 })) || await token({ forceNew: attempt > 0 });
       } catch (err) {
         return fail(err.code || 'NETWORK', err.message);
       }
