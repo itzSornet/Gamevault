@@ -11,7 +11,7 @@ const https = require('https');
 const crypto = require('crypto');
 const platform = require('./src/backend/platform.js');
 
-const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, writeJsonAtomicSync, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
+const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
 const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
 const steamSource = require('./src/backend/sources/steam.js');
@@ -366,6 +366,8 @@ function startBgPoll() {
   if (bgPollInterval) return;
   bgPollInterval = setInterval(async () => {
     try {
+      // Settings → Tracking: "Notice games I start outside GameVault"
+      if (loadConfig().bgDetect === false) return;
       // Only games the tracker does not already watch; skip the process
       // listing entirely when there are none.
       // The process that means "playing" is trackExe when set, else exePath;
@@ -703,7 +705,12 @@ function createWindow() {
       win.maximize();
     }
   });
-  ipcMain.on('win-close', () => win && win.hide());
+  // Settings → General: the close button hides to the tray (default) or quits.
+  ipcMain.on('win-close', () => {
+    if (!win) return;
+    if (loadConfig().closeToTray === false) { forceQuit = true; app.quit(); return; }
+    win.hide();
+  });
   ipcMain.handle('img:thumb', async (_e, { src, width, kind }) => {
     try {
       if (!src) return null;
@@ -904,9 +911,10 @@ function createWindow() {
   });
   ipcMain.handle('games:data-path', () => DATA_PATH);
 
-  ipcMain.handle('config:load', () => loadConfig());
+  // The renderer never receives API keys, only has*Key flags (see data.js).
+  ipcMain.handle('config:load', () => publicConfig(loadConfig()));
   // Merge-patch: resolves to the merged config.
-  ipcMain.handle('config:save', (_, patch) => mergeConfig(patch));
+  ipcMain.handle('config:save', (_, patch) => publicConfig(mergeConfig(patch)));
 
   ipcMain.handle('detect:steam', () => detectSteamGames());
   ipcMain.handle('detect:epic', () => detectEpicGames());

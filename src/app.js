@@ -1207,6 +1207,7 @@
 
   function openDetail(id) {
     window.__gvPerfMark && window.__gvPerfMark('detail');
+    if (state.settingsOpen) closeSettings({ restoreFocus: false });
     const active = document.activeElement;
     state._focusReturn = (active && active.id === 'q') ? null : active;
     state.selectedId = String(id);
@@ -2732,7 +2733,7 @@
     };
 
     const paintAccount = async () => {
-      const hasKey = !!state.config.steamKey;
+      const hasKey = !!state.config.hasSteamKey;
       const acc = await (api.steamAccount ? api.steamAccount().catch(() => ({ users: [], active: null })) : Promise.resolve({ users: [], active: null }));
       steamUser = (acc.users || [])[0] || null;
       accountEl.innerHTML = `
@@ -3005,255 +3006,475 @@
     })();
   }
 
-  async function openSettingsModal() {
-    const version = await api.getAppVersion().catch(() => '2.0.0-experimental');
-    const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
-    const startupOn = await api.getStartup().catch(() => false);
+  // ---------------------------------------------------------------------------
+  // Settings page — a full view next to the game page (was a long modal).
+  // Left: section list. Right: cards of rows (title + description + control).
+  // ---------------------------------------------------------------------------
 
-    const card = openModal(`
-      <div class="modal-head">
-        <h2>Settings</h2>
-        <button class="close-x" data-close aria-label="Close">✕</button>
+  const SETTINGS_SECTIONS = [
+    { id: 'general', label: 'General', desc: 'Startup, the window and the in-game overlay.',
+      icon: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>' },
+    { id: 'appearance', label: 'Appearance', desc: 'Colours, visual quality and motion.',
+      icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17z" fill="currentColor" stroke="none"/>' },
+    { id: 'library', label: 'Library & import', desc: 'Artwork, your Steam account and importing games.',
+      icon: '<rect x="3.5" y="4" width="7" height="16" rx="1.5"/><rect x="13.5" y="4" width="7" height="9" rx="1.5"/><path d="M13.5 17h7M13.5 20h4"/>' },
+    { id: 'tracking', label: 'Playtime tracking', desc: 'How GameVault counts the time you play.',
+      icon: '<circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2.5M9.5 2.5h5"/>' },
+    { id: 'controller', label: 'Controller & Big Picture', desc: 'Play from the couch with a gamepad.',
+      icon: '<path d="M7 9h10a4 4 0 0 1 3.9 4.9l-.9 3.6a2 2 0 0 1-3.4.9L14.8 16H9.2l-1.8 2.4a2 2 0 0 1-3.4-.9l-.9-3.6A4 4 0 0 1 7 9z"/><path d="M8 12v3M6.5 13.5h3M15.5 13h.01M17.5 14.5h.01"/>' },
+    { id: 'account', label: 'Account & cloud', desc: 'Back up your saves and sync your library. Off until you turn it on.',
+      icon: '<path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"/>' },
+    { id: 'ai', label: 'AI advisor', desc: 'Optional game suggestions in the overlay, with your own API key.',
+      icon: '<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>' },
+    { id: 'performance', label: 'Performance', desc: 'Frame rate, GPU and diagnostics.',
+      icon: '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4-5.5"/>' },
+    { id: 'about', label: 'About', desc: 'Version, updates and credits.',
+      icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6h.01"/>' },
+  ];
+
+  const stIcon = (paths) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+
+  // One settings row: text on the left, a control on the right (or below on narrow widths).
+  const stRow = (title, desc, control, opts = {}) => `
+    <div class="st-row${opts.wide ? ' is-wide' : ''}${opts.disabled ? ' is-disabled' : ''}">
+      <div class="st-row-text">
+        <div class="st-row-title">${title}</div>
+        ${desc ? `<div class="st-row-desc"${opts.descId ? ` id="${opts.descId}"` : ''}>${desc}</div>` : ''}
       </div>
-      <div class="modal-body">
-        <div class="field">
-          <label>Palette</label>
-          <div class="pills" data-palette-group>
-            ${PALETTES.map((p) => `
-              <button class="pill ${state.palette === p ? 'is-active' : ''}" data-palette-opt="${p}">${p}</button>`).join('')}
-          </div>
-          <div class="hint">Midnight: near-black &amp; electric blue. Paper: light canvas &amp; vermilion.</div>
-        </div>
+      ${control ? `<div class="st-row-control">${control}</div>` : ''}
+    </div>`;
+  const stCard = (title, rows, opts = {}) => `
+    <section class="st-card${opts.soon ? ' is-soon' : ''}">
+      ${title ? `<h2 class="st-card-title">${title}${opts.soon ? '<span class="st-soon">Coming soon</span>' : ''}</h2>` : ''}
+      ${rows}
+    </section>`;
+  const stSwitch = (attr, on, opts = {}) => `
+    <label class="st-switch${opts.disabled ? ' is-disabled' : ''}">
+      <input type="checkbox" ${attr} ${on ? 'checked' : ''} ${opts.disabled ? 'disabled' : ''} aria-label="${esc(opts.label || '')}" />
+      <span class="st-switch-track" aria-hidden="true"></span>
+    </label>`;
+  const stPills = (group, options, active, opts = {}) => `
+    <div class="pills" ${group}>
+      ${options.map(([value, label]) => `<button type="button" class="pill ${value === active ? 'is-active' : ''}" data-value="${esc(value)}" ${opts.disabled ? 'disabled' : ''}>${esc(label)}</button>`).join('')}
+    </div>`;
 
-        <div class="field">
-          <label>Visual quality</label>
-          <div class="pills" data-tier-group>
-            ${['cinematic', 'standard', 'lite'].map((t) => `
-              <button class="pill ${state.tier === t ? 'is-active' : ''}" data-tier="${t}">${t}</button>`).join('')}
-          </div>
-          <div class="hint">Cinematic enables the animated background. Lite disables blur and motion — best on low-end machines.</div>
-        </div>
+  function settingsView() { return $('#settings-view'); }
 
-        <div class="field">
-          <label>SteamGridDB</label>
-          <div class="field-row">
-            <input class="input" id="s-sgdb" type="password" placeholder="API key" autocomplete="off" />
-            <button class="btn btn-ghost" type="button" data-sgdb-save style="flex:0 0 auto">Save</button>
-            <button class="btn btn-ghost" type="button" data-sgdb-test style="flex:0 0 auto">Test</button>
-          </div>
-          <div class="hint" id="s-sgdb-hint">Covers, banners, logos and icons. Get a key from steamgriddb.com → Preferences → API.</div>
-          <button class="btn btn-ghost" type="button" data-art-refresh style="margin-top:8px">Refresh all artwork</button>
-        </div>
-
-        <div class="field">
-          <label>Steam account</label>
-          <div class="field-row">
-            <input class="input" id="s-steam-key" type="password" placeholder="Steam Web API key" autocomplete="off" />
-            <button class="btn btn-ghost" type="button" data-steam-save style="flex:0 0 auto">Save</button>
-            <button class="btn btn-ghost" type="button" data-steam-test style="flex:0 0 auto">Test</button>
-          </div>
-          <div class="hint" id="s-steam-hint">Checking your Steam login…</div>
-          <div class="hint">Owned games, not just installed. Key: steamcommunity.com/dev/apikey · requires “Game details” set to public.</div>
-        </div>
-
-        <div class="field">
-          <label>On login</label>
-          <label class="gv-check">
-            <input type="checkbox" data-autostart ${startupOn ? 'checked' : ''} />
-            <span>Start GameVault when I log in</span>
-          </label>
-        </div>
-
-        ${info.wayland ? `
-          <div class="field">
-            <label>Overlay shortcut</label>
-            <div class="hint">Wayland blocks global hotkeys. Bind it in your compositor:<br />
-              <code style="color:var(--accent-2)">bind = SUPER, G, exec, gamevault --toggle-overlay</code>
-            </div>
-          </div>` : ''}
-
-        <div class="section-label">Performance</div>
-        <div class="field">
-          <label>Frame rate</label>
-          <div class="field-row" style="align-items:center">
-            <span class="hint" id="s-perf" style="flex:1">measuring…</span>
-            <button class="btn btn-ghost" type="button" data-perf-copy>Copy report</button>
-            <button class="btn btn-ghost" type="button" data-perf-reveal>Reveal log</button>
-          </div>
-          <div class="hint" id="s-perf-gpu">GPU: checking…</div>
-          <div class="field-row" style="align-items:center;margin-top:6px">
-            <button class="btn" type="button" data-perf-bench>Run 20s benchmark</button>
-            <span class="hint" style="flex:1">Don't touch the window until it says done</span>
-          </div>
-          <label class="gv-check" style="margin-top:6px">
-            <input type="checkbox" data-perf-record ${state.config.perfLog === true ? 'checked' : ''} />
-            <span>Record frame stats to perf.log</span>
-          </label>
-          <div class="hint" id="s-perf-path">When on, stats are written every second to perf.log</div>
-        </div>
-
-        <div class="section-label">About</div>
-        <div class="hint">
-          GameVault <b>${esc(version)}</b> — experimental build<br />
-          ${info.platform === 'linux' ? esc(info.protonPath ? `Proton: ${info.protonPath}` : 'Proton: not found') : ''}
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" data-close>Done</button>
-      </div>
-    `);
-
-    for (const btn of card.querySelectorAll('[data-close]')) btn.onclick = closeModal;
-
-    for (const pill of card.querySelectorAll('[data-palette-opt]')) {
-      pill.onclick = () => {
-        applyPalette(pill.dataset.paletteOpt, { announce: true, persist: true });
-        for (const p of card.querySelectorAll('[data-palette-opt]')) p.classList.toggle('is-active', p === pill);
-      };
+  async function openSettings(section) {
+    if (state.selectedId) closeDetail();
+    const view = settingsView();
+    if (!view) return;
+    if (!state.settingsOpen) {
+      const active = document.activeElement;
+      state._settingsFocusReturn = (active && active.id === 'q') ? null : active;
     }
-
-    const perfEl = card.querySelector('#s-perf');
-    const perfGpuEl = card.querySelector('#s-perf-gpu');
-    let gpuInfo = {};
-    if (api.gpuStatus) gpuInfo = await api.gpuStatus().catch(() => ({}));
-    if (perfGpuEl) perfGpuEl.textContent = `GPU compositing: ${(gpuInfo && gpuInfo.gpu_compositing) || 'unknown'}`;
-    if (perfEl) {
-      let frames = 0;
-      const t0 = performance.now();
-      const beat = (now) => {
-        frames += 1;
-        if (now - t0 < 1000) { requestAnimationFrame(beat); return; }
-        const fps = Math.max(1, Math.round((frames * 1000) / (now - t0)));
-        perfEl.textContent = `${fps} fps · ${(1000 / fps).toFixed(1)} ms/frame · tier ${state.tier}`;
-      };
-      requestAnimationFrame(beat);
-    }
-    const perfPathEl = card.querySelector('#s-perf-path');
-    if (perfPathEl && api.perfPath) api.perfPath().then((p) => { perfPathEl.textContent = `Log: ${p}`; }).catch(() => {});
-    const perfRecord = card.querySelector('[data-perf-record]');
-    if (perfRecord) perfRecord.onchange = async () => {
-      await saveConfigPatch({ perfLog: perfRecord.checked });
-      syncPerfRecorder();
-      toast(perfRecord.checked ? 'Recording frame stats to perf.log' : 'Frame stats recording off', 'ok');
-    };
-    const benchBtn = card.querySelector('[data-perf-bench]');
-    if (benchBtn) benchBtn.onclick = async () => {
-      closeModal();
-      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-      const mark = (m) => { if (window.__gvPerfMark) window.__gvPerfMark(m); };
-      // the benchmark always records, whatever the setting says
-      perfForced += 1;
-      syncPerfRecorder();
-      try {
-        await wait(600);
-        for (const f of ['Playing', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
-        mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
-        mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
-        mark('bench:grid'); $('#btn-view').click(); await wait(800);
-        mark('bench:scroll');
-        const lib = $('#library');
-        for (let i = 0; i < 12; i++) { lib.scrollTop += 140; await wait(60); }
-        mark('bench:detail'); if (state.games[0]) openDetail(state.games[0].id); await wait(1000);
-        mark('bench:back'); if (state.selectedId) closeDetail(); await wait(1100);
-        if (api.perfLog) api.perfLog({ t: Date.now(), benchmark: 'done', tier: state.tier });
-      } finally {
-        perfForced -= 1;
-        syncPerfRecorder();
-      }
-      toast('Benchmark finished — perf.log updated', 'ok');
-    };
-
-    const perfReveal = card.querySelector('[data-perf-reveal]');
-    if (perfReveal && api.perfReveal) perfReveal.onclick = () => api.perfReveal();
-
-    const perfCopy = card.querySelector('[data-perf-copy]');
-    if (perfCopy) perfCopy.onclick = async () => {
-      const report = {
-        readout: perfEl ? perfEl.textContent : '',
-        window: `${innerWidth}x${innerHeight}`,
-        dpr: devicePixelRatio,
-        tier: state.tier,
-        palette: state.palette,
-        gpu: (gpuInfo && gpuInfo.gpu_compositing) || 'unknown',
-        games: state.games.length,
-      };
-      const text = JSON.stringify(report);
-      try { await navigator.clipboard.writeText(text); toast('Performance report copied — paste it to me', 'ok'); }
-      catch (_) { toast(text, 'ok'); }
-    };
-
-    for (const pill of card.querySelectorAll('[data-tier]')) {
-      pill.onclick = () => {
-        applyTier(pill.dataset.tier, { announce: true, persist: true });
-        for (const p of card.querySelectorAll('[data-tier]')) p.classList.toggle('is-active', p === pill);
-      };
-    }
-
-    const sgdbHint = card.querySelector('#s-sgdb-hint');
-    const sgdbState = await api.sgdbKeyGet().catch(() => ({ hasKey: false }));
-    if (sgdbHint) {
-      sgdbHint.textContent = sgdbState.hasKey
-        ? 'Key saved. Artwork auto-fills when you pick a game.'
-        : 'No key yet — add one to enable artwork. Get it from steamgriddb.com → Preferences → API.';
-    }
-
-    const sgdbSave = card.querySelector('[data-sgdb-save]');
-    if (sgdbSave) sgdbSave.onclick = async () => {
-      const key = card.querySelector('#s-sgdb').value.trim();
-      if (!key) { toast('Paste a SteamGridDB key first', 'error'); return; }
-      await api.sgdbKeySet(key).catch(() => null);
-      card.querySelector('#s-sgdb').value = '';
-      if (sgdbHint) sgdbHint.textContent = 'Key saved. Artwork auto-fills when you pick a game.';
-      toast('SteamGridDB key saved', 'ok');
-    };
-
-    const sgdbTest = card.querySelector('[data-sgdb-test]');
-    if (sgdbTest) sgdbTest.onclick = async () => {
-      const res = await api.sgdbKeyTest().catch(() => null);
-      if (res && res.ok) toast(`SteamGridDB OK · ${res.data.count} results`, 'ok');
-      else toast(res && res.error ? res.error.message : 'SteamGridDB unreachable', 'error');
-    };
-
-    const steamHint = card.querySelector('#s-steam-hint');
-    const steamState = await (api.steamAccount ? api.steamAccount().catch(() => ({ users: [], active: null })) : Promise.resolve({ users: [], active: null }));
-    const steamUser = (steamState.users || [])[0];
-    if (steamHint) {
-      steamHint.textContent = steamUser
-        ? `Detected SteamID ${steamUser.steamId}${steamUser.personaName ? ` (${steamUser.personaName})` : ''}${state.config.steamKey ? ' · key saved' : ' · no key yet'}`
-        : 'No Steam login found on this machine — paste a key and your SteamID will need to be set.';
-    }
-
-    const steamSave = card.querySelector('[data-steam-save]');
-    if (steamSave) steamSave.onclick = async () => {
-      const key = card.querySelector('#s-steam-key').value.trim();
-      if (!key) { toast('Paste a Steam Web API key first', 'error'); return; }
-      await saveConfigPatch({ steamKey: key, steamId: steamUser ? steamUser.steamId : (state.config.steamId || null) });
-      card.querySelector('#s-steam-key').value = '';
-      if (steamHint) steamHint.textContent = `SteamID ${state.config.steamId || 'not set'} · key saved`;
-      toast('Steam key saved', 'ok');
-    };
-
-    const steamTest = card.querySelector('[data-steam-test]');
-    if (steamTest) steamTest.onclick = async () => {
-      const typed = card.querySelector('#s-steam-key').value.trim();
-      const res = await api.steamOwned({ key: typed || state.config.steamKey, steamId: state.config.steamId || (steamUser && steamUser.steamId) }).catch(() => null);
-      if (res && res.ok) toast(`Steam connected · ${res.count} games`, 'ok');
-      else toast((res && res.error && res.error.message) || 'Steam unreachable', 'error');
-    };
-
-    const artRefresh = card.querySelector('[data-art-refresh]');
-    if (artRefresh) artRefresh.onclick = async () => {
-      closeModal();
-      toast('Refreshing artwork for the whole library…', 'ok');
-      await enrichArt({ force: true });
-      toast('Artwork refreshed', 'ok');
-    };
-
-    card.querySelector('[data-autostart]').onchange = async (e) => {
-      await api.setStartup(e.target.checked).catch(() => {});
-      toast(e.target.checked ? 'Will start on login' : 'Autostart disabled', 'ok');
-    };
+    state.settingsOpen = true;
+    state.settingsSection = SETTINGS_SECTIONS.some((s) => s.id === section) ? section : (state.settingsSection || 'general');
+    $('#library').hidden = true;
+    $('#shelf').hidden = true;
+    const fb = $('#filterbar'); if (fb) fb.hidden = true;
+    view.hidden = false;
+    const title = $('#filter-title'); if (title) title.textContent = 'Settings';
+    document.title = 'Settings — GameVault';
+    await renderSettings();
+    fadeIn(view);
+    view.querySelector('.st-tab.is-active')?.focus({ preventScroll: true });
   }
+
+  function closeSettings({ restoreFocus = true } = {}) {
+    const view = settingsView();
+    if (!view || !state.settingsOpen) return;
+    state.settingsOpen = false;
+    view.hidden = true;
+    view.innerHTML = '';
+    const fb = $('#filterbar'); if (fb) fb.hidden = false;
+    const title = $('#filter-title'); if (title) title.textContent = filterLabel(state.filter);
+    renderLibrary();
+    fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
+    document.title = 'GameVault';
+    const back = state._settingsFocusReturn;
+    state._settingsFocusReturn = null;
+    if (restoreFocus && back && back.isConnected && typeof back.focus === 'function') back.focus();
+  }
+
+  async function renderSettings() {
+    const view = settingsView();
+    if (!view) return;
+    const current = SETTINGS_SECTIONS.find((s) => s.id === state.settingsSection) || SETTINGS_SECTIONS[0];
+    if (!view.querySelector('.st-wrap')) {
+      view.innerHTML = `
+        <div class="st-wrap">
+          <nav class="st-nav" aria-label="Settings sections">
+            <button type="button" class="st-back" data-st-close>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+              Library
+            </button>
+            <div class="st-nav-title">Settings</div>
+            <div class="st-tabs" role="tablist" aria-orientation="vertical">
+              ${SETTINGS_SECTIONS.map((s) => `
+                <button type="button" class="st-tab" role="tab" id="st-tab-${s.id}" data-st-section="${s.id}" aria-controls="st-panel">
+                  ${stIcon(s.icon)}<span>${esc(s.label)}</span>
+                </button>`).join('')}
+            </div>
+          </nav>
+          <div class="st-panel" id="st-panel" role="tabpanel" tabindex="-1"></div>
+        </div>`;
+      view.querySelector('[data-st-close]').onclick = () => closeSettings();
+      const tabs = [...view.querySelectorAll('.st-tab')];
+      for (const tab of tabs) {
+        tab.onclick = () => {
+          if (state.settingsSection === tab.dataset.stSection) return;
+          state.settingsSection = tab.dataset.stSection;
+          renderSettings();
+        };
+        tab.onkeydown = (e) => {
+          const i = tabs.indexOf(tab);
+          let next = -1;
+          if (e.key === 'ArrowDown') next = (i + 1) % tabs.length;
+          else if (e.key === 'ArrowUp') next = (i - 1 + tabs.length) % tabs.length;
+          else if (e.key === 'Home') next = 0;
+          else if (e.key === 'End') next = tabs.length - 1;
+          if (next < 0) return;
+          e.preventDefault();
+          tabs[next].focus();
+          tabs[next].click();
+        };
+      }
+    }
+    for (const tab of view.querySelectorAll('.st-tab')) {
+      const on = tab.dataset.stSection === current.id;
+      tab.classList.toggle('is-active', on);
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
+    }
+    const panel = view.querySelector('.st-panel');
+    panel.setAttribute('aria-labelledby', `st-tab-${current.id}`);
+    const seq = (state._settingsSeq = (state._settingsSeq || 0) + 1);
+    const built = await SETTINGS_RENDERERS[current.id]();
+    if (seq !== state._settingsSeq || !state.settingsOpen) return; // switched again meanwhile
+    panel.innerHTML = `
+      <header class="st-head">
+        <h1 class="st-h">${esc(current.label)}</h1>
+        <p class="st-sub">${esc(current.desc)}</p>
+      </header>
+      <div class="st-body">${built.html}</div>`;
+    panel.scrollTop = 0;
+    if (built.wire) built.wire(panel);
+  }
+
+  // Pills: one active option; calls onPick(value).
+  function wirePills(panel, selector, onPick) {
+    const group = panel.querySelector(selector);
+    if (!group) return;
+    for (const pill of group.querySelectorAll('.pill')) {
+      pill.onclick = () => {
+        for (const p of group.querySelectorAll('.pill')) p.classList.toggle('is-active', p === pill);
+        onPick(pill.dataset.value);
+      };
+    }
+  }
+
+  const SETTINGS_RENDERERS = {
+    async general() {
+      const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
+      const startupOn = await api.getStartup().catch(() => false);
+      const toTray = state.config.closeToTray !== false;
+      const hotkey = state.config.overlayHotkey || 'Shift+Alt+G';
+      return {
+        html:
+          stCard('Startup',
+            stRow('Start GameVault when I log in', 'Opens quietly in the tray.', stSwitch('data-autostart', startupOn, { label: 'Start on login' })) +
+            stRow('Start in Big Picture', 'Open straight into the controller-friendly fullscreen mode.', stSwitch('data-bp-start', false, { disabled: true, label: 'Start in Big Picture' }), { disabled: true })) +
+          stCard('Window',
+            stRow('Closing the window', toTray ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.',
+              stPills('data-close-mode', [['tray', 'Hide to tray'], ['quit', 'Quit']], toTray ? 'tray' : 'quit'), { descId: 'st-close-desc' }) +
+            stRow('Default layout', 'How the library opens.', stPills('data-layout', [['shelf', 'Shelf'], ['poster', 'Cards']], state.view))) +
+          stCard('In-game overlay',
+            info.wayland
+              ? stRow('Shortcut', 'Wayland blocks global hotkeys. Bind this in your compositor:<br><code class="st-code">gamevault --toggle-overlay</code>', '')
+              : stRow('Shortcut', 'Screenshots, clips and the AI advisor on top of your game. Works with borderless and windowed games.', `<kbd class="st-kbd">${esc(hotkey.replace(/\+/g, ' + '))}</kbd>`)),
+        wire(panel) {
+          panel.querySelector('[data-autostart]').onchange = async (e) => {
+            await api.setStartup(e.target.checked).catch(() => {});
+            toast(e.target.checked ? 'GameVault will start when you log in' : 'Start on login turned off', 'ok');
+          };
+          wirePills(panel, '[data-close-mode]', async (v) => {
+            await saveConfigPatch({ closeToTray: v === 'tray' });
+            const d = panel.querySelector('#st-close-desc');
+            if (d) d.textContent = v === 'tray' ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.';
+          });
+          wirePills(panel, '[data-layout]', (v) => { if (v !== state.view) cycleView(); });
+        },
+      };
+    },
+
+    async appearance() {
+      const reduced = prefersReducedMotion();
+      return {
+        html: stCard('Look',
+          stRow('Palette', 'Midnight: near-black and electric blue. Paper: light canvas and vermilion.', stPills('data-palette-group', PALETTES.map((p) => [p, p[0].toUpperCase() + p.slice(1)]), state.palette)) +
+          stRow('Visual quality', 'Cinematic adds the animated background. Lite turns off blur and motion — best on older PCs.', stPills('data-tier-group', [['cinematic', 'Cinematic'], ['standard', 'Standard'], ['lite', 'Lite']], state.tier)) +
+          stRow('Motion', `Follows your system’s “reduce motion” setting — currently <b>${reduced ? 'reduced' : 'full'}</b>.`, '')),
+        wire(panel) {
+          wirePills(panel, '[data-palette-group]', (v) => applyPalette(v, { announce: true, persist: true }));
+          wirePills(panel, '[data-tier-group]', (v) => applyTier(v, { announce: true, persist: true }));
+        },
+      };
+    },
+
+    async library() {
+      const sgdb = await api.sgdbKeyGet().catch(() => ({ hasKey: false }));
+      const steamState = await (api.steamAccount ? api.steamAccount().catch(() => ({ users: [] })) : Promise.resolve({ users: [] }));
+      const steamUser = (steamState.users || [])[0];
+      const sgdbDesc = sgdb.hasKey
+        ? 'Using your SteamGridDB key. Artwork fills itself when you add a game.'
+        : 'No key yet. Get one free at steamgriddb.com → Preferences → API. A shared GameVault artwork cloud that needs no key is on the way.';
+      const steamDesc = steamUser
+        ? `Detected SteamID ${esc(steamUser.steamId)}${steamUser.personaName ? ` (${esc(steamUser.personaName)})` : ''} · ${state.config.hasSteamKey ? 'key saved' : 'no key yet'}`
+        : `No Steam login found on this PC${state.config.hasSteamKey ? ' · key saved' : ''}.`;
+      return {
+        html:
+          stCard('Artwork',
+            stRow('SteamGridDB key', sgdbDesc,
+              `<div class="st-inline"><input class="input" id="st-sgdb" type="password" placeholder="${sgdb.hasKey ? 'Key saved — paste to replace' : 'API key'}" autocomplete="off" spellcheck="false" aria-label="SteamGridDB API key" />
+               <button type="button" class="btn btn-ghost" data-sgdb-save>Save</button>
+               <button type="button" class="btn btn-ghost" data-sgdb-test>Test</button></div>`, { wide: true, descId: 'st-sgdb-desc' }) +
+            stRow('Refresh all artwork', 'Looks up covers, banners, logos and icons again for every game.', '<button type="button" class="btn btn-ghost" data-art-refresh>Refresh</button>')) +
+          stCard('Steam account',
+            stRow('Steam Web API key', `${steamDesc}<br>Lets GameVault see games you own, not just installed ones. Key: steamcommunity.com/dev/apikey — your “Game details” must be public.`,
+              `<div class="st-inline"><input class="input" id="st-steam-key" type="password" placeholder="${state.config.hasSteamKey ? 'Key saved — paste to replace' : 'Steam Web API key'}" autocomplete="off" spellcheck="false" aria-label="Steam Web API key" />
+               <button type="button" class="btn btn-ghost" data-steam-save>Save</button>
+               <button type="button" class="btn btn-ghost" data-steam-test>Test</button></div>`, { wide: true, descId: 'st-steam-desc' })) +
+          stCard('Import',
+            stRow('Import games', 'Steam, Epic, GOG, Xbox, Hydra, a folder, or your whole PC.', '<button type="button" class="btn btn-ghost" data-open-import>Open import</button>')),
+        wire(panel) {
+          const sgdbDescEl = panel.querySelector('#st-sgdb-desc');
+          panel.querySelector('[data-sgdb-save]').onclick = async () => {
+            const input = panel.querySelector('#st-sgdb');
+            const key = input.value.trim();
+            if (!key) { toast('Paste a SteamGridDB key first', 'error'); return; }
+            await api.sgdbKeySet(key).catch(() => null);
+            input.value = '';
+            input.placeholder = 'Key saved — paste to replace';
+            state.config.hasSgdbKey = true;
+            if (sgdbDescEl) sgdbDescEl.textContent = 'Using your SteamGridDB key. Artwork fills itself when you add a game.';
+            toast('SteamGridDB key saved', 'ok');
+          };
+          panel.querySelector('[data-sgdb-test]').onclick = async () => {
+            const res = await api.sgdbKeyTest().catch(() => null);
+            if (res && res.ok) toast(`SteamGridDB works · ${res.data.count} results`, 'ok');
+            else toast(res && res.error ? res.error.message : 'SteamGridDB unreachable', 'error');
+          };
+          panel.querySelector('[data-art-refresh]').onclick = async () => {
+            toast('Refreshing artwork for the whole library…', 'ok');
+            await enrichArt({ force: true });
+            toast('Artwork refreshed', 'ok');
+          };
+          const steamDescEl = panel.querySelector('#st-steam-desc');
+          panel.querySelector('[data-steam-save]').onclick = async () => {
+            const input = panel.querySelector('#st-steam-key');
+            const key = input.value.trim();
+            if (!key) { toast('Paste a Steam Web API key first', 'error'); return; }
+            await saveConfigPatch({ steamKey: key, steamId: steamUser ? steamUser.steamId : (state.config.steamId || null) });
+            input.value = '';
+            input.placeholder = 'Key saved — paste to replace';
+            if (steamDescEl) steamDescEl.firstChild.textContent = `SteamID ${state.config.steamId || 'not set'} · key saved`;
+            toast('Steam key saved', 'ok');
+          };
+          panel.querySelector('[data-steam-test]').onclick = async () => {
+            const typed = panel.querySelector('#st-steam-key').value.trim();
+            // without a typed key, main uses the saved one (the renderer never sees it)
+            const res = await api.steamOwned({ key: typed || undefined, steamId: state.config.steamId || (steamUser && steamUser.steamId) }).catch(() => null);
+            if (res && res.ok) toast(`Steam connected · ${res.count} games`, 'ok');
+            else toast((res && res.error && res.error.message) || 'Steam unreachable', 'error');
+          };
+          panel.querySelector('[data-open-import]').onclick = () => { closeSettings({ restoreFocus: false }); $('#btn-import')?.click(); };
+        },
+      };
+    },
+
+    async tracking() {
+      const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
+      const bg = state.config.bgDetect !== false;
+      return {
+        html:
+          stCard('Playtime',
+            stRow('Notice games I start outside GameVault', 'Checks every 30 seconds for library games you launched from Steam, a shortcut or the Start menu, and starts counting.', stSwitch('data-bg-detect', bg, { label: 'Notice games started outside GameVault' })) +
+            stRow('How a session is counted', 'It starts when the game’s own program is running and ends 60 seconds after it closes, so a quick restart stays one session. Store launchers like Steam or Epic never count, and anything under 30 seconds is ignored.', '') +
+            stRow('Per-game settings', 'If a game launches through a launcher or wrapper, open the game → Edit → <b>Launch &amp; tracking</b> and use <b>Detect</b> to pick the real game.', '')) +
+          (info.platform === 'linux'
+            ? stCard('Windows games on Linux',
+              stRow('Proton', info.protonPath ? `Using <code class="st-code">${esc(info.protonPath)}</code>` : 'No Proton build found. Install Proton through Steam, or Wine for non-Steam games.', ''))
+            : ''),
+        wire(panel) {
+          panel.querySelector('[data-bg-detect]').onchange = async (e) => {
+            await saveConfigPatch({ bgDetect: e.target.checked });
+            toast(e.target.checked ? 'GameVault will notice games you start elsewhere' : 'Only games launched from GameVault are tracked', 'ok');
+          };
+        },
+      };
+    },
+
+    async controller() {
+      return {
+        html: stCard('Controller & Big Picture',
+          stRow('Controller', 'Navigate the whole app with an Xbox or PlayStation controller.', '', { disabled: true }) +
+          stRow('Button style', 'Which button icons to show.', stPills('data-glyphs', [['auto', 'Automatic'], ['xbox', 'Xbox'], ['ps', 'PlayStation']], 'auto', { disabled: true }), { disabled: true }) +
+          stRow('Big Picture mode', 'A fullscreen, TV-sized GameVault. Open it from the app, with the controller’s Home button, or on startup.', '', { disabled: true }),
+        { soon: true }),
+      };
+    },
+
+    async account() {
+      return {
+        html:
+          stCard('GameVault account',
+            stRow('Sign in', 'One free account for cloud features. Everything else in GameVault works without it.', '<button type="button" class="btn btn-primary" disabled>Sign in</button>', { disabled: true }), { soon: true }) +
+          stCard('Cloud features',
+            stRow('Back up my game saves', 'Saves are encrypted on this PC before upload — only you can read them. Up to 100 MB, the latest 3 copies of each game. Restore any time from the game’s page.', stSwitch('data-cloud-saves', false, { disabled: true, label: 'Back up my game saves' }), { disabled: true }) +
+            stRow('Sync my library', 'Your games, playtime and settings on every PC you sign in to. Never your file paths or API keys.', stSwitch('data-cloud-sync', false, { disabled: true, label: 'Sync my library' }), { disabled: true }) +
+            '<p class="st-note">Both stay off until you turn them on.</p>', { soon: true }),
+      };
+    },
+
+    async ai() {
+      const cfg = state.config;
+      const provider = cfg.aiProvider || 'openai';
+      const providers = [['openai', 'OpenAI'], ['anthropic', 'Anthropic (Claude)'], ['google', 'Google Gemini'], ['deepseek', 'DeepSeek'], ['custom', 'Custom (OpenAI-compatible)']];
+      return {
+        html: stCard('AI advisor',
+          stRow('Use the AI advisor', 'Adds an AI tab to the in-game overlay for game suggestions based on your library and PC.', stSwitch('data-ai-enabled', cfg.aiEnabled === true, { label: 'Use the AI advisor' })) +
+          stRow('Provider', '', `<select class="select" id="st-ai-provider" aria-label="AI provider">${providers.map(([v, l]) => `<option value="${v}" ${v === provider ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`) +
+          `<div data-ai-custom ${provider === 'custom' ? '' : 'hidden'}>` +
+            stRow('Endpoint', 'Base URL of an OpenAI-compatible API.', `<input class="input" id="st-ai-endpoint" value="${esc(cfg.aiCustomEndpoint || '')}" placeholder="https://…/v1" spellcheck="false" />`, { wide: true }) +
+            stRow('Model', '', `<input class="input" id="st-ai-model" value="${esc(cfg.aiCustomModel || '')}" placeholder="model name" spellcheck="false" />`) +
+          '</div>' +
+          stRow('API key', cfg.hasAiKey ? 'A key is saved. Paste a new one to replace it.' : 'Stored encrypted on this PC and only sent to the provider you pick.',
+            `<div class="st-inline"><input class="input" id="st-ai-key" type="password" placeholder="${cfg.hasAiKey ? 'Key saved — paste to replace' : 'API key'}" autocomplete="off" spellcheck="false" aria-label="AI API key" />
+             <button type="button" class="btn btn-ghost" data-ai-save>Check &amp; save</button></div>`, { wide: true, descId: 'st-ai-desc' })),
+        wire(panel) {
+          const sel = panel.querySelector('#st-ai-provider');
+          const custom = panel.querySelector('[data-ai-custom]');
+          sel.onchange = async () => {
+            custom.hidden = sel.value !== 'custom';
+            await saveConfigPatch({ aiProvider: sel.value });
+          };
+          panel.querySelector('[data-ai-enabled]').onchange = async (e) => {
+            await saveConfigPatch({ aiEnabled: e.target.checked });
+            toast(e.target.checked ? 'AI advisor on — find it in the overlay' : 'AI advisor off', 'ok');
+          };
+          panel.querySelector('[data-ai-save]').onclick = async () => {
+            const key = panel.querySelector('#st-ai-key').value.trim();
+            const endpoint = panel.querySelector('#st-ai-endpoint')?.value.trim() || '';
+            const modelName = panel.querySelector('#st-ai-model')?.value.trim() || '';
+            if (!key && sel.value !== 'custom') { toast('Paste an API key first', 'error'); return; }
+            const res = api.aiValidateKey ? await api.aiValidateKey({ provider: sel.value, key, endpoint, modelName }).catch(() => null) : { valid: true };
+            if (!res || !res.valid) { toast((res && res.error) || 'That key did not work', 'error'); return; }
+            await saveConfigPatch({ aiKey: key, aiProvider: sel.value, aiCustomEndpoint: endpoint, aiCustomModel: modelName });
+            panel.querySelector('#st-ai-key').value = '';
+            const d = panel.querySelector('#st-ai-desc'); if (d) d.textContent = 'A key is saved. Paste a new one to replace it.';
+            toast('AI key checked and saved', 'ok');
+          };
+        },
+      };
+    },
+
+    async performance() {
+      return {
+        html: stCard('Performance',
+          stRow('Frame rate', '<span id="s-perf">measuring…</span><br><span id="s-perf-gpu">GPU: checking…</span>',
+            '<div class="st-inline"><button type="button" class="btn btn-ghost" data-perf-copy>Copy report</button><button type="button" class="btn btn-ghost" data-perf-reveal>Reveal log</button></div>') +
+          stRow('Benchmark', 'Clicks through the app for 20 seconds and writes the results to perf.log. Don’t touch the window until it says done.', '<button type="button" class="btn" data-perf-bench>Run benchmark</button>') +
+          stRow('Record frame stats', '<span id="s-perf-path">When on, stats are written every second to perf.log.</span>', stSwitch('data-perf-record', state.config.perfLog === true, { label: 'Record frame stats' }))),
+        async wire(panel) {
+          const perfEl = panel.querySelector('#s-perf');
+          let gpuInfo = {};
+          if (api.gpuStatus) gpuInfo = await api.gpuStatus().catch(() => ({}));
+          const gpuEl = panel.querySelector('#s-perf-gpu');
+          if (gpuEl) gpuEl.textContent = `GPU compositing: ${(gpuInfo && gpuInfo.gpu_compositing) || 'unknown'}`;
+          let frames = 0;
+          const t0 = performance.now();
+          const beat = (now) => {
+            frames += 1;
+            if (now - t0 < 1000) { requestAnimationFrame(beat); return; }
+            const fps = Math.max(1, Math.round((frames * 1000) / (now - t0)));
+            if (perfEl && perfEl.isConnected) perfEl.textContent = `${fps} fps · ${(1000 / fps).toFixed(1)} ms per frame · ${state.tier} quality`;
+          };
+          requestAnimationFrame(beat);
+          const pathEl = panel.querySelector('#s-perf-path');
+          if (pathEl && api.perfPath) api.perfPath().then((p) => { if (pathEl.isConnected) pathEl.textContent = `Log: ${p}`; }).catch(() => {});
+          panel.querySelector('[data-perf-record]').onchange = async (e) => {
+            await saveConfigPatch({ perfLog: e.target.checked });
+            syncPerfRecorder();
+            toast(e.target.checked ? 'Recording frame stats to perf.log' : 'Frame stats recording off', 'ok');
+          };
+          panel.querySelector('[data-perf-reveal]').onclick = () => api.perfReveal && api.perfReveal();
+          panel.querySelector('[data-perf-copy]').onclick = async () => {
+            const report = {
+              readout: perfEl ? perfEl.textContent : '',
+              window: `${innerWidth}x${innerHeight}`,
+              dpr: devicePixelRatio,
+              tier: state.tier,
+              palette: state.palette,
+              gpu: (gpuInfo && gpuInfo.gpu_compositing) || 'unknown',
+              games: state.games.length,
+            };
+            const text = JSON.stringify(report);
+            try { await navigator.clipboard.writeText(text); toast('Performance report copied', 'ok'); } catch (_) { toast(text, 'ok'); }
+          };
+          panel.querySelector('[data-perf-bench]').onclick = async () => {
+            closeSettings({ restoreFocus: false });
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const mark = (m) => { if (window.__gvPerfMark) window.__gvPerfMark(m); };
+            perfForced += 1; // the benchmark always records, whatever the setting says
+            syncPerfRecorder();
+            try {
+              await wait(600);
+              for (const f of ['Playing', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
+              mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
+              mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
+              mark('bench:grid'); $('#btn-view').click(); await wait(800);
+              mark('bench:scroll');
+              const lib = $('#library');
+              for (let i = 0; i < 12; i++) { lib.scrollTop += 140; await wait(60); }
+              mark('bench:detail'); if (state.games[0]) openDetail(state.games[0].id); await wait(1000);
+              mark('bench:back'); if (state.selectedId) closeDetail(); await wait(1100);
+              if (api.perfLog) api.perfLog({ t: Date.now(), benchmark: 'done', tier: state.tier });
+            } finally {
+              perfForced -= 1;
+              syncPerfRecorder();
+            }
+            toast('Benchmark finished — perf.log updated', 'ok');
+          };
+        },
+      };
+    },
+
+    async about() {
+      const version = await api.getAppVersion().catch(() => '2.0.0-experimental');
+      const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
+      const osName = info.platform === 'win32' ? 'Windows' : info.platform === 'linux' ? `Linux${info.wayland ? ' (Wayland)' : ''}` : (info.platform || 'unknown');
+      const link = (url, label) => `<button type="button" class="st-link" data-ext="${esc(url)}">${esc(label)}</button>`;
+      return {
+        html:
+          stCard('GameVault',
+            stRow('Version', `${esc(version)} · ${esc(osName)}`, '') +
+            stRow('Updates', /experimental/i.test(version) ? 'This is an experimental build, so automatic updates are off.' : 'GameVault checks for updates on startup.', '') +
+            stRow('Your data', 'Library, settings and cached artwork live in one folder on this PC.', '<button type="button" class="btn btn-ghost" data-open-data>Open folder</button>')) +
+          stCard('Credits',
+            stRow('SteamGridDB', 'Covers, banners, logos and icons come from the SteamGridDB community.', link('https://www.steamgriddb.com', 'steamgriddb.com')) +
+            stRow('PCGamingWiki', 'Save-game locations (for cloud saves) come from PCGamingWiki via the Ludusavi manifest.', link('https://www.pcgamingwiki.com', 'pcgamingwiki.com')) +
+            stRow('Source code', 'GameVault is open source under the MIT license.', link('https://github.com/itzSornet/Gamevault', 'GitHub'))),
+        wire(panel) {
+          for (const b of panel.querySelectorAll('[data-ext]')) b.onclick = () => api.openExternal && api.openExternal(b.dataset.ext);
+          panel.querySelector('[data-open-data]').onclick = async () => {
+            const p = await api.getDataPath().catch(() => '');
+            if (p) api.showInFolder(p);
+          };
+        },
+      };
+    },
+  };
 
   // Spotlight hooks: filled in by the spotlight block at the end of the file.
   const spotHooks = { open: () => {}, close: () => {}, isOpen: () => false, resync: () => {} };
@@ -3359,6 +3580,7 @@
 
   async function setFilter(filter) {
     window.__gvPerfMark && window.__gvPerfMark('filter:' + filter);
+    if (state.settingsOpen) closeSettings({ restoreFocus: false });
     if (state.selectedId) closeDetail();
     state.filter = filter;
     for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === filter);
@@ -3620,7 +3842,7 @@
     $('#btn-view').onclick = cycleView;
     $('#btn-add').onclick = () => openGameModal(null);
     $('#btn-import').onclick = openImportModal;
-    $('#btn-settings').onclick = openSettingsModal;
+    $('#btn-settings').onclick = () => (state.settingsOpen ? closeSettings() : openSettings());
     $('#empty-cta').onclick = openImportModal;
 
     for (const btn of $$('.tab[data-filter]')) {
@@ -3641,6 +3863,7 @@
         if (spotHooks.isOpen()) spotHooks.close();
         else if (modalOpen) closeModal();
         else if (state.selectedId) closeDetail();
+        else if (state.settingsOpen) closeSettings();
         return;
       }
       // a dialog owns the keyboard: nothing below may act on the page under it
@@ -4195,7 +4418,7 @@
       const tiles = document.querySelectorAll('.shelf-tile');
       if (tiles[3]) tiles[3].click();
     }
-    if (name === 'settings') openSettingsModal();
+    if (name === 'settings') openSettings();
     if (name === 'connectclick') {
       openImportModal();
       setTimeout(() => document.querySelector('[data-acc]')?.click(), 900);

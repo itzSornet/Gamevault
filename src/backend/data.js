@@ -1,4 +1,4 @@
-const { app } = require('electron');
+const { app, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -7,6 +7,7 @@ const { pathToFileURL } = require('url');
 const DATA_PATH = path.join(app.getPath('userData'), 'games.json');
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const AI_PROFILE_PATH = path.join(app.getPath('userData'), 'ai-profile.json');
+const SECRETS_PATH = path.join(app.getPath('userData'), 'secrets.bin');
 
 // ---------------------------------------------------------------------------
 // Durable JSON files
@@ -303,39 +304,130 @@ function normalizeLegacyFileUrl(value) {
 // Config
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Config + secrets
+//
+// API keys never live in config.json and never reach the renderer: they are
+// kept in secrets.bin, encrypted with the OS keychain via Electron's
+// safeStorage (DPAPI on Windows, libsecret/kwallet on Linux). Main-process
+// code still sees them on loadConfig() as before; the renderer only gets
+// publicConfig() with has*Key flags.
+// ---------------------------------------------------------------------------
+
+const SECRET_KEYS = ['sgdbKey', 'steamKey', 'aiKey'];
+const DEAD_KEYS = ['deepseekKey', 'cornerRadius']; // unused since 2.0
+
 const CONFIG_DEFAULTS = {
-  sgdbKey: '',
-  deepseekKey: '',
   overlayHotkey: 'Shift+Alt+G',
   aiEnabled: false,
   aiProvider: null,
-  aiKey: '',
   aiCustomEndpoint: '',
   aiCustomModel: '',
-  cornerRadius: 14
 };
 
-function loadConfig() {
+let secretsCache = null;
+
+function canEncrypt() {
+  try { return app.isReady() && safeStorage.isEncryptionAvailable(); } catch (_) { return false; }
+}
+
+function readSecrets() {
+  if (secretsCache) return { ...secretsCache };
+  let out = {};
+  try {
+    if (fs.existsSync(SECRETS_PATH)) {
+      const raw = fs.readFileSync(SECRETS_PATH, 'utf8').trim();
+      let text = '';
+      if (raw.startsWith('v1:')) {
+        if (!canEncrypt()) return {}; // keychain not ready yet: don't cache an empty read
+        text = safeStorage.decryptString(Buffer.from(raw.slice(3), 'base64'));
+      } else if (raw.startsWith('p1:')) {
+        text = Buffer.from(raw.slice(3), 'base64').toString('utf8');
+      }
+      const parsed = text ? JSON.parse(text) : {};
+      if (parsed && typeof parsed === 'object') out = parsed;
+    }
+  } catch (e) {
+    console.warn('[data] secrets unreadable:', e.message);
+  }
+  secretsCache = out;
+  return { ...out };
+}
+
+function writeSecrets(values) {
+  const clean = {};
+  for (const k of SECRET_KEYS) {
+    const v = values && values[k];
+    if (v) clean[k] = String(v);
+  }
+  const text = JSON.stringify(clean);
+  // No keychain (e.g. Linux without a secret service): fall back to an
+  // obfuscated file rather than losing the key; warn once.
+  const encoded = canEncrypt()
+    ? 'v1:' + safeStorage.encryptString(text).toString('base64')
+    : (console.warn('[data] OS keychain unavailable; secrets stored without encryption'), 'p1:' + Buffer.from(text, 'utf8').toString('base64'));
+  writeFileAtomicSync(SECRETS_PATH, encoded);
+  secretsCache = clean;
+}
+
+// config.json minus secrets and dead keys. Plaintext keys from older versions
+// are moved into secrets.bin the first time this runs after the app is ready.
+function readStoredConfig() {
   const res = readJsonFile(CONFIG_PATH);
   if (res.state === 'ok' && res.value && typeof res.value === 'object' && !Array.isArray(res.value)) {
-    return { ...CONFIG_DEFAULTS, ...res.value };
+    const stored = { ...res.value };
+    const leaked = SECRET_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(stored, k));
+    const dead = DEAD_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(stored, k));
+    if ((leaked.length || dead.length) && canEncrypt()) {
+      const secrets = readSecrets();
+      for (const k of leaked) if (stored[k] && !secrets[k]) secrets[k] = stored[k];
+      writeSecrets(secrets);
+      for (const k of [...leaked, ...dead]) delete stored[k];
+      writeJsonAtomicSync(CONFIG_PATH, stored);
+    }
+    return stored;
   }
   if (res.state === 'corrupt' || res.state === 'ok') {
     const kept = quarantineCorrupt(CONFIG_PATH);
     if (kept) console.warn(`[data] config.json is unreadable; kept a copy at ${kept}`);
   }
-  return { ...CONFIG_DEFAULTS };
+  return {};
 }
 
+// Full config for main-process code, secrets included.
+function loadConfig() {
+  const stored = readStoredConfig();
+  const secrets = readSecrets();
+  const out = { ...CONFIG_DEFAULTS, ...stored };
+  for (const k of SECRET_KEYS) out[k] = secrets[k] || stored[k] || '';
+  for (const k of DEAD_KEYS) delete out[k];
+  return out;
+}
+
+// Writes config.json (no secrets) and secrets.bin. A secret key present in
+// cfg (even '') replaces the stored one; absent keys are kept.
 function saveConfig(cfg) {
-  writeJsonAtomicSync(CONFIG_PATH, cfg);
+  const plain = { ...(cfg || {}) };
+  const secrets = readSecrets();
+  let secretsChanged = false;
+  for (const k of SECRET_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(plain, k)) {
+      const v = plain[k] ? String(plain[k]).trim() : '';
+      if ((secrets[k] || '') !== v) { secrets[k] = v; secretsChanged = true; }
+      delete plain[k];
+    }
+  }
+  for (const k of DEAD_KEYS) delete plain[k];
+  for (const k of Object.keys(plain)) if (k.startsWith('has') && k.endsWith('Key')) delete plain[k];
+  if (secretsChanged) writeSecrets(secrets);
+  writeJsonAtomicSync(CONFIG_PATH, plain);
 }
 
 // Merge-patch: keys the caller did not send (or sent as undefined) keep the
 // value on disk, so a stale renderer snapshot cannot wipe keys main wrote
-// meanwhile (sgdbKey, startupEnabled, snooze state...). Returns the result.
+// meanwhile (startupEnabled, snooze state...). Returns the full result.
 function mergeConfig(patch) {
-  const merged = { ...loadConfig() };
+  const merged = loadConfig();
   if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) continue;
@@ -344,6 +436,16 @@ function mergeConfig(patch) {
   }
   saveConfig(merged);
   return merged;
+}
+
+// What the renderer may see: no secrets, only whether each one is set.
+function publicConfig(cfg) {
+  const out = { ...(cfg || loadConfig()) };
+  out.hasSgdbKey = !!out.sgdbKey;
+  out.hasSteamKey = !!out.steamKey;
+  out.hasAiKey = !!out.aiKey;
+  for (const k of SECRET_KEYS) delete out[k];
+  return out;
 }
 
 function aiLoadProfile() {
@@ -361,7 +463,7 @@ function aiSaveProfile(profile, win, overlayWin) {
 module.exports = {
   DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH,
   loadGames, saveGames, cacheImage, cacheGameImages, normalizeLegacyFileUrl,
-  loadConfig, saveConfig, mergeConfig,
+  loadConfig, saveConfig, mergeConfig, publicConfig, SECRET_KEYS,
   aiLoadProfile, aiSaveProfile,
   writeFileAtomicSync, writeJsonAtomicSync, readJsonFile,
 };
