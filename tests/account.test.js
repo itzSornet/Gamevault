@@ -21,6 +21,7 @@ function fakeCloud() {
     const u = new URL(url);
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ path: u.pathname + u.search, body });
+    if (u.pathname === '/functions/v1/delete-account') return json(200, { ok: true });
     const p = u.pathname.replace('/auth/v1/', '');
     if (p === 'settings') return json(200, { external: { email: true, google: true }, disable_signup: false });
     if (p === 'otp') {
@@ -40,6 +41,7 @@ function fakeCloud() {
       return body.password === 'right-password' ? json(200, session(body.email)) : json(400, { error: 'invalid_grant', error_description: 'Invalid login credentials' });
     }
     if (p === 'user' && init.method === 'PUT') return json(200, { id: 'u1' });
+    if (p === 'verify') return body.token === '123456' ? json(200, session(body.email)) : json(403, { msg: 'Token has expired or is invalid' });
     if (p === 'logout') return { ok: true, status: 204, json: async () => { throw new Error('no body'); } };
     return json(404, { msg: 'nope' });
   };
@@ -161,6 +163,57 @@ async function get(url) {
   await acct.setPassword('brand-new-password');
   assert.strictEqual(acct.status().mustSetPassword, false);
   await acct.signOut();
+
+  // a sign-in link survives a restart: new instance listens on the same port
+  await acct.startEmail('me@x.io');
+  const redir6 = new URL(cloud.calls.filter((c) => c.path.startsWith('/auth/v1/otp')).pop().path, 'https://x').searchParams.get('redirect_to');
+  const savedPending = fs.readFileSync(path.join(dir, 'pending.bin'), 'utf8');
+  acct.cancel(); // frees the port (and removes the file)...
+  fs.writeFileSync(path.join(dir, 'pending.bin'), savedPending); // ...as if the app had crashed
+  const acct2 = mk();
+  await acct2.resumed;
+  assert.strictEqual(acct2.status().pending.email, 'me@x.io', 'pending sign-in resumed');
+  const r6 = await get(redir6 + '?code=good');
+  assert.match(r6.text, /signed in/);
+  assert.strictEqual(acct2.status().signedIn, true);
+  await acct2.signOut();
+
+  // expired saved sign-in is dropped
+  fs.writeFileSync(path.join(dir, 'pending.bin'), 'p1:' + Buffer.from(JSON.stringify({ kind: 'email', email: 'a@b.io', verifier: 'v', port: 1, expires: t - 1 })).toString('base64'));
+  const acct3 = mk();
+  await acct3.resumed;
+  assert.strictEqual(acct3.status().pending, null);
+  assert.ok(!fs.existsSync(path.join(dir, 'pending.bin')));
+
+  // code instead of the link
+  await acct3.startEmail('me@x.io');
+  await assert.rejects(acct3.verifyCode('12'), /Enter the code/);
+  await assert.rejects(acct3.verifyCode('000000'), /wrong or expired/);
+  await acct3.verifyCode('123 456');
+  assert.strictEqual(acct3.status().signedIn, true);
+  assert.strictEqual(acct3.status().pending, null);
+
+  // reset via code -> must set password, survives a restart until done
+  await acct3.signOut();
+  await acct3.resetPassword('me@x.io');
+  await acct3.verifyCode('123456');
+  assert.strictEqual(acct3.status().mustSetPassword, true);
+  assert.strictEqual(mk().status().mustSetPassword, true, 'still asked after restart');
+  await acct3.setPassword('new-password-ok');
+  assert.strictEqual(mk().status().mustSetPassword, false);
+
+  // delete account
+  const del = await acct3.deleteAccount();
+  assert.strictEqual(del.userId, 'u1');
+  assert.strictEqual(acct3.status().signedIn, false);
+  assert.ok(!fs.existsSync(path.join(dir, 'session.bin')));
+
+  // an unreadable session says so and is removed
+  fs.writeFileSync(path.join(dir, 'session.bin'), 'v1:garbage');
+  const acct4 = mk();
+  assert.strictEqual(acct4.status().signedIn, false);
+  assert.match(acct4.status().error, /couldn’t be read/);
+  assert.ok(!fs.existsSync(path.join(dir, 'session.bin')));
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('account tests passed');

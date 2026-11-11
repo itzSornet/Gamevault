@@ -1222,6 +1222,17 @@ function createWindow() {
   ipcMain.handle('account:signup', (_, p) => accountReply(() => account().signUp(p && p.email, p && p.password)));
   ipcMain.handle('account:reset', (_, email) => accountReply(() => account().resetPassword(email)));
   ipcMain.handle('account:set-password', (_, pw) => accountReply(() => account().setPassword(pw)));
+  ipcMain.handle('account:code', (_, code) => accountReply(() => account().verifyCode(code)));
+  ipcMain.handle('account:delete', (_, confirm) => accountReply(async () => {
+    if (confirm !== 'DELETE') throw Object.assign(new Error('Not confirmed'), { code: 'BAD_INPUT' });
+    const r = await account().deleteAccount();
+    // This PC's cloud bookkeeping for that user goes too (games stay).
+    if (r.userId) {
+      const cdir = path.join(app.getPath('userData'), 'cloud');
+      for (const f of [`sync-${r.userId}.json`, `key-${r.userId}.bin`]) { try { fs.rmSync(path.join(cdir, f), { force: true }); } catch (_) {} }
+    }
+    return r.status;
+  }));
   ipcMain.handle('account:oauth', (_, provider) => accountReply(() => account().startOAuth(provider)));
   ipcMain.handle('account:cancel', () => { account().cancel(); account().clearError(); return account().status(); });
   ipcMain.handle('account:signout', () => accountReply(() => account().signOut()));
