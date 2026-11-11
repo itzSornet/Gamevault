@@ -130,7 +130,7 @@
     el.style.transform = 'translateY(6px)';
     setTimeout(() => el.remove(), 250);
   }
-  function toast(message, kind) {
+  function toast(message, kind, actions) {
     const wrap = $('#toasts');
     const cls = 'toast' + (kind === 'error' ? ' is-error' : kind === 'ok' ? ' is-ok' : '');
     const live = () => [...wrap.children].filter((t) => !t.classList.contains('is-leaving'));
@@ -144,12 +144,27 @@
     const el = document.createElement('div');
     el.className = cls;
     el.textContent = message;
+    const acts = Array.isArray(actions) ? actions.filter((a) => a && a.label && typeof a.run === 'function') : [];
+    if (acts.length) {
+      el.classList.add('has-act');
+      const row = document.createElement('span');
+      row.className = 'toast-acts';
+      for (const a of acts) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'toast-act';
+        b.textContent = a.label;
+        b.onclick = () => { dismissToast(el); try { a.run(); } catch (_) {} };
+        row.appendChild(b);
+      }
+      el.appendChild(row);
+    }
     wrap.appendChild(el);
     const shown = live();
     for (let i = 0; i < shown.length - TOAST_MAX; i++) dismissToast(shown[i]);
     void el.offsetWidth;
     el.classList.add('is-on');
-    el._gvTimer = setTimeout(() => dismissToast(el), 3800);
+    el._gvTimer = setTimeout(() => dismissToast(el), acts.length ? 6500 : 3800);
   }
 
   function transition(fn) {
@@ -196,8 +211,35 @@
 
   function applyPalette(name, { announce = false, persist = false } = {}) {
     const p = PALETTES.includes(name) ? name : 'midnight';
+    const html = document.documentElement;
+    // 29: a picked palette crossfades: a still of the old colours fades out over
+    // the new ones (one layer's opacity, instead of every element repainting)
+    if (persist && html.dataset.palette && html.dataset.palette !== p && !prefersReducedMotion() && api.windowSnapshot) {
+      const seq = (applyPalette._seq = (applyPalette._seq || 0) + 1);
+      api.windowSnapshot().catch(() => null).then((url) => {
+        if (seq !== applyPalette._seq) return;
+        const finish = () => { state.palette = p; html.dataset.palette = p; };
+        if (!url) { finish(); return; }
+        const still = new Image();
+        still.className = 'palette-still';
+        still.alt = '';
+        still.onload = () => {
+          document.querySelectorAll('.palette-still').forEach((el) => el.remove());
+          document.body.appendChild(still);
+          finish();
+          still.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 380, easing: 'ease-in-out', fill: 'forwards' })
+            .onfinish = () => still.remove();
+        };
+        still.onerror = finish;
+        still.src = url;
+      });
+      lsSet('gv.palette', p);
+      if (state.config.palette !== p) saveConfigPatch({ palette: p });
+      if (announce) toast(`Palette: ${p}`, 'ok');
+      return;
+    }
     state.palette = p;
-    document.documentElement.dataset.palette = p;
+    html.dataset.palette = p;
     lsSet('gv.palette', p);
     if (persist && state.config.palette !== p) saveConfigPatch({ palette: p });
     if (announce) toast(`Palette: ${p}`, 'ok');
@@ -365,6 +407,9 @@
     for (const g of state.games) {
       if (g.coverUrl && !g._cover) queue.push([g, 'cover']);
       if (g.heroUrl && !g._hero) queue.push([g, 'hero']);
+      // logos arrive at up to 8000 px wide; decoding those (twice, for the
+      // sheen mask) is what made logo pages hitch
+      if (g.logoUrl && !g._logo) queue.push([g, 'logo']);
     }
     if (!queue.length) return;
 
@@ -375,10 +420,12 @@
         const [g, kind] = queue[i++];
         const url = kind === 'cover'
           ? await api.thumb(g.coverUrl, 344, 'cover')
-          : (g.heroUrl ? await api.thumb(g.heroUrl, 1400, 'hero') : null);
+          : kind === 'logo'
+            ? (g.logoUrl ? await api.thumb(g.logoUrl, 900, 'logo') : null)
+            : (g.heroUrl ? await api.thumb(g.heroUrl, 1400, 'hero') : null);
         if (url === '__reject__') { g._noHero = true; continue; }
         if (!url) continue;
-        if (kind === 'cover') g._cover = url; else g._hero = url;
+        if (kind === 'cover') g._cover = url; else if (kind === 'logo') g._logo = url; else g._hero = url;
         changed = true;
       }
     };
@@ -411,63 +458,85 @@
 
   // Cards are 2:3 like SteamGridDB's 600x900 grids, so anything that is not
   // 2:3 gets replaced with the real grid asset instead of being cropped.
-  async function enrichArt({ force = false } = {}) {
-    if (!api.sgdbAssets) return;
-    const targets = state.games.filter((g) => g.name
+  // Thumbnails for one game's art (what the shelf, grid and pages show).
+  async function thumbsFor(g) {
+    if (!api.thumb) return;
+    const jobs = [];
+    if (g.coverUrl && !g._cover) jobs.push(api.thumb(g.coverUrl, 344, 'cover').then((u) => { if (u && u !== '__reject__') g._cover = u; }));
+    if (g.heroUrl && !g._hero) jobs.push(api.thumb(g.heroUrl, 1400, 'hero').then((u) => { if (u === '__reject__') g._noHero = true; else if (u) { g._hero = u; g._noHero = false; } }));
+    if (g.logoUrl && !g._logo) jobs.push(api.thumb(g.logoUrl, 900, 'logo').then((u) => { if (u && u !== '__reject__') g._logo = u; }));
+    await Promise.all(jobs.map((p) => p.catch(() => {})));
+  }
+
+  // Artwork for games that don't have it yet. Six games at a time, one
+  // lookup per game (Steam games use Steam's own art first and usually never
+  // ask SteamGridDB), and each game shows up as soon as its art is in.
+  async function enrichArt({ force = false, only = null } = {}) {
+    if (!api.sgdbAutofill) return;
+    const queue = (only || state.games).filter((g) => g.name
       && (force || g.artVersion !== 3 || (!g.heroUrl && !g.heroTried)));
-    if (!targets.length) return;
+    if (!queue.length) return;
+    queue.sort((a, b) => (b.steamAppId ? 1 : 0) - (a.steamAppId ? 1 : 0));
 
-    const cachedUrl = async (kind, id) => {
-      const res = await api.sgdbAssets({ kind, id }).catch(() => null);
-      const best = res && res.ok ? res.data.items[0] : null;
-      if (!best || !best.url) return null;
-      const kindMap = { grids: 'cover', heroes: 'hero', logos: 'logo', icons: 'icon' };
-      const cached = await api.sgdbCache({ url: best.url, kind: kindMap[kind] || 'art' }).catch(() => null);
-      return cached && cached.ok ? cached.data : best.url;
-    };
-
-    let i = 0;
     let changed = false;
-    const worker = async () => {
-      while (i < targets.length) {
-        const g = targets[i++];
-        try {
-          let id = g.sgdbId;
-          if (!id) {
-            const resolved = await api.sgdbResolve({ name: String(g.name), steamAppId: g.steamAppId }).catch(() => null);
-            if (resolved && resolved.ok && resolved.data.match) id = resolved.data.match.id;
-          }
-          if (!id) { g.artVersion = 3; g.heroTried = true; saveGamesSoon(); continue; }
+    let paintTimer = 0;
+    let limited = false;   // the shared cache said "hourly limit": leave the rest for later
+    const tries = new Map();
+    const paint = () => {
+      paintTimer = 0;
+      if (state.selectedId || state.settingsOpen) return;
+      renderLibrary();
+    };
+    const paintSoon = () => { if (!paintTimer) paintTimer = setTimeout(paint, 250); };
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-          const aspect = await imageAspect(g.coverUrl);
-          const isWide = Math.abs(aspect - 2 / 3) <= 0.02;
-          if (!isWide || !g.coverUrl) {
-            const cover = await cachedUrl('grids', id);
-            if (cover) { g.coverUrl = cover; changed = true; }
+    const worker = async () => {
+      while (queue.length) {
+        const g = queue.shift();
+        // once limited, only Steam games (Steam's CDN, no lookup) are worth asking
+        if (limited && !g.steamAppId) continue;
+        try {
+          const slots = [];
+          if (!g.coverUrl || Math.abs((await imageAspect(g.coverUrl)) - 2 / 3) > 0.02) slots.push('cover');
+          if (!g.heroUrl) slots.push('hero');
+          if (!g.logoUrl) slots.push('logo');
+          if (!slots.length) { g.artVersion = 3; g.heroTried = true; continue; }
+
+          const res = await api.sgdbAutofill({
+            id: g.sgdbId || undefined, name: String(g.name), steamAppId: g.steamAppId || undefined, slots, bulk: true,
+          }).catch(() => null);
+          if (!res || !res.ok) {
+            const code = res && res.error && res.error.code;
+            if (code === 'NOT_FOUND') { g.artVersion = 3; g.heroTried = true; continue; }
+            // hourly limit: stop asking (Steam games still get Steam's own
+            // art); the rest are left unmarked and filled on a later launch
+            if (code === 'RATE_LIMIT') { limited = true; continue; }
+            // busy / offline: try again later in this run, a couple of times
+            const n = (tries.get(g) || 0) + 1;
+            tries.set(g, n);
+            if (n < 3) { queue.push(g); await wait(code === 'BUSY' ? 2500 : 800); }
+            continue;
           }
-          if (!g.heroUrl) {
-            const hero = await cachedUrl('heroes', id);
-            if (hero) { g.heroUrl = hero; changed = true; }
-            g.heroTried = true;
-          }
-          if (!g.logoUrl) {
-            const logo = await cachedUrl('logos', id);
-            if (logo) { g.logoUrl = logo; changed = true; }
-          }
-          g.sgdbId = id;
+          const data = res.data || {};
+          const a = data.assets || {};
+          if (data.match && data.match.id && !g.sgdbId) g.sgdbId = data.match.id;
+          if (slots.includes('cover') && a.cover && a.cover.url) { g.coverUrl = a.cover.url; delete g._cover; changed = true; }
+          if (slots.includes('hero') && a.hero && a.hero.url) { g.heroUrl = a.hero.url; delete g._hero; g._noHero = false; changed = true; }
+          if (slots.includes('logo') && a.logo && a.logo.url) { g.logoUrl = a.logo.url; delete g._logo; changed = true; }
+          g.heroTried = true;
           g.artVersion = 3;
           saveGamesSoon();
+          await thumbsFor(g);
+          paintSoon();
         } catch (_) {}
-        await new Promise((r) => setTimeout(r, 150));
       }
     };
-    await Promise.all([worker(), worker()]);
+    await Promise.all(Array.from({ length: Math.min(6, queue.length) }, worker));
+    clearTimeout(paintTimer);
     persistGames();
 
     if (changed) {
-      state._shelfKey = '';
-      prepareThumbs();
-      if (!state.selectedId) renderLibrary();
+      if (!state.selectedId) { if (!state.settingsOpen) renderLibrary(); }
       else {
         const g = state.games.find((x) => String(x.id) === state.selectedId);
         if (g) renderDetail();
@@ -528,6 +597,10 @@
       if (thumb === '__reject__') g._noHero = true;
       else if (thumb) { g._hero = thumb; g._noHero = false; }
     }
+    if (g.logoUrl && api.thumb) {
+      const thumb = await api.thumb(g.logoUrl, 900, 'logo').catch(() => null);
+      if (thumb && thumb !== '__reject__') g._logo = thumb;
+    }
     state._shelfKey = '';
     updateCard(g);
     if (state.view === 'shelf') {
@@ -546,7 +619,133 @@
     if (focus && state.view === 'shelf') state.shelfId = String(g.id);
     renderLibrary();
     if (focus && state.view === 'shelf') revealShelfTile(String(g.id));
-    fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
+    fadeIn(currentPane());
+  }
+
+  // 25: covers that arrive after their tile is on screen fade in instead of
+  // popping. Images already decoded (cache) are shown as they are.
+  function fadeInOnLoad(img) {
+    if (!img || img.complete || prefersReducedMotion()) return;
+    img.style.opacity = '0';
+    img.addEventListener('load', () => {
+      img.style.opacity = '';
+      img.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: 'ease-out' });
+    }, { once: true });
+    img.addEventListener('error', () => { img.style.opacity = ''; }, { once: true });
+  }
+
+  // 28: a button's label changing state (Play -> Stop) crossfades.
+  function swapLabel(el, text) {
+    if (!el || el.textContent === text) return;
+    el.textContent = text;
+    if (prefersReducedMotion()) return;
+    el.animate(
+      [{ opacity: 0.2, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 260, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' }
+    );
+  }
+
+  // True when `next` is `prev` with some ids taken out (same order, nothing new).
+  function isRemovalOnly(prev, next) {
+    if (!prev.length || next.length >= prev.length) return false;
+    let j = 0;
+    for (const id of prev) if (id === next[j]) j++;
+    return j === next.length;
+  }
+
+  // 26: items leaving a list in place. The leaver fades out where it stood
+  // (as a ghost copy, clipped to the list), then the rest slide into the gap.
+  function flipLeave(clipEl, staying, leaving, mutate) {
+    if (prefersReducedMotion() || !leaving.length) { mutate(); return; }
+    const clip = clipEl.getBoundingClientRect();
+    const first = new Map();
+    for (const el of staying) {
+      const r = el.getBoundingClientRect();
+      if (r.width) first.set(el, r);
+    }
+    const ghosts = [];
+    for (const el of leaving) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || r.right < clip.left || r.left > clip.right || r.bottom < clip.top || r.top > clip.bottom) continue;
+      // the ghost lives in the same list (so list-scoped styles still apply),
+      // placed over the original whatever its containing block is
+      const g = el.cloneNode(true);
+      g.removeAttribute('id');
+      delete g.dataset.id;
+      g.classList.add('is-ghost');
+      g.inert = true;
+      g.setAttribute('aria-hidden', 'true');
+      Object.assign(g.style, { position: 'absolute', left: '0px', top: '0px', width: r.width + 'px', height: r.height + 'px' });
+      el.parentNode.appendChild(g);
+      const o = g.getBoundingClientRect();
+      Object.assign(g.style, {
+        left: (r.left - o.left) + 'px', top: (r.top - o.top) + 'px',
+        margin: '0', pointerEvents: 'none', zIndex: '5',
+        clipPath: `inset(${Math.max(0, clip.top - r.top)}px ${Math.max(0, r.right - clip.right)}px ${Math.max(0, r.bottom - clip.bottom)}px ${Math.max(0, clip.left - r.left)}px)`,
+      });
+      ghosts.push(g);
+    }
+    mutate();
+    for (const g of ghosts) {
+      g.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(0.94)' }],
+        { duration: 220, easing: 'ease-out', fill: 'forwards' }).onfinish = () => g.remove();
+    }
+    for (const [el, a] of first) {
+      if (!el.isConnected || el.hidden) continue;
+      const b = el.getBoundingClientRect();
+      const dx = a.left - b.left, dy = a.top - b.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+        { duration: 380, delay: 90, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: 'backwards' });
+    }
+  }
+
+  // A game logo you can almost pick up: on hover it lifts toward you, tilts
+  // after the cursor on springs, and a light sheen slides across the logo's
+  // own shape (masked by the image). Springs back when the pointer leaves.
+  function logoTilt(wrap) {
+    if (!wrap || wrap._tilt || prefersReducedMotion()) return;
+    const axes = { rx: { x: 0, v: 0, to: 0 }, ry: { x: 0, v: 0, to: 0 }, s: { x: 1, v: 0, to: 1 } };
+    const K = 190, C = 21;   // ζ ≈ 0.76: a little settle, no wobble
+    let raf = 0, last = 0;
+    const draw = () => {
+      wrap.style.transform = `perspective(800px) rotateX(${axes.rx.x.toFixed(2)}deg) rotateY(${axes.ry.x.toFixed(2)}deg) scale(${axes.s.x.toFixed(4)})`;
+    };
+    const step = (now) => {
+      const dt = Math.min(32, now - last) / 1000; last = now;
+      let moving = false;
+      for (const a of Object.values(axes)) {
+        const k = a === axes.s ? K * 1.2 : K;
+        a.v += (-k * (a.x - a.to) - C * a.v) * dt;
+        a.x += a.v * dt;
+        if (Math.abs(a.v) > 0.002 || Math.abs(a.x - a.to) > 0.002) moving = true;
+      }
+      draw();
+      if (moving) raf = requestAnimationFrame(step);
+      else { raf = 0; if (axes.s.to === 1) { wrap.style.transform = ''; wrap.classList.remove('is-lifting'); } }
+    };
+    const kick = () => { if (!raf) { last = performance.now(); raf = requestAnimationFrame(step); } };
+    const light = wrap.querySelector('.gv-logo-sheen > b');
+    wrap._tilt = true;
+    wrap.addEventListener('pointerenter', () => {
+      wrap.classList.add('is-hover', 'is-lifting');
+      axes.s.to = 1.07; kick();
+    });
+    wrap.addEventListener('pointermove', (e) => {
+      const r = wrap.getBoundingClientRect();
+      const px = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      const py = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+      axes.ry.to = (px - 0.5) * 18;
+      axes.rx.to = (0.5 - py) * 14;
+      // the light is a pre-drawn layer twice the logo's size, slid so its
+      // bright centre sits under the cursor: moved by the compositor, never repainted
+      if (light) light.style.transform = `translate3d(${((px - 1) * r.width / 1.07).toFixed(1)}px, ${((py - 1) * r.height / 1.07).toFixed(1)}px, 0)`;
+      kick();
+    });
+    wrap.addEventListener('pointerleave', () => {
+      wrap.classList.remove('is-hover');
+      axes.rx.to = 0; axes.ry.to = 0; axes.s.to = 1; kick();
+    });
   }
 
   function fadeIn(el) {
@@ -563,8 +762,8 @@
     const cards = Array.from($('#grid').children).slice(0, 14);
     cards.forEach((card, i) => {
       card.animate(
-        [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }],
-        { duration: 320, delay: Math.min(i, 11) * 26, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'backwards' }
+        [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 480, delay: Math.min(i, 11) * 26, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: 'backwards' }
       );
     });
   }
@@ -572,14 +771,26 @@
   function renderLibrary() {
     // While a game page is open the library must stay hidden; otherwise it
     // reappears stacked above the detail view.
-    if (state.selectedId) {
+    const wishView = $('#wishlist-view');
+    const wishMode = state.filter === 'Want';
+    $('#main')?.classList.toggle('is-wish', wishMode);
+    if (state.selectedId || state.settingsOpen) {
       $('#shelf').hidden = true;
       $('#library').hidden = true;
+      if (wishView) wishView.hidden = true;
       // sidebar counts still have to follow status/wishlist edits made on
       // the game page
       refreshCounts();
       return;
     }
+    if (wishMode && wishView) {
+      $('#shelf').hidden = true;
+      $('#library').hidden = true;
+      wishView.hidden = false;
+      renderWishlist();
+      return;
+    }
+    if (wishView) wishView.hidden = true;
     if (state.view === 'shelf') {
       $('#shelf').hidden = false;
       $('#library').hidden = true;
@@ -589,6 +800,545 @@
       $('#library').hidden = false;
       renderGrid();
     }
+  }
+
+  // Without the user's own SteamGridDB key every SteamGridDB search goes
+  // through the shared cloud cache, where each new term counts toward an
+  // hourly limit (60). Steam's store search is free, so it goes first and
+  // SteamGridDB is only asked when Steam has little to offer.
+  function hasOwnSgdbKey() { return !!(state.config && state.config.hasSgdbKey); }
+  function sgdbLimitText(res) {
+    return res && res.error && res.error.code === 'RATE_LIMIT'
+      ? 'SteamGridDB lookups are paused for a bit (hourly limit). Steam results still work.'
+      : '';
+  }
+
+  function currentPane() {
+    if (state.filter === 'Want' && $('#wishlist-view')) return $('#wishlist-view');
+    return state.view === 'shelf' ? $('#shelf') : $('#library');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wishlist — its own page, not a filtered library
+  // ---------------------------------------------------------------------------
+  function wlIcon(name, size) {
+    const s = `width="${size || 14}" height="${size || 14}" viewBox="0 0 24 24" aria-hidden="true"`;
+    if (name === 'star') return `<svg ${s} fill="currentColor"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/></svg>`;
+    if (name === 'check') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>`;
+    if (name === 'x') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>`;
+    if (name === 'up') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>`;
+    if (name === 'search') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>`;
+    if (name === 'plus') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
+    if (name === 'ext') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5M19 5l-8 8M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4"/></svg>`;
+    return '';
+  }
+
+  // Order: the user's ranking (Top pick first), then oldest wish first.
+  function wishRankOf(g) { return Number.isFinite(g.wishRank) ? g.wishRank : 1e9; }
+  function wishOrder() {
+    return state.games.filter(gvIsWishlisted)
+      .sort((a, b) => wishRankOf(a) - wishRankOf(b) || (Number(a.added) || 0) - (Number(b.added) || 0));
+  }
+  function wishMeta(g) { return g.steamMeta && g.steamMeta.version === 3 ? g.steamMeta : null; }
+
+  function wishAgo(ts) {
+    const t = Number(ts);
+    if (!t) return '';
+    const days = Math.floor((Date.now() - t) / 86400000);
+    if (days < 1) return 'today';
+    if (days < 2) return 'yesterday';
+    if (days < 14) return `${days} days ago`;
+    if (days < 60) return `${Math.round(days / 7)} weeks ago`;
+    if (days < 365) return `${Math.max(2, Math.round(days / 30))} months ago`;
+    const y = Math.round(days / 365);
+    return y <= 1 ? 'a year ago' : `${y} years ago`;
+  }
+
+  function wishFactsHtml(g) {
+    const m = wishMeta(g);
+    const out = [];
+    const p = m && m.price;
+    if (p && p.discount > 0) out.push(`<span class="wl-chip is-sale">−${p.discount}%</span><span class="wl-price">${p.initial ? `<s>${esc(p.initial)}</s>` : ''}${esc(p.final)}</span>`);
+    else if (m && m.free) out.push('<span class="wl-chip">Free to play</span>');
+    else if (p && p.final) out.push(`<span class="wl-price">${esc(p.final)}</span>`);
+    if (m && m.release && m.release.soon) {
+      const d = String(m.release.date || '').trim();
+      out.push(`<span class="wl-chip is-soon">${esc(/\d/.test(d) ? `Coming ${d}` : (d || 'Coming soon'))}</span>`);
+    }
+    const ago = wishAgo(g.added);
+    if (ago) out.push(`<span class="wl-since">Added ${esc(ago)}</span>`);
+    return out.join('');
+  }
+
+  function wishPriceText(p) {
+    if (!p || typeof p.final !== 'number') return '';
+    if (p.final === 0) return 'Free';
+    let s = '';
+    try { s = new Intl.NumberFormat('en-US', { style: 'currency', currency: p.currency || 'USD' }).format(p.final / 100); } catch (_) { return ''; }
+    return p.initial > p.final ? `−${Math.round((1 - p.final / p.initial) * 100)}%  ${s}` : s;
+  }
+
+  // Wide art for the card: the game's hero, else Steam's own library art,
+  // else the cover blurred out to fill.
+  function wishArt(g) {
+    const steam = /^\d+$/.test(String(g.steamAppId || ''))
+      ? `https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/${g.steamAppId}/` : '';
+    const hero = g._noHero ? '' : (g._hero || g.heroUrl || '');
+    const cover = g._cover || g.coverUrl || '';
+    return {
+      hero: hero ? toFileUrl(hero) : (steam ? steam + 'library_hero.jpg' : ''),
+      cover: cover ? toFileUrl(cover) : '',
+      logo: (g._logo || g.logoUrl) ? toFileUrl(g._logo || g.logoUrl) : (steam ? steam + 'logo.png' : ''),
+    };
+  }
+
+  function wishArtHtml(g, art, nameFallback) {
+    const bg = art.hero
+      ? `<img class="wl-bg" src="${esc(art.hero)}" alt="" decoding="async" data-wl-bg />`
+      : art.cover ? `<img class="wl-bg is-cover" src="${esc(art.cover)}" alt="" decoding="async" />` : '';
+    const name = nameFallback ? `<span class="wl-name-text">${esc(g.name)}</span>` : '';
+    const logo = art.logo
+      ? `<span class="gv-logo3d wl-logo" data-logo3d><img src="${esc(art.logo)}" alt="${esc(g.name)}" decoding="async" data-wl-logo /><i class="gv-logo-sheen" style="--logo:${esc(cssUrl(art.logo))}" aria-hidden="true"><b></b></i></span>`
+      : name;
+    return { bg, logo, name };
+  }
+
+  function wireWishImages(el, g, nameFallback) {
+    const bg = el.querySelector('[data-wl-bg]');
+    if (bg) {
+      let triedCover = false;
+      bg.addEventListener('error', () => {
+        const cover = wishArt(g).cover;
+        if (!triedCover && cover) { triedCover = true; bg.classList.add('is-cover'); bg.src = cover; }
+        else bg.remove();
+      });
+    }
+    const logo = el.querySelector('[data-wl-logo]');
+    if (logo) logo.addEventListener('error', () => {
+      const wrap = logo.closest('[data-logo3d]');
+      if (wrap) wrap.outerHTML = nameFallback ? `<span class="wl-name-text">${esc(g.name)}</span>` : '';
+    }, { once: true });
+    for (const im of el.querySelectorAll('img')) fadeInOnLoad(im);
+    const tilt = el.querySelector('[data-logo3d]');
+    if (tilt) logoTilt(tilt);
+  }
+
+  function wishArtKey(g, art) {
+    return [art.hero, art.cover, art.logo, g.name, g.steamAppId || ''].join('|');
+  }
+
+  function paintWishTop(el, g) {
+    const art = wishArt(g);
+    const key = wishArtKey(g, art);
+    if (el._key !== key) {
+      el._key = key;
+      const a = wishArtHtml(g, art, true);
+      el.innerHTML = `
+        <div class="wl-top-art">${a.bg}</div>
+        <div class="wl-top-scrim"></div>
+        <div class="wl-top-body">
+          <span class="wl-badge">${wlIcon('star', 12)} Top pick</span>
+          <button type="button" class="wl-name" data-open aria-label="Open ${esc(g.name)}">${a.logo}</button>
+          <div class="wl-facts" data-wl-facts></div>
+          <div class="wl-actions">
+            <button type="button" class="wl-btn is-got" data-got>${wlIcon('check', 15)} I got it</button>
+            ${g.steamAppId ? `<button type="button" class="wl-btn" data-store>${wlIcon('ext', 14)} Steam store</button>` : ''}
+            <button type="button" class="wl-btn" data-open>Details</button>
+            <button type="button" class="wl-btn is-icon" data-remove title="Remove from wishlist" aria-label="Remove ${esc(g.name)} from your wishlist">${wlIcon('x', 15)}</button>
+          </div>
+        </div>`;
+      wireWishImages(el, g, true);
+    }
+    el.querySelector('[data-wl-facts]').innerHTML = wishFactsHtml(g);
+  }
+
+  function paintWishCard(el, g, rank) {
+    const art = wishArt(g);
+    const key = wishArtKey(g, art);
+    if (el._key !== key) {
+      el._key = key;
+      const a = wishArtHtml(g, art, false);
+      el.innerHTML = `
+        <button type="button" class="wl-card-art" data-open aria-label="Open ${esc(g.name)}">
+          ${a.bg}
+          <span class="wl-card-logo">${a.logo}</span>
+          <span class="wl-num" data-wl-num></span>
+        </button>
+        <div class="wl-card-foot">
+          <div class="wl-card-info">
+            <div class="wl-card-name" title="${esc(g.name)}">${esc(g.name)}</div>
+            <div class="wl-facts" data-wl-facts></div>
+          </div>
+          <div class="wl-card-acts">
+            <button type="button" class="wl-icon is-top" data-top title="Make it your top pick" aria-label="Make ${esc(g.name)} your top pick">${wlIcon('up', 15)}</button>
+            <button type="button" class="wl-icon is-got" data-got title="I got it: move to library" aria-label="Move ${esc(g.name)} to your library">${wlIcon('check', 15)}</button>
+            <button type="button" class="wl-icon is-remove" data-remove title="Remove from wishlist" aria-label="Remove ${esc(g.name)} from your wishlist">${wlIcon('x', 15)}</button>
+          </div>
+        </div>`;
+      wireWishImages(el, g, false);
+    }
+    el.querySelector('[data-wl-num]').textContent = String(rank);
+    el.querySelector('[data-wl-facts]').innerHTML = wishFactsHtml(g);
+  }
+
+  function renderWishlist() {
+    const view = $('#wishlist-view');
+    if (!view) return;
+    refreshCounts();
+    if (!view.querySelector('.wl')) {
+      view.innerHTML = `
+        <div class="wl">
+          <header class="wl-head">
+            <div class="wl-head-text">
+              <h1 class="wl-title"><span class="wl-title-star">${wlIcon('star', 24)}</span>Wishlist</h1>
+              <p class="wl-sub" data-wl-sub></p>
+            </div>
+            <div class="wl-add">
+              ${wlIcon('search', 15)}
+              <input type="text" data-wl-q placeholder="Add a game you want…" aria-label="Add a game to your wishlist" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" />
+              <div class="wl-add-menu" data-wl-menu role="listbox" hidden></div>
+            </div>
+          </header>
+          <div class="wl-top-slot" data-wl-top></div>
+          <div class="wl-next" data-wl-next hidden>Up next</div>
+          <div class="wl-grid" data-wl-grid></div>
+          <div class="wl-empty" data-wl-empty hidden>
+            <div class="wl-empty-star">${wlIcon('star', 38)}</div>
+            <h2>Nothing on your wishlist yet</h2>
+            <p>Search above for a game you want. Steam games show their price, sales and release date here.</p>
+            <button type="button" class="btn" data-wl-import>Import your Steam wishlist</button>
+          </div>
+        </div>`;
+      wireWishlist(view);
+    }
+    const list = wishOrder();
+    const sale = list.filter((g) => { const m = wishMeta(g); return m && m.price && m.price.discount > 0; }).length;
+    const soon = list.filter((g) => { const m = wishMeta(g); return m && m.release && m.release.soon; }).length;
+    const bits = [`${list.length.toLocaleString()} game${list.length === 1 ? '' : 's'} you want`];
+    if (sale) bits.push(`<b>${sale} on sale</b>`);
+    if (soon) bits.push(`${soon} coming soon`);
+    view.querySelector('[data-wl-sub]').innerHTML = list.length ? bits.join(' · ') : 'The games you want next, in one place.';
+
+    const topSlot = view.querySelector('[data-wl-top]');
+    const top = list[0];
+    let topEl = topSlot.firstElementChild;
+    if (!top) topSlot.textContent = '';
+    else if (!topEl || topEl.dataset.id !== String(top.id)) {
+      topSlot.textContent = '';
+      topEl = document.createElement('section');
+      topEl.className = 'wl-top';
+      topEl.dataset.id = String(top.id);
+      topEl.dataset.wlItem = 'top';
+      paintWishTop(topEl, top);
+      topSlot.appendChild(topEl);
+    } else paintWishTop(topEl, top);
+
+    const grid = view.querySelector('[data-wl-grid]');
+    const have = new Map(Array.from(grid.children).map((el) => [el.dataset.id, el]));
+    const rest = list.slice(1);
+    const keep = new Set();
+    rest.forEach((g, i) => {
+      const id = String(g.id);
+      let el = have.get(id);
+      if (!el) {
+        el = document.createElement('article');
+        el.className = 'wl-card';
+        el.dataset.id = id;
+        el.dataset.wlItem = 'card';
+      }
+      paintWishCard(el, g, i + 2);
+      keep.add(id);
+      if (grid.children[i] !== el) grid.insertBefore(el, grid.children[i] || null);
+    });
+    for (const [id, el] of have) if (!keep.has(id)) el.remove();
+    view.querySelector('[data-wl-next]').hidden = rest.length === 0;
+    view.querySelector('[data-wl-empty]').hidden = list.length > 0;
+    for (const g of list) queueWishMeta(g);
+  }
+
+  // A change to the list: what stays slides to its new place, what leaves
+  // fades out where it stood, what's new rises in.
+  function wishTransition(mutate) {
+    const view = $('#wishlist-view');
+    const wl = view && view.querySelector('.wl');
+    if (!wl || view.hidden || prefersReducedMotion()) { mutate(); renderLibrary(); return; }
+    const items = () => Array.from(view.querySelectorAll('[data-wl-item]:not(.is-ghost)'));
+    const wr = wl.getBoundingClientRect();
+    const first = new Map(items().map((el) => [el, el.getBoundingClientRect()]));
+    mutate();
+    renderLibrary();
+    const now = new Set(items());
+    for (const [el, r] of first) {
+      if (now.has(el)) continue;
+      el.classList.add('is-ghost');
+      el.inert = true;
+      Object.assign(el.style, {
+        position: 'absolute', margin: '0', zIndex: '3', pointerEvents: 'none',
+        left: (r.left - wr.left) + 'px', top: (r.top - wr.top) + 'px', width: r.width + 'px', height: r.height + 'px',
+      });
+      wl.appendChild(el);
+      el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(0.95)' }],
+        { duration: 240, easing: 'ease-out', fill: 'forwards' }).onfinish = () => el.remove();
+    }
+    for (const el of now) {
+      const a = first.get(el);
+      if (!a) {
+        el.animate([{ opacity: 0, transform: 'translateY(8px) scale(0.985)' }, { opacity: 1, transform: 'none' }],
+          { duration: 480, delay: 90, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: 'backwards' });
+        continue;
+      }
+      const b = el.getBoundingClientRect();
+      const dx = a.left - b.left, dy = a.top - b.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+        { duration: 420, delay: 60, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: 'backwards' });
+    }
+  }
+
+  function wishItemEl(g) {
+    return document.querySelector(`#wishlist-view [data-wl-item][data-id="${CSS.escape(String(g.id))}"]:not(.is-ghost)`);
+  }
+  function flashWishItem(g) {
+    const el = wishItemEl(g);
+    if (!el) return;
+    el.scrollIntoView({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    el.classList.remove('is-flash');
+    void el.offsetWidth;
+    el.classList.add('is-flash');
+    setTimeout(() => el.classList.remove('is-flash'), 1300);
+  }
+
+  // The next top pick's art is decoded before it takes the stage, so the
+  // swap doesn't stall on a big image (capped: never waits long).
+  function primeWishTop(g) {
+    if (!g) return Promise.resolve();
+    const a = wishArt(g);
+    const urls = [a.hero || a.cover, a.logo].filter(Boolean);
+    const decode = (u) => { const im = new Image(); im.decoding = 'async'; im.src = u; return im.decode ? im.decode().catch(() => {}) : Promise.resolve(); };
+    return Promise.race([Promise.all(urls.map(decode)), new Promise((r) => setTimeout(r, 220))]);
+  }
+
+  async function wishMakeTop(g) {
+    await primeWishTop(g);
+    wishTransition(() => {
+      const list = wishOrder().filter((x) => x !== g);
+      list.unshift(g);
+      list.forEach((x, i) => { x.wishRank = i; });
+    });
+    saveGamesSoon();
+    toast(`${g.name} is your top pick`, 'ok');
+  }
+
+  async function wishGot(g) {
+    const before = wishOrder();
+    if (before[0] === g) await primeWishTop(before[1]);
+    const prev = { status: g.status, wishRank: g.wishRank };
+    wishTransition(() => {
+      g.wishlisted = false;
+      if (g.status !== 'Finished') g.status = 'Playing';
+      delete g.wishRank;
+    });
+    saveGamesSoon();
+    state._shelfKey = '';
+    const acts = [{ label: 'Undo', run: () => {
+      if (!state.games.includes(g)) return;
+      wishTransition(() => { g.wishlisted = true; g.status = prev.status; if (Number.isFinite(prev.wishRank)) g.wishRank = prev.wishRank; });
+      saveGamesSoon();
+      state._shelfKey = '';
+    } }];
+    if (!g.exePath) acts.unshift({ label: 'Set it up', run: () => openGameModal(g) });
+    toast(`${g.name} moved to your library`, 'ok', acts);
+  }
+
+  async function wishRemove(g) {
+    const before = wishOrder();
+    if (before[0] === g) await primeWishTop(before[1]);
+    const idx = state.games.indexOf(g);
+    if (idx < 0) return;
+    wishTransition(() => { state.games.splice(idx, 1); });
+    saveGamesSoon();
+    toast(`${g.name} removed from your wishlist`, 'ok', [{ label: 'Undo', run: () => {
+      if (state.games.includes(g)) return;
+      wishTransition(() => { state.games.splice(Math.min(idx, state.games.length), 0, g); });
+      saveGamesSoon();
+    } }]);
+  }
+
+  function addToWishlist(r) {
+    const appId = r.appId ? Number(r.appId) : null;
+    const ranked = state.games.filter((x) => gvIsWishlisted(x) && Number.isFinite(x.wishRank));
+    const g = {
+      id: newGameId(),
+      name: String(r.name).trim(),
+      steamAppId: appId,
+      sgdbId: r.sgdbId || null,
+      sourceId: appId ? `steam-wishlist:${appId}` : undefined,
+      source: 'Wishlist',
+      exePath: '',
+      status: null,
+      wishlisted: true,
+      hours: 0,
+      sessions: [],
+      added: Date.now(),
+    };
+    if (!g.sourceId) delete g.sourceId;
+    if (ranked.length) g.wishRank = Math.max(...ranked.map((x) => x.wishRank)) + 1;
+    wishTransition(() => { state.games.push(g); });
+    saveGamesSoon();
+    flashWishItem(g);
+    toast(`${g.name} added to your wishlist`, 'ok');
+    enrichArt({ only: [g] }).catch(() => {});
+  }
+
+  // Steam store data (price, sale, release) for wishlisted Steam games, one
+  // request at a time and at most every 12 h per game.
+  function queueWishMeta(g) {
+    if (!g.steamAppId || !api.steamDetails) return;
+    const m = g.steamMeta;
+    if (m && m.version === 3 && m.at && Date.now() - m.at < 12 * 3600000) return;
+    if (g._metaTried && Date.now() - g._metaTried < 10 * 60000) return;
+    g._metaTried = Date.now();
+    const q = state._wishMetaQ || (state._wishMetaQ = []);
+    q.push(g);
+    if (!state._wishMetaBusy) pumpWishMeta();
+  }
+  async function pumpWishMeta() {
+    state._wishMetaBusy = true;
+    const q = state._wishMetaQ;
+    while (q.length) {
+      const g = q.shift();
+      await loadSteamMeta(g).catch(() => {});
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    state._wishMetaBusy = false;
+  }
+
+  function wireWishlist(view) {
+    view.addEventListener('click', (e) => {
+      const t = e.target.closest('button');
+      if (!t || !view.contains(t)) return;
+      if (t.hasAttribute('data-wl-import')) { $('#btn-import')?.click(); return; }
+      const item = t.closest('[data-wl-item]');
+      const g = item && !item.classList.contains('is-ghost') && state.games.find((x) => String(x.id) === item.dataset.id);
+      if (!g) return;
+      if (t.hasAttribute('data-open')) openDetail(g.id);
+      else if (t.hasAttribute('data-got')) wishGot(g);
+      else if (t.hasAttribute('data-remove')) wishRemove(g);
+      else if (t.hasAttribute('data-top')) wishMakeTop(g);
+      else if (t.hasAttribute('data-store') && api.openExternal) api.openExternal(`https://store.steampowered.com/app/${encodeURIComponent(g.steamAppId)}/`);
+    });
+
+    // "Add a game you want…": Steam store and SteamGridDB, searched side by
+    // side (Steam first: it has prices), plus "add it by name"
+    const input = view.querySelector('[data-wl-q]');
+    const menu = view.querySelector('[data-wl-menu]');
+    let results = [], active = -1, seq = 0, timer = 0, note = '', pending = null, searching = false;
+    const term = () => input.value.trim();
+    const close = () => { menu.hidden = true; input.setAttribute('aria-expanded', 'false'); };
+    const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const have = (r) => state.games.find((g) => (r.appId && String(g.steamAppId || '') === String(r.appId))
+      || (r.sgdbId && String(g.sgdbId || '') === String(r.sgdbId))
+      || norm(g.name) === norm(r.name));
+    const yearOf = (d) => {
+      const n = Number(d);
+      if (!n) return '';
+      const y = new Date(n < 1e11 ? n * 1000 : n).getFullYear();
+      return y > 1970 ? String(y) : '';
+    };
+    const paint = () => {
+      const t = term();
+      if (t.length < 2) { close(); return; }
+      const rows = results.map((r, i) => {
+        const h = have(r);
+        const tag = h ? (gvIsWishlisted(h) ? 'On your wishlist' : 'In your library')
+          : r.sgdbId ? [r.year, 'SteamGridDB'].filter(Boolean).join(' · ') : wishPriceText(r.price);
+        const img = /^https:\/\//.test(r.image || '') ? `<img src="${esc(r.image)}" alt="" />` : `<span class="wl-res-ph">${wlIcon('star', 12)}</span>`;
+        return `<button type="button" class="wl-res${i === active ? ' is-active' : ''}${h ? ' is-have' : ''}" role="option" aria-selected="${i === active}" data-i="${i}">${img}<span class="wl-res-name">${esc(r.name)}</span><span class="wl-res-tag">${esc(tag)}</span></button>`;
+      });
+      const mi = results.length;
+      rows.push(`<button type="button" class="wl-res is-manual${active === mi ? ' is-active' : ''}" role="option" aria-selected="${active === mi}" data-i="${mi}"><span class="wl-res-ph">${wlIcon('plus', 14)}</span><span class="wl-res-name">Add “${esc(t)}”</span><span class="wl-res-tag">${results.length ? 'by name' : ''}</span></button>`);
+      menu.innerHTML = (note ? `<div class="wl-res-note">${esc(note)}</div>` : '') + rows.join('');
+      menu.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+      menu.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
+    };
+    const search = () => {
+      clearTimeout(timer);
+      timer = 0;
+      const t = term();
+      const my = ++seq;
+      if (t.length < 2) { results = []; active = -1; note = ''; searching = false; close(); return Promise.resolve(); }
+      searching = true;
+      note = 'Searching…';
+      if (!results.length) active = 0;
+      paint();
+      let steam = null, grid = null;
+      const merge = (final) => {
+        if (my !== seq) return;
+        const fromSteam = steam && steam.ok ? steam.data : [];
+        const seen = new Set(fromSteam.map((r) => norm(r.name)));
+        const fromGrid = (grid && grid.ok && Array.isArray(grid.data) ? grid.data : [])
+          .filter((x) => x && x.id && x.name && !seen.has(norm(x.name)))
+          .slice(0, 6)
+          .map((x) => ({ name: String(x.name), sgdbId: x.id, year: yearOf(x.releaseDate) }));
+        results = [...fromSteam, ...fromGrid];
+        const failed = (r) => !r || !r.ok;
+        note = !final ? (results.length ? '' : 'Searching…')
+          : (failed(steam) && failed(grid) && !sgdbLimitText(grid) ? 'Couldn’t reach Steam or SteamGridDB. You can still add it by name.'
+            : (!fromGrid.length && sgdbLimitText(grid)) || '');
+        if (final) searching = false;
+        if (active < 0 || active > results.length) active = 0;
+        paint();
+      };
+      const askGrid = () => (api.sgdbGames && t.length >= 3 ? api.sgdbGames(t) : Promise.resolve(null)).catch(() => null)
+        .then((r) => { grid = r; merge(false); });
+      const own = hasOwnSgdbKey();
+      const steamP = (api.steamSearch ? api.steamSearch(t) : Promise.resolve(null)).catch(() => null).then((r) => { steam = r; merge(false); });
+      // own key: both at once. Shared cache: SteamGridDB only if Steam came up short.
+      pending = (own
+        ? Promise.all([steamP, askGrid()])
+        : steamP.then(() => (my === seq && (!steam || !steam.ok || steam.data.length < 3) ? askGrid() : null))
+      ).then(() => merge(true));
+      return pending;
+    };
+    const pick = (i) => {
+      const t = term();
+      const r = i >= 0 && i < results.length ? results[i] : (t ? { name: t, appId: null } : null);
+      if (!r) return;
+      const h = have(r);
+      if (h) {
+        if (gvIsWishlisted(h)) { toast(`${h.name} is already on your wishlist`, 'ok'); flashWishItem(h); }
+        else toast(`${h.name} is already in your library`, 'ok');
+        return;
+      }
+      input.value = '';
+      results = []; active = -1; note = '';
+      close();
+      addToWishlist(r);
+    };
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 260); });
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Escape') {
+        if (!menu.hidden || input.value) {
+          e.preventDefault(); e.stopPropagation();
+          if (!menu.hidden) close(); else input.value = '';
+        }
+        return;
+      }
+      const n = results.length + 1;
+      if (e.key === 'ArrowDown' && !menu.hidden) { e.preventDefault(); active = (active + 1) % n; paint(); }
+      else if (e.key === 'ArrowUp' && !menu.hidden) { e.preventDefault(); active = (active - 1 + n) % n; paint(); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (term().length < 1) return;
+        if (timer || searching) { await (timer ? search() : pending); }
+        pick(active < 0 ? results.length : active);
+      }
+    });
+    menu.addEventListener('pointerdown', (e) => e.preventDefault());
+    menu.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) pick(Number(b.dataset.i)); });
+    input.addEventListener('blur', () => setTimeout(close, 100));
+    input.addEventListener('focus', () => { if (term().length >= 2 && (results.length || note)) paint(); });
   }
 
   function emptyFilterText() {
@@ -617,6 +1367,7 @@
     tile.title = name;
     tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>`;
     const img = tile.querySelector('img');
+    fadeInOnLoad(img);
     if (img) {
       img.addEventListener('error', () => {
         if (!img.isConnected) return;
@@ -635,7 +1386,7 @@
       const firstRun = state.games.length === 0;
       const empty = emptyFilterText();
       stage.innerHTML = firstRun
-        ? `<div class="onboard">
+        ? `<div class="onboard"><div class="onboard-inner">
              <span class="onboard-kicker">GameVault</span>
              <h2>Your vault is empty</h2>
              <p>Bring your library in from Steam, scan a folder, or add one game by hand.</p>
@@ -644,11 +1395,12 @@
                <button class="btn" data-onboard-add>Add manually</button>
              </div>
              <p class="onboard-hint">Press <kbd>Ctrl F</kbd> any time to search or run a command.</p>
-           </div>`
+           </div></div>`
         : `<div class="shelf-empty">${esc(empty.line)}</div>`;
       strip.innerHTML = '';
       shelfDom.built = false;
       state._shelfKey = '';
+      state._shelfShown = '';
       state._stageVisual = '';
       const railEl = document.querySelector('.shelf-rail');
       if (railEl) railEl.hidden = true;
@@ -671,7 +1423,28 @@
     renderShelfStage(current);
 
     const key = list.map((g) => String(g.id)).join(',');
-    if (key !== state._shelfKey) {
+    // _shelfKey is cleared to force a repaint; _shelfShown is what was really on screen
+    const prevKey = state._shelfShown || '';
+    const inPlace = state._shelfFilter === state.filter && isRemovalOnly(prevKey ? prevKey.split(',') : [], key.split(','));
+    state._shelfFilter = state.filter;
+    state._shelfShown = key;
+    if (key !== state._shelfKey && inPlace) {
+      // a game left this filter: keep the scroll, fade it out, close the gap
+      state._shelfKey = key;
+      strip._max = null;
+      const keep = new Set(key.split(','));
+      const tiles = Array.from(strip.querySelectorAll('.shelf-tile'));
+      flipLeave(strip, tiles.filter((t) => keep.has(t.dataset.id)), tiles.filter((t) => !keep.has(t.dataset.id)), () => {
+        for (const t of tiles) if (!keep.has(t.dataset.id)) t.remove();
+      });
+      const byId = new Map(list.map((g) => [String(g.id), g]));
+      for (const tile of strip.querySelectorAll('.shelf-tile')) {
+        const g = byId.get(tile.dataset.id);
+        if (g) paintShelfTile(tile, g);
+        tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
+        tile.setAttribute('aria-selected', String(tile.dataset.id === state.shelfId));
+      }
+    } else if (key !== state._shelfKey) {
       state._shelfKey = key;
       strip.scrollLeft = 0;
       strip._max = null;
@@ -955,8 +1728,8 @@
       if (content && state._heroShown !== id) {
         state._heroShown = id;
         content.animate(
-          [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }],
-          { duration: 360, easing: 'cubic-bezier(.32,.72,0,1)' }
+          [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
+          { duration: 600, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' }
         );
       }
     }
@@ -976,9 +1749,9 @@
 
     // wishlisted games are not in the library yet: nothing to play
     shelfDom.playBtn.hidden = wish;
-    shelfDom.playLabel.textContent = running ? 'Stop'
+    swapLabel(shelfDom.playLabel, running ? 'Stop'
       : live === 'launching' ? 'Launching…'
-        : live === 'stopping' ? 'Stopping…' : 'Play';
+        : live === 'stopping' ? 'Stopping…' : 'Play');
     shelfDom.playBtn.classList.toggle('is-busy', live === 'launching' || live === 'stopping');
     shelfDom.playBtn.title = live === 'launching' ? 'Launching — click to cancel' : '';
   }
@@ -1142,20 +1915,32 @@
     const grid = $('#grid');
     const list = filteredGames();
     const visible = new Set(list.map((g) => String(g.id)));
-
-    for (const g of state.games) {
-      const id = String(g.id);
-      const ref = cards.get(id);
-      if (!ref) continue;
-      const show = visible.has(id);
-      ref.el.hidden = !show;
-      if (show) updateCard(g);
-    }
-
     const order = list.map((g) => String(g.id)).join(',');
-    if (rebuild || state._lastOrder !== order) {
-      for (const g of list) grid.appendChild(cards.get(String(g.id)).el);
-      state._lastOrder = order;
+    const prevIds = state._lastOrder ? state._lastOrder.split(',') : [];
+    const inPlace = !rebuild && !grid.hidden && grid.offsetParent && state._gridFilter === state.filter
+      && isRemovalOnly(prevIds, order ? order.split(',') : []);
+    state._gridFilter = state.filter;
+
+    const apply = () => {
+      for (const g of state.games) {
+        const id = String(g.id);
+        const ref = cards.get(id);
+        if (!ref) continue;
+        const show = visible.has(id);
+        ref.el.hidden = !show;
+        if (show) updateCard(g);
+      }
+      if (rebuild || state._lastOrder !== order) {
+        for (const g of list) grid.appendChild(cards.get(String(g.id)).el);
+        state._lastOrder = order;
+      }
+    };
+    if (inPlace) {
+      const els = (ids) => ids.map((id) => cards.get(id)).filter(Boolean).map((r) => r.el);
+      const scroller = $('#library') || grid;
+      flipLeave(scroller, els(prevIds.filter((id) => visible.has(id))), els(prevIds.filter((id) => !visible.has(id))), apply);
+    } else {
+      apply();
     }
 
     const empty = $('#empty');
@@ -1237,8 +2022,7 @@
     const fb = $('#filterbar'); if (fb) fb.hidden = true;
     $('#library').hidden = true;
     $('#shelf').hidden = true;
-    const dock = document.querySelector('.bottombar');
-    if (dock) dock.hidden = true;
+    if ($('#wishlist-view')) $('#wishlist-view').hidden = true;
     const view = $('#game-view');
     view.hidden = false;
     view.scrollTop = 0;
@@ -1255,10 +2039,8 @@
     view.innerHTML = '';
     $('#topbar').hidden = false;
     const fb = $('#filterbar'); if (fb) fb.hidden = false;
-    const dock = document.querySelector('.bottombar');
-    if (dock) dock.hidden = false;
     renderLibrary();
-    fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
+    fadeIn(currentPane());
     document.title = 'GameVault';
     const back = state._focusReturn;
     if (back && typeof back.focus === 'function') back.focus();
@@ -1377,13 +2159,15 @@
 
   async function loadSteamMeta(g) {
     if (!g.steamAppId || !api.steamDetails) return;
-    const fresh = g.steamMeta && g.steamMeta.version === 2 && g.steamMeta.at && (Date.now() - g.steamMeta.at < 14 * 86400000);
+    const ttl = gvIsWishlisted(g) ? 12 * 3600000 : 14 * 86400000;
+    const fresh = g.steamMeta && g.steamMeta.version === 3 && g.steamMeta.at && (Date.now() - g.steamMeta.at < ttl);
     if (fresh) return;
     const res = await api.steamDetails(g.steamAppId).catch(() => null);
     if (!res || !res.ok || !res.data) return;
     const hadData = railHasData(g);
-    g.steamMeta = { ...res.data, version: 2, at: Date.now() };
+    g.steamMeta = { ...res.data, version: 3, at: Date.now() };
     saveGamesSoon();
+    if (gvIsWishlisted(g) && state.filter === 'Want' && !state.selectedId && !state.settingsOpen) renderWishlist();
     if (state.selectedId !== String(g.id) || gvIsWishlisted(g)) return;
     // the rail element always exists on an owned game's page: repaint it in
     // place (no full re-render) when there is something new to show
@@ -1416,8 +2200,8 @@
     const root = view.firstElementChild;
     if (root) {
       root.animate(
-        [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
-        { duration: 420, easing: 'cubic-bezier(.32,.72,0,1)' }
+        [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 480, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' }
       );
     }
   }
@@ -1433,7 +2217,7 @@
     const sessions = gvSessions(g);
     const stats = Sessions.sessionStats(sessions);
     const hero = heroUrlOf(g);
-    const logo = g.logoUrl || '';
+    const logo = g._logo || g.logoUrl || '';
 
     view.innerHTML = `
       <div class="gvx-hero">
@@ -1443,7 +2227,7 @@
         <div class="gvx-top">
           <button class="gvx-chip" data-back>
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
-            Library
+            ${state.filter === 'Want' ? 'Wishlist' : 'Library'}
           </button>
           <div class="gvx-top-right">
             <button class="gvx-chip gvx-icon${wish ? ' is-on' : ''}" data-wish aria-pressed="${wish}" title="Wishlist">
@@ -1465,7 +2249,7 @@
 
         <div class="gvx-hero-body" tabindex="-1" aria-label="${esc(g.name)}">
           ${logo
-            ? `<img class="gvx-logo" src="${esc(toFileUrl(logo))}" alt="${esc(g.name)}" />`
+            ? `<span class="gv-logo3d" data-logo3d><img class="gvx-logo" src="${esc(toFileUrl(logo))}" alt="${esc(g.name)}" /><i class="gv-logo-sheen" style="--logo:${esc(cssUrl(logo))}" aria-hidden="true"><b></b></i></span>`
             : `<h1 class="gvx-title">${esc(g.name)}</h1>`}
           <div class="gvx-meta">${detailMeta(g)}</div>
           <div class="gvx-play-row">
@@ -1518,7 +2302,8 @@
     const heroImg = view.querySelector('.gvx-hero-art');
     if (heroImg && heroImg.tagName === 'IMG') heroImg.addEventListener('error', () => heroImg.classList.add('is-empty'));
     const logoImg = view.querySelector('.gvx-logo');
-    if (logoImg) logoImg.addEventListener('error', () => { logoImg.remove(); view.querySelector('.gvx-hero-body').insertAdjacentHTML('afterbegin', `<h1 class="gvx-title">${esc(g.name)}</h1>`); });
+    logoTilt(view.querySelector('[data-logo3d]'));
+    if (logoImg) logoImg.addEventListener('error', () => { (logoImg.closest('[data-logo3d]') || logoImg).remove(); view.querySelector('.gvx-hero-body').insertAdjacentHTML('afterbegin', `<h1 class="gvx-title">${esc(g.name)}</h1>`); });
 
     if (!wish) paintLedger(g);
     wireDetail(g, wish);
@@ -1632,9 +2417,13 @@
       // launching stays clickable: a second click cancels it
       playBtn.disabled = live === 'stopping';
       const label = playBtn.querySelector('[data-play-label]');
-      if (label) label.textContent = busy ? (live === 'launching' ? 'Launching…' : 'Stopping…') : running ? 'Stop' : 'Play';
+      if (label) swapLabel(label, busy ? (live === 'launching' ? 'Launching…' : 'Stopping…') : running ? 'Stop' : 'Play');
       const icon = playBtn.querySelector('svg');
-      if (icon && !busy) icon.innerHTML = running ? '<rect x="6" y="6" width="12" height="12" rx="2"/>' : '<path d="M8 5v14l11-7z"/>';
+      const glyph = running ? '<rect x="6" y="6" width="12" height="12" rx="2"></rect>' : '<path d="M8 5v14l11-7z"></path>';
+      if (icon && !busy && icon.innerHTML !== glyph) {
+        icon.innerHTML = glyph;
+        if (!prefersReducedMotion()) icon.animate([{ opacity: 0, transform: 'scale(0.7)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' });
+      }
     }
     const liveValue = view.querySelector('[data-timer-value]');
     if (liveValue && typeof state.live[String(g.id)] === 'number') {
@@ -1866,10 +2655,14 @@
     bot: { x: 0, v: 0, to: 0 },
     raf: null, init: false, down: true,
   };
-  const PILL_LEAD = { k: 900, c: 30 };   // ζ ≈ 0.5: fires and overshoots
-  const PILL_TRAIL = { k: 420, c: 24 };  // ζ ≈ 0.59: lags, then snaps in with a small bounce
-  const PILL_WINDUP_MS = 70;             // trailing edge pulls back this long before it lets go
-  const PILL_WINDUP_PX = 6;              // ...and this far
+  const PILL_LEAD = { k: 520, c: 33 };   // ζ ≈ 0.72: travels, small overshoot
+  const PILL_TRAIL = { k: 300, c: 29 };  // ζ ≈ 0.84: lags, then settles in softly
+  // The wind-up scales with how far the pill travels: a neighbour gets a
+  // small tug, a jump across the list pulls back further and holds longer.
+  const pillWindup = (rows) => ({
+    px: Math.min(9, 1.5 + rows * 1.5),
+    ms: Math.min(120, 40 + rows * 16),
+  });
 
   function drawSidePill(pill) {
     const t = pillSpring.top.x;
@@ -1881,10 +2674,16 @@
   function syncSidePill() {
     const pill = document.querySelector('.side-pill');
     const side = document.querySelector('.sidebar');
-    const active = side && side.querySelector('.side-item.is-active');
-    if (!pill || !side || !active) return;
-    // Pill is absolutely positioned inside the sidebar's border box.
-    const top = active.offsetTop;
+    const active = side && side.querySelector('.side-item.is-active:not(.side-wish)');
+    if (!pill || !side) return;
+    pill.classList.toggle('is-away', !active);
+    // when it comes back it appears in place instead of flying in
+    if (!active) { if (pillSpring.raf) { cancelAnimationFrame(pillSpring.raf); pillSpring.raf = null; } pillSpring.init = false; return; }
+    // Pill is absolutely positioned inside the sidebar's padding box. Measured
+    // from rects, not offsetTop: while the rail folds its rows are layers
+    // (will-change), which would make them the items' offsetParent.
+    const sr = side.getBoundingClientRect(), ar = active.getBoundingClientRect();
+    const top = Math.round(ar.top - sr.top - side.clientTop + side.scrollTop);
     const bot = top + active.offsetHeight;
     const S = pillSpring;
 
@@ -1903,8 +2702,10 @@
     // pull the slingshot back: for a moment the trailing edge is aimed a few
     // px away from the target, then released
     const trailEdge = S.down ? S.top : S.bot;
-    S.windupTo = trailEdge.x + (S.down ? -PILL_WINDUP_PX : PILL_WINDUP_PX);
-    S.windupUntil = performance.now() + PILL_WINDUP_MS;
+    const rows = Math.abs(top - S.top.x) / Math.max(1, active.offsetHeight);
+    const w = pillWindup(rows);
+    S.windupTo = trailEdge.x + (S.down ? -w.px : w.px);
+    S.windupUntil = performance.now() + w.ms;
     if (S.raf) return;
 
     let last = performance.now();
@@ -1935,38 +2736,74 @@
   function openGameModal(game) {
     const isNew = !game;
     const g = game || { name: '', exePath: '', coverUrl: '', notes: '', status: 'Playing' };
+    // Finished and Wishlist are mutually exclusive (a wishlisted game isn't owned yet)
+    const editWish = gvIsWishlisted(g);
+    const editFinished = !editWish && gvStatusOf(g) === 'Finished';
 
     const card = openModal(`
       <div class="modal-head">
         <h2>${isNew ? 'Add a game' : 'Edit game'}</h2>
         <button class="close-x" data-close aria-label="Close">✕</button>
       </div>
-      <div class="modal-body">
-        <div class="field">
-          <label for="f-name">Title</label>
-          <div class="combo">
-            <input class="input" id="f-name" value="${esc(g.name)}" placeholder="Start typing a game name" data-autofocus
-                   autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="f-name-list" />
-            <div id="f-name-list" class="combo-menu" role="listbox" hidden></div>
+      <div class="modal-body ge">
+        <section class="ge-top">
+          <button type="button" class="ge-cover" data-slot="cover" title="Change the cover">
+            <span class="ge-cover-empty" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              Cover
+            </span>
+            <span class="ge-cover-edit" aria-hidden="true">Change</span>
+          </button>
+          <div class="ge-top-main">
+            <div class="field">
+              <label for="f-name">Title</label>
+              <div class="combo">
+                <input class="input ge-title" id="f-name" value="${esc(g.name)}" placeholder="Start typing a game name" data-autofocus
+                       autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="f-name-list" />
+                <div id="f-name-list" class="combo-menu" role="listbox" hidden></div>
+              </div>
+              <div class="hint">Pick a match from the list and the artwork fills itself.</div>
+            </div>
+            <div class="ge-status" role="group" aria-label="Status">
+              <button type="button" class="ge-status-btn ge-finish${editFinished ? ' is-on' : ''}" data-finished-edit aria-pressed="${editFinished}">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                <span data-label>${editFinished ? 'Finished' : 'Mark as finished'}</span>
+              </button>
+              <button type="button" class="ge-status-btn ge-wish${editWish ? ' is-on' : ''}" data-wish-edit aria-pressed="${editWish}">
+                <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+                <span data-label>${editWish ? 'On wishlist' : 'Add to wishlist'}</span>
+              </button>
+            </div>
+            <div class="ge-status-hint" data-status-hint aria-live="polite"></div>
           </div>
-          <div class="hint">Pick a SteamGridDB match and artwork fills itself.</div>
-        </div>
-        <div class="field">
-          <label for="f-exe">Executable</label>
-          <div class="field-row">
-            <input class="input" id="f-exe" value="${esc(g.exePath || '')}" placeholder="${/Windows/i.test(navigator.userAgent) ? 'C:\\Games\\Game\\game.exe' : '/games/.../game.exe'}" />
-            <button class="btn btn-ghost" data-browse style="flex:0 0 auto">Browse</button>
+        </section>
+
+        <section class="ge-sec">
+          <h3 class="ge-sec-title">Game</h3>
+          <div class="field">
+            <label for="f-exe">Executable</label>
+            <div class="field-row">
+              <input class="input" id="f-exe" value="${esc(g.exePath || '')}" placeholder="${/Windows/i.test(navigator.userAgent) ? 'C:\\Games\\Game\\game.exe' : '/games/.../game.exe'}" />
+              <button class="btn btn-ghost" data-browse style="flex:0 0 auto">Browse</button>
+            </div>
+            <div class="hint">${/Windows/i.test(navigator.userAgent) ? 'Any .exe, .bat or shortcut that starts the game.' : 'Linux: any ELF binary or Windows .exe (runs through Wine/Proton).'}</div>
           </div>
-          <div class="hint">${/Windows/i.test(navigator.userAgent) ? 'Any .exe, .bat or shortcut that starts the game.' : 'Linux: any ELF binary or Windows .exe (runs through Wine/Proton).'}</div>
-        </div>
-        <div class="field">
-          <label for="f-steam">Steam AppID</label>
-          <input class="input" id="f-steam" value="${esc(g.steamAppId || '')}" placeholder="1245620 — unlocks critic score and specs" />
-        </div>
-        <div class="field">
-          <label for="f-ttb">Time to beat (hours)</label>
-          <input class="input" id="f-ttb" type="number" min="0" step="0.5" value="${g.timeToBeat || ''}" placeholder="How long a full playthrough takes" />
-        </div>
+          <div class="ge-grid2">
+            <div class="field">
+              <label for="f-steam">Steam AppID</label>
+              <input class="input" id="f-steam" value="${esc(g.steamAppId || '')}" placeholder="e.g. 1245620" />
+              <div class="hint">Unlocks critic score and specs.</div>
+            </div>
+            <div class="field">
+              <label for="f-ttb">Time to beat</label>
+              <div class="ge-suffix">
+                <input class="input" id="f-ttb" type="number" min="0" step="0.5" value="${g.timeToBeat || ''}" placeholder="—" />
+                <span>hours</span>
+              </div>
+              <div class="hint">A full playthrough, for the progress bar.</div>
+            </div>
+          </div>
+        </section>
 
         <details class="field adv-launch" ${g.launchTarget || g.trackExe || (g.trackMode && g.trackMode !== 'auto') ? 'open' : ''}>
           <summary>Launch &amp; tracking</summary>
@@ -1990,16 +2827,16 @@
           <div class="detect-list" data-detect-list hidden></div>
         </details>
 
-        <div class="field">
-          <div class="art-summary-head">
-            <label>Artwork</label>
+        <section class="ge-sec ge-art-sec">
+          <div class="ge-sec-head">
+            <h3 class="ge-sec-title">Artwork</h3>
             <span id="art-status" class="art-status">Not set</span>
           </div>
-          <div class="art-summary" id="art-summary">
-            <button type="button" class="art-mini cover" data-slot="cover" title="Cover"></button>
-            <button type="button" class="art-mini hero" data-slot="hero" title="Banner"></button>
-            <button type="button" class="art-mini logo" data-slot="logo" title="Logo"></button>
-            <button type="button" class="art-mini icon" data-slot="icon" title="Icon"></button>
+          <div class="art-summary ge-art" id="art-summary">
+            <button type="button" class="ge-art-slot" data-slot="cover" title="Cover"><i class="art-mini cover"></i><span>Cover</span></button>
+            <button type="button" class="ge-art-slot" data-slot="hero" title="Banner"><i class="art-mini hero"></i><span>Banner</span></button>
+            <button type="button" class="ge-art-slot" data-slot="logo" title="Logo"><i class="art-mini logo"></i><span>Logo</span></button>
+            <button type="button" class="ge-art-slot" data-slot="icon" title="Icon"><i class="art-mini icon"></i><span>Icon</span></button>
             <div class="art-summary-actions">
               <button type="button" class="btn btn-ghost" data-art-expand>Change artwork</button>
             </div>
@@ -2032,26 +2869,11 @@
               <input class="input" id="f-icon" value="${esc(g.iconUrl || '')}" placeholder="Icon URL" />
             </details>
           </div>
-        </div>
-        <div class="field">
-          <label>Progress</label>
-          <label class="gv-check">
-            <input type="checkbox" data-finished-edit ${gvStatusOf(g) === 'Finished' ? 'checked' : ''} />
-            <span>Finished</span>
-          </label>
-        </div>
-        <div class="field">
-          <label>Wishlist</label>
-          <label class="gv-check">
-            <input type="checkbox" data-wish-edit aria-describedby="f-wish-hint" ${gvIsWishlisted(g) ? 'checked' : ''} />
-            <span>On my wishlist</span>
-          </label>
-          <div class="hint" id="f-wish-hint">Not in your library yet — no play tracking</div>
-        </div>
-        <div class="field">
-          <label for="f-notes">Notes</label>
-          <textarea class="input" id="f-notes" style="height:70px;padding-top:9px" placeholder="Optional">${esc(g.notes || '')}</textarea>
-        </div>
+        </section>
+        <section class="ge-sec">
+          <h3 class="ge-sec-title"><label for="f-notes">Notes</label></h3>
+          <textarea class="input" id="f-notes" style="height:70px;padding-top:9px" placeholder="Anything you want to remember about this game">${esc(g.notes || '')}</textarea>
+        </section>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" data-close>Cancel</button>
@@ -2084,6 +2906,9 @@
       page: { cover: 0, hero: 0, logo: 0, icon: 0 },
     };
 
+    const artOrig = { cover: art.cover, hero: art.hero, logo: art.logo, icon: art.icon };
+    const artCached = { cover: g._cover || '', hero: g._hero || '', logo: g._logo || '', icon: g._icon || '' };
+
     function slotInput(slot) {
       return card.querySelector({ cover: '#f-cover', hero: '#f-hero', logo: '#f-logo', icon: '#f-icon' }[slot]);
     }
@@ -2091,7 +2916,11 @@
     function renderStrip() {
       for (const el of card.querySelectorAll('[data-slot]')) {
         const slot = el.dataset.slot;
-        el.style.backgroundImage = art[slot] ? cssUrl(art[slot]) : '';
+        const paint = el.querySelector('.art-mini') || el;
+        // unchanged slots show the local copy the rest of the app shows (works offline)
+        const shown = art[slot] && art[slot] === artOrig[slot] && artCached[slot] ? artCached[slot] : art[slot];
+        paint.style.backgroundImage = shown ? cssUrl(shown) : '';
+        paint.classList.toggle('is-empty', !art[slot]);
         el.classList.toggle('is-empty', !art[slot]);
       }
       const filled = SLOTS.filter((slot) => art[slot]).length;
@@ -2169,27 +2998,51 @@
           kind: 'local', name: entry.item.name, meta: 'In your library', game: entry.item,
         }));
 
-      let sgdbHits = [];
-      let noKey = false;
-      if (api.sgdbGames) {
-        const res = await api.sgdbGames(q).catch(() => null);
-        // a newer search, a closed dialog, an edited title or a blurred
-        // input all make this reply stale: never reopen the menu for it
-        if (seq !== comboSeq || !alive() || nameInput.value.trim() !== q || document.activeElement !== nameInput) return;
-        if (res && res.ok && Array.isArray(res.data)) {
-          sgdbHits = res.data.slice(0, 6).map((hit) => ({
-            kind: 'sgdb', id: hit.id, name: hit.name,
-            meta: hit.releaseDate ? String(hit.releaseDate).slice(0, 4) : 'SteamGridDB',
+      // a newer search, a closed dialog, an edited title or a blurred input
+      // all make a reply stale: never reopen the menu for it
+      const stale = () => seq !== comboSeq || !alive() || nameInput.value.trim() !== q || document.activeElement !== nameInput;
+      const yearOf = (d) => { const n = Number(d); if (!n) return ''; const y = new Date(n < 1e11 ? n * 1000 : n).getFullYear(); return y > 1970 ? String(y) : ''; };
+      const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+      // Steam's store search first: free, fast, and a pick brings Steam's own art
+      let steamHits = [];
+      if (api.steamSearch) {
+        const res = await api.steamSearch(q).catch(() => null);
+        if (stale()) return;
+        if (res && res.ok) {
+          steamHits = res.data.slice(0, 6).map((hit) => ({
+            kind: 'steam', appId: hit.appId, name: hit.name, meta: wishPriceText(hit.price) || 'Steam',
           }));
-        } else if (res && res.error && res.error.code === 'NO_KEY') {
-          noKey = true;
         }
       }
-
-      renderCombo([
+      const groups = () => [
         { title: 'In your library', items: localHits },
+        { title: 'Steam', items: steamHits },
         { title: 'SteamGridDB', items: sgdbHits },
-      ], noKey ? 'Add a SteamGridDB key in Settings to search artwork' : 'No match');
+      ];
+      let sgdbHits = [];
+      let note = 'No match';
+      renderCombo(groups(), 'Searching…');
+
+      // SteamGridDB: always with the user's own key; through the shared cache
+      // only when Steam came up short (each new term counts toward its limit)
+      if (api.sgdbGames && q.length >= 3 && (hasOwnSgdbKey() || steamHits.length < 3)) {
+        const res = await api.sgdbGames(q).catch(() => null);
+        if (stale()) return;
+        if (res && res.ok && Array.isArray(res.data)) {
+          const seen = new Set(steamHits.map((h) => norm(h.name)));
+          sgdbHits = res.data.filter((hit) => hit && !seen.has(norm(hit.name))).slice(0, 6).map((hit) => ({
+            kind: 'sgdb', id: hit.id, name: hit.name, meta: yearOf(hit.releaseDate) || 'SteamGridDB',
+          }));
+        } else if (res && res.error && res.error.code === 'NO_KEY') {
+          note = 'Add a SteamGridDB key in Settings to search artwork';
+        } else if (sgdbLimitText(res)) {
+          note = sgdbLimitText(res);
+        }
+      }
+      const keepIndex = comboIndex;
+      renderCombo(groups(), note);
+      if (keepIndex >= 0 && keepIndex < comboItems.length) { comboIndex = keepIndex; paintComboActive(); }
     }
 
     async function chooseCombo(index) {
@@ -2204,6 +3057,15 @@
         if (src.heroUrl) setSlot('hero', src.heroUrl);
         if (src.logoUrl) setSlot('logo', src.logoUrl);
         if (src.iconUrl) setSlot('icon', src.iconUrl);
+        return;
+      }
+      if (item.kind === 'steam') {
+        // Steam pick: its AppID is known, and Steam's own art needs no lookup
+        chosen = null;
+        nameInput.value = item.name;
+        const appEl = card.querySelector('#f-steam');
+        if (appEl) appEl.value = String(item.appId);
+        await autofill(null, item.name, item.appId);
         return;
       }
       chosen = { id: item.id, name: item.name };
@@ -2238,12 +3100,14 @@
     });
 
     // ---- artwork autofill ---------------------------------------------
-    async function autofill(id, name) {
+    async function autofill(id, name, steamAppId) {
       if (!api.sgdbAutofill) return;
       const seq = ++autofillSeq;
       const wantName = nameInput.value.trim();
       if (artStatus) artStatus.textContent = 'Fetching artwork…';
-      const res = await api.sgdbAutofill({ id, name }).catch(() => null);
+      const res = await api.sgdbAutofill(steamAppId && !id
+        ? { name, steamAppId, slots: ['cover', 'hero', 'logo'] }
+        : { id, name }).catch(() => null);
       // stale: a newer pick, a closed dialog, or the title was edited since
       if (seq !== autofillSeq || !alive() || nameInput.value.trim() !== wantName) {
         if (alive() && seq === autofillSeq) renderStrip();   // clear "Fetching…"
@@ -2253,7 +3117,9 @@
         if (artStatus) {
           artStatus.textContent = res && res.error && res.error.code === 'NO_KEY'
             ? 'Add a SteamGridDB key in Settings'
-            : 'Artwork unavailable';
+            : res && res.error && res.error.code === 'RATE_LIMIT'
+              ? 'Artwork lookups paused for a bit (hourly limit)'
+              : 'Artwork unavailable';
         }
         return;
       }
@@ -2291,6 +3157,7 @@
         artResults.innerHTML = `<div class="art-grid ${tab}">${thumbHtml(items)}</div>`;
         container = artResults.querySelector('.art-grid');
       }
+      for (const im of container.querySelectorAll('img:not([data-faded])')) { im.dataset.faded = '1'; fadeInOnLoad(im); }
       for (const el of container.querySelectorAll('[data-url]')) {
         if (el.dataset.url === art[tab]) el.classList.add('is-picked');
         el.onclick = () => {
@@ -2331,12 +3198,13 @@
       }
       art.page[slot] = page;
       renderArtGrid(slot, shown);
-      if (!append) artPanel.scrollIntoView({ block: 'start' });
+      if (!append) (card.querySelector('#art-summary') || artPanel).scrollIntoView({ block: 'start' });
     }
 
     function setTab(slot) {
       art.tab = slot;
       for (const t of card.querySelectorAll('[data-arttab]')) t.classList.toggle('is-active', t.dataset.arttab === slot);
+      for (const el of card.querySelectorAll('.ge-art-slot')) el.classList.toggle('is-current', el.dataset.slot === slot);
       loadArtTab(slot, 0, false);
     }
 
@@ -2356,16 +3224,19 @@
 
     async function openArtPanel(slot) {
       if (slot) art.tab = slot;
+      for (const el of card.querySelectorAll('.ge-art-slot')) el.classList.toggle('is-current', el.dataset.slot === art.tab);
       for (const t of card.querySelectorAll('[data-arttab]')) {
         t.classList.toggle('is-active', t.dataset.arttab === art.tab);
       }
       art.expanded = true;
       artPanel.hidden = false;
+      artPanel.closest('.ge-art-sec')?.classList.add('is-picking');   // current picks stay pinned above the grid
       if (expand) expand.textContent = 'Hide artwork';
       if (artMatch && !artMatch.textContent) {
         artMatch.textContent = `Matched: ${(chosen && chosen.name) || g.name || nameInput.value}`;
       }
-      artPanel.scrollIntoView({ block: 'start' });
+      // keep the row of current picks in view above the picker
+      (card.querySelector('#art-summary') || artPanel).scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
 
       // Editing a game that never matched: resolve it on demand.
       if (!chosen || !chosen.id) {
@@ -2390,6 +3261,7 @@
         if (art.expanded) {
           art.expanded = false;
           artPanel.hidden = true;
+          artPanel.closest('.ge-art-sec')?.classList.remove('is-picking');
           expand.textContent = 'Change artwork';
         } else {
           openArtPanel(art.tab);
@@ -2423,20 +3295,28 @@
 
     // Finished and Wishlist are mutually exclusive: a wishlisted game is not
     // owned yet, so it cannot be finished (legacy status 'Want' = wishlisted).
-    let wishlisted = gvIsWishlisted(g);
-    let finished = !wishlisted && gvStatusOf(g) === 'Finished';
-    const finishedToggle = card.querySelector('[data-finished-edit]');
-    const wishToggle = card.querySelector('[data-wish-edit]');
-    if (finishedToggle) finishedToggle.checked = finished;
-    if (wishToggle) wishToggle.checked = wishlisted;
-    if (finishedToggle) finishedToggle.onchange = () => {
-      finished = finishedToggle.checked;
-      if (finished && wishToggle) { wishToggle.checked = false; wishlisted = false; }
+    let wishlisted = editWish;
+    let finished = editFinished;
+    const finishBtn = card.querySelector('[data-finished-edit]');
+    const wishBtn = card.querySelector('[data-wish-edit]');
+    const statusHint = card.querySelector('[data-status-hint]');
+    const paintStatus = () => {
+      finishBtn.classList.toggle('is-on', finished);
+      finishBtn.setAttribute('aria-pressed', String(finished));
+      finishBtn.title = finished ? 'Click to mark as not finished' : '';
+      swapLabel(finishBtn.querySelector('[data-label]'), finished ? 'Finished' : 'Mark as finished');
+      wishBtn.classList.toggle('is-on', wishlisted);
+      wishBtn.setAttribute('aria-pressed', String(wishlisted));
+      wishBtn.title = wishlisted ? 'Click to take it off your wishlist' : '';
+      swapLabel(wishBtn.querySelector('[data-label]'), wishlisted ? 'On wishlist' : 'Add to wishlist');
+      statusHint.textContent = wishlisted
+        ? 'Not in your library yet, so playtime isn’t tracked.'
+        : finished && !editFinished ? 'It moves to your Finished games when you save.'
+          : !finished && editFinished ? 'It goes back to Playing when you save.' : '';
     };
-    if (wishToggle) wishToggle.onchange = () => {
-      wishlisted = wishToggle.checked;
-      if (wishlisted && finishedToggle) { finishedToggle.checked = false; finished = false; }
-    };
+    finishBtn.onclick = () => { finished = !finished; if (finished) wishlisted = false; paintStatus(); };
+    wishBtn.onclick = () => { wishlisted = !wishlisted; if (wishlisted) finished = false; paintStatus(); };
+    paintStatus();
 
     card.querySelector('[data-browse]').onclick = async () => {
       const file = await api.pickExe();
@@ -2449,6 +3329,27 @@
     const trackRow = card.querySelector('[data-track-exe-row]');
     const detectList = card.querySelector('[data-detect-list]');
     trackModeEl.value = ['auto', 'exe', 'steam', 'none'].includes(g.trackMode) ? g.trackMode : (g.trackExe ? 'exe' : 'auto');
+    const adv = card.querySelector('.adv-launch');
+    const advSum = adv && adv.querySelector('summary');
+    if (advSum) advSum.addEventListener('click', (e) => {
+      if (prefersReducedMotion()) return;
+      e.preventDefault();
+      if (adv._anim) adv._anim.cancel();
+      const opening = !adv.open;
+      const from = adv.getBoundingClientRect().height;
+      if (opening) adv.open = true;
+      else { adv.open = false; }
+      const closedTo = opening ? null : adv.getBoundingClientRect().height;
+      if (!opening) adv.open = true;   // stay open while it folds
+      const to = opening ? adv.getBoundingClientRect().height : closedTo;
+      adv.style.overflow = 'hidden';
+      adv.style.flexShrink = '0';   // the dialog body is a flex column: don't let it squeeze the fold
+      adv._anim = adv.animate([{ height: from + 'px' }, { height: to + 'px' }],
+        { duration: 260, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' });
+      const done = () => { adv.style.overflow = ''; adv.style.flexShrink = ''; adv._anim = null; if (!opening) adv.open = false; };
+      adv._anim.onfinish = done;
+      adv._anim.oncancel = () => { adv.style.overflow = ''; adv.style.flexShrink = ''; };
+    });
     const syncTrackRow = () => { trackRow.hidden = trackModeEl.value !== 'exe'; if (trackRow.hidden) detectList.hidden = true; };
     trackModeEl.onchange = syncTrackRow;
     syncTrackRow();
@@ -2472,6 +3373,12 @@
         b.textContent = p.inGameFolder ? `${p.name}  · in the game's folder` : p.name;
         b.onclick = () => { trackExeEl.value = p.name; detectList.hidden = true; };
         detectList.appendChild(b);
+      }
+      if (!prefersReducedMotion()) {
+        [...detectList.children].slice(0, 12).forEach((row, i) => row.animate(
+          [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }],
+          { duration: 300, delay: i * 30, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: 'backwards' }
+        ));
       }
     };
 
@@ -2917,8 +3824,8 @@
         reviewAnimated = true;
         Array.from(listEl.querySelectorAll('.imp3-item')).slice(0, 18).forEach((row, i) => {
           row.animate(
-            [{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }],
-            { duration: 300, delay: i * 18, easing: 'cubic-bezier(.32,.72,0,1)', fill: 'backwards' }
+            [{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }],
+            { duration: 480, delay: i * 26, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: 'backwards' }
           );
         });
       }
@@ -3636,6 +4543,7 @@
     state.settingsSection = SETTINGS_SECTIONS.some((s) => s.id === section) ? section : (state.settingsSection || 'general');
     $('#library').hidden = true;
     $('#shelf').hidden = true;
+    if ($('#wishlist-view')) $('#wishlist-view').hidden = true;
     const fb = $('#filterbar'); if (fb) fb.hidden = true;
     view.hidden = false;
     const title = $('#filter-title'); if (title) title.textContent = 'Settings';
@@ -3654,7 +4562,7 @@
     const fb = $('#filterbar'); if (fb) fb.hidden = false;
     const title = $('#filter-title'); if (title) title.textContent = filterLabel(state.filter);
     renderLibrary();
-    fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
+    fadeIn(currentPane());
     document.title = 'GameVault';
     const back = state._settingsFocusReturn;
     state._settingsFocusReturn = null;
@@ -3723,6 +4631,13 @@
       </header>
       <div class="st-body">${built.html}</div>`;
     panel.scrollTop = 0;
+    if (panel.dataset.section && panel.dataset.section !== current.id && !prefersReducedMotion()) {
+      panel.animate(
+        [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 240, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' }
+      );
+    }
+    panel.dataset.section = current.id;
     if (built.wire) built.wire(panel);
   }
 
@@ -4114,7 +5029,7 @@
     updateSortUi();
     applyView();
     renderLibrary();
-    fadeIn(state.view === 'shelf' ? $('#shelf') : $('#library'));
+    fadeIn(currentPane());
     toast(`Layout: ${VIEW_NAMES[next] || next}`, 'ok');
   }
 
@@ -4142,18 +5057,18 @@
     $('#btn-view').classList.toggle('is-active', state.view !== 'shelf');
   }
 
-  const POP_EASE = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+  const SETTLE_EASE = 'cubic-bezier(0.22, 0.8, 0.3, 1)';   // no overshoot
 
+  // Category switch: content drifts up and fades in, slow and without a bounce.
   function popIn(el, delay, baseTransform) {
     if (!el) return;
     const b = baseTransform ? baseTransform + ' ' : '';
     el.animate(
       [
-        { opacity: 0, transform: `${b}scale(0.92) translateY(8px)` },
-        { opacity: 1, transform: `${b}scale(1.025) translateY(0)`, offset: 0.68 },
-        { opacity: 1, transform: `${b}scale(1)` }
+        { opacity: 0, transform: `${b}translateY(6px) scale(0.99)` },
+        { opacity: 1, transform: `${b}translateY(0) scale(1)` }
       ],
-      { duration: 340, delay: delay || 0, easing: POP_EASE, fill: 'backwards' }
+      { duration: 620, delay: delay || 0, easing: SETTLE_EASE, fill: 'backwards' }
     );
   }
 
@@ -4164,35 +5079,41 @@
       const icon = active.querySelector('.side-ico');
       const count = active.querySelector('b');
       if (icon) icon.animate(
-        [{ transform: 'scale(0.65)' }, { transform: 'scale(1.18)', offset: 0.6 }, { transform: 'scale(1)' }],
-        { duration: 300, easing: POP_EASE }
+        [{ transform: 'scale(0.92)', opacity: 0.6 }, { transform: 'scale(1)', opacity: 1 }],
+        { duration: 360, easing: SETTLE_EASE }
       );
       if (count) count.animate(
-        [{ transform: 'scale(0.8)' }, { transform: 'scale(1.12)', offset: 0.6 }, { transform: 'scale(1)' }],
-        { duration: 280, easing: POP_EASE }
+        [{ opacity: 0 }, { opacity: 1 }],
+        { duration: 320, easing: SETTLE_EASE }
       );
     }
 
+    if (state.filter === 'Want') {
+      const wv = $('#wishlist-view');
+      if (wv) Array.from(wv.querySelectorAll('.wl-head > *, .wl-top, .wl-card, .wl-empty:not([hidden])'))
+        .slice(0, 12).forEach((el, i) => popIn(el, i * 45));
+      return;
+    }
     if (state.view === 'shelf') {
       const stage = $('#shelf-stage');
       if (stage) {
-        Array.from(stage.querySelectorAll('.shelf-content > *')).forEach((el, i) => popIn(el, i * 34));
+        Array.from(stage.querySelectorAll('.shelf-content > *')).forEach((el, i) => popIn(el, i * 55));
         const poster = stage.querySelector('.shelf-poster.is-on');
-        if (poster) popIn(poster, 40, 'translateY(-50%)');
+        if (poster) popIn(poster, 60, 'translateY(-50%)');
       }
       const inView = (el) => {
         const r = el.getBoundingClientRect();
         return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
       };
       const tiles = Array.from(document.querySelectorAll('#shelf-strip .shelf-tile')).filter(inView);
-      tiles.forEach((tile, i) => popIn(tile, 60 + Math.min(i, 10) * 18));
+      tiles.forEach((tile, i) => popIn(tile, 90 + Math.min(i, 10) * 28));
     } else {
       const inView = (el) => {
         const r = el.getBoundingClientRect();
         return r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
       };
       const cards = Array.from($('#grid').children).filter(inView);
-      cards.forEach((card, i) => popIn(card, Math.min(i, 12) * 14));
+      cards.forEach((card, i) => popIn(card, Math.min(i, 12) * 24));
     }
   }
 
@@ -4214,6 +5135,8 @@
       animateSwitchPop();
       const lib = $('#library');
       if (lib) lib.scrollTop = 0;
+      const wv = $('#wishlist-view');
+      if (wv) wv.scrollTop = 0;
     };
     apply();
   }
@@ -4488,7 +5411,7 @@
       if (modalOpen || spotHooks.isOpen()) return;
       const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-      if (!typing && state.view === 'shelf' && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+      if (!typing && state.view === 'shelf' && state.filter !== 'Want' && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
         const list = filteredGames();
         if (list.length) {
           e.preventDefault();
@@ -5314,8 +6237,18 @@
       return;
     }
 
-    const pinned = [...mainEl.children].filter((el) => !el.hidden && !el.classList.contains('topbar'));
+    // An empty library is centred text, not a grid: pinning the column to its
+    // final width would make it jump half the width change, then slide back.
+    // Instead the block keeps its final width and is centred by a transform,
+    // so it glides from the old centre to the new one as one piece.
+    const floatEl = [...mainEl.querySelectorAll('#shelf-stage > .onboard > .onboard-inner, #shelf-stage > .shelf-empty, #empty')]
+      .find((el) => !el.hidden && el.offsetParent);
+    const pinned = floatEl ? [] : [...mainEl.children].filter((el) => !el.hidden && !el.classList.contains('topbar'));
     pinned.forEach((el) => { el.style.width = `${el.getBoundingClientRect().width}px`; });
+    if (floatEl) {
+      floatEl.style.width = `${floatEl.getBoundingClientRect().width}px`;
+      floatEl.classList.add('is-side-float');
+    }
     mainEl.classList.add('is-side-moving');
     document.documentElement.dataset.busy = '1';   // ambient.js holds the fluid still
     // Start from the old width, then release to the class width with the transition on.
@@ -5333,6 +6266,7 @@
       mainEl.classList.remove('is-side-moving');
       delete document.documentElement.dataset.busy;
       pinned.forEach((el) => { el.style.width = ''; });
+      if (floatEl) { floatEl.style.width = ''; floatEl.classList.remove('is-side-float'); }
       syncSidePill();
       spotHooks.resync();
     };
@@ -5511,7 +6445,7 @@
     const actions = () => [
       { icon: 'plus', title: 'Add game', run: () => $('#btn-add')?.click() },
       { icon: 'down', title: 'Import games', run: () => $('#btn-import')?.click() },
-      { icon: 'star', title: 'Open wishlist', run: () => document.querySelector('[data-filter="Want"]')?.click() },
+      { icon: 'star', title: 'Open wishlist', run: () => setFilter('Want') },
       { icon: 'sliders', title: 'Open settings', run: () => $('#btn-settings')?.click() },
     ];
 
