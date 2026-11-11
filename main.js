@@ -726,10 +726,12 @@ function createWindow() {
       if (!fs.existsSync(file)) return null;
       const crypto = require('crypto');
       const stat = fs.statSync(file);
-      const key = crypto.createHash('md5').update(`${file}:${stat.mtimeMs}:${width}`).digest('hex');
+      const isLogo = kind === 'logo';
+      const key = crypto.createHash('md5').update(`${file}:${stat.mtimeMs}:${width}${isLogo ? ':logo' : ''}`).digest('hex');
       const dir = path.join(app.getPath('userData'), 'thumbs');
       fs.mkdirSync(dir, { recursive: true });
-      const out = path.join(dir, `${key}.jpg`);
+      // logos keep their transparency
+      const out = path.join(dir, `${key}.${isLogo ? 'png' : 'jpg'}`);
       if (fs.existsSync(out)) return require('url').pathToFileURL(out).href;
 
       const img = nativeImage.createFromPath(file);
@@ -738,7 +740,7 @@ function createWindow() {
       // A portrait cover blown up to a banner looks like a smeared render bug.
       if (kind === 'hero' && size.width / size.height < 1.45) return '__reject__';
       const resized = size.width > width ? img.resize({ width, quality: 'good' }) : img;
-      fs.writeFileSync(out, resized.toJPEG(88));
+      fs.writeFileSync(out, isLogo ? resized.toPNG() : resized.toJPEG(88));
       return require('url').pathToFileURL(out).href;
     } catch (_) {
       return null;
@@ -746,6 +748,15 @@ function createWindow() {
   });
 
   ipcMain.handle('win:is-maximized', () => win ? win.isMaximized() : false);
+  // a still of the window, so the renderer can crossfade a palette change
+  // instead of re-colouring every element on every frame
+  ipcMain.handle('win:snapshot', async () => {
+    if (!win || win.isDestroyed()) return null;
+    try {
+      const img = await win.webContents.capturePage();
+      return img.isEmpty() ? null : 'data:image/jpeg;base64,' + img.toJPEG(92).toString('base64');
+    } catch (_) { return null; }
+  });
   ipcMain.handle('app:platform-info', () => ({
     platform: process.platform,
     wayland: platform.isWayland(),
@@ -1340,14 +1351,43 @@ function createWindow() {
         return { ok: false, error: { code: 'NOT_FOUND', message: 'Steam has no data for this AppID' } };
       }
       const data = entry.data;
+      const rel = data.release_date || null;
+      const po = data.price_overview || null;
       return {
         ok: true,
         data: {
+          // wishlist cards: is it out, and what does it cost right now
+          release: rel ? { soon: !!rel.coming_soon, date: String(rel.date || '') } : null,
+          price: po ? { final: String(po.final_formatted || ''), initial: String(po.initial_formatted || ''), discount: Number(po.discount_percent) || 0 } : null,
+          free: !!data.is_free,
           metacritic: data.metacritic ? { score: data.metacritic.score, url: data.metacritic.url } : null,
           minimum: parseSteamRequirements(data.pc_requirements && data.pc_requirements.minimum),
           recommended: parseSteamRequirements(data.pc_requirements && data.pc_requirements.recommended),
         },
       };
+    } catch (err) {
+      return { ok: false, error: { code: 'NETWORK', message: err.message } };
+    }
+  });
+
+  // Wishlist "add a game" search: Steam's public store search (no key).
+  ipcMain.handle('steam:search', async (_e, term) => {
+    const q = String(term || '').trim().slice(0, 80);
+    if (q.length < 2) return { ok: true, data: [] };
+    try {
+      const json = await httpsGet(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=US`);
+      const items = (json && Array.isArray(json.items) ? json.items : [])
+        .filter((it) => it && it.type === 'app' && it.id && typeof it.name === 'string')
+        .slice(0, 8)
+        .map((it) => ({
+          appId: Number(it.id),
+          name: it.name,
+          image: typeof it.tiny_image === 'string' ? it.tiny_image : '',
+          price: it.price && typeof it.price.final === 'number'
+            ? { final: it.price.final, initial: Number(it.price.initial) || it.price.final, currency: String(it.price.currency || 'USD') }
+            : null,
+        }));
+      return { ok: true, data: items };
     } catch (err) {
       return { ok: false, error: { code: 'NETWORK', message: err.message } };
     }
@@ -1404,8 +1444,42 @@ function createWindow() {
     return { ...data, items, total: items.length };
   }));
 
-  ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name, steamAppId } = {}) => {
-    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId }), () => autofillWithKey({ id, name }));
+  // Download the picked art into the local cache: { slot: { url, remote, … } }
+  async function cacheAssets(picks) {
+    const assets = {};
+    await Promise.all(Object.entries(picks).map(async ([slot, asset]) => {
+      if (!asset || !asset.url) return;
+      let local = asset.url;
+      try { local = await cacheImage(asset.url, slot); } catch (_) {}
+      assets[slot] = { url: local, remote: asset.url, width: asset.width, height: asset.height, style: asset.style, score: asset.score };
+    }));
+    return assets;
+  }
+
+  // Steam's own library art for the slots it has (it wins over SteamGridDB).
+  async function steamPicks(appId, keep) {
+    const out = {};
+    if (!appId) return out;
+    const steam = await artCache().steamArt(appId).catch(() => null);
+    if (!steam || !steam.ok) return out;
+    for (const slot of ['cover', 'hero', 'logo']) {
+      if (keep(slot) && steam.data[slot]) out[slot] = { url: steam.data[slot], width: null, height: null, style: 'official', score: null };
+    }
+    return out;
+  }
+
+  // slots: only fetch these (bulk enrichment skips what a game already has).
+  // bulk: no picker-thumbnail warmup (that's 100+ downloads per game).
+  ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name, steamAppId, slots, bulk } = {}) => {
+    const want = Array.isArray(slots) && slots.length ? new Set(slots) : null;
+    const keep = (slot) => !want || want.has(slot);
+    // A Steam game whose own art covers every slot asked for never touches
+    // SteamGridDB: no lookup, no rate limit, just Steam's CDN.
+    if (steamAppId && want) {
+      const steam = await steamPicks(steamAppId, keep);
+      if ([...want].every((s) => steam[s])) return { match: null, assets: await cacheAssets(steam) };
+    }
+    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId }), () => autofillWithKey({ id, name, steamAppId, keep }));
     if (cloud.viaKey) return cloud.data;
     if (!cloud.ok && cloud.error.code === 'NOT_FOUND') return { match: null, assets: {} };
     const data = unwrap(cloud);
@@ -1415,33 +1489,24 @@ function createWindow() {
     else if (!id) match.score = 1000; // matched by Steam app id
 
     // Steam games: Steam's own library art wins; SteamGridDB fills the gaps.
-    const picks = { cover: data.top && data.top.cover, hero: data.top && data.top.hero, logo: data.top && data.top.logo, icon: data.top && data.top.icon };
-    const appId = steamAppId || game.steamAppId;
-    if (appId) {
-      const steam = await artCache().steamArt(appId);
-      if (steam.ok) {
-        for (const slot of ['cover', 'hero', 'logo']) {
-          if (steam.data[slot]) picks[slot] = { url: steam.data[slot], width: null, height: null, style: 'official', score: null };
-        }
-      }
-    }
+    const picks = {};
+    for (const slot of ['cover', 'hero', 'logo', 'icon']) if (keep(slot) && data.top && data.top[slot]) picks[slot] = data.top[slot];
+    Object.assign(picks, await steamPicks(steamAppId || game.steamAppId, keep));
 
-    const assets = {};
-    await Promise.all(Object.entries(picks).map(async ([slot, asset]) => {
-      if (!asset || !asset.url) return;
-      let local = asset.url;
-      try { local = await cacheImage(asset.url, slot); } catch (_) {}
-      assets[slot] = { url: local, remote: asset.url, width: asset.width, height: asset.height, style: asset.style, score: asset.score };
-    }));
-    // Warm the picker's thumbnails in the background.
-    artCache().prefetchThumbs(data).catch(() => {});
+    const assets = await cacheAssets(picks);
+    // Warm the picker's thumbnails in the background (not for bulk runs).
+    if (!bulk) artCache().prefetchThumbs(data).catch(() => {});
     return { match, assets };
   }));
 
-  async function autofillWithKey({ id, name } = {}) {
+  async function autofillWithKey({ id, name, steamAppId, keep = () => true } = {}) {
     const client = sgdbOrThrow();
     let gameId = id;
     let match = null;
+    if (!gameId && steamAppId) {
+      const byId = await client.gameBySteamAppId(steamAppId).catch(() => null);
+      if (byId) { match = { ...byId, score: 1000 }; gameId = byId.id; }
+    }
     if (!gameId) {
       const hits = await client.searchGames(name || '');
       const best = Fuzzy.bestMatch(name || '', hits, (h) => h.name, { threshold: 0, limit: 3 });
@@ -1452,7 +1517,7 @@ function createWindow() {
       match = await client.gameById(gameId).catch(() => ({ id: gameId, name: name || '' }));
     }
 
-    const kinds = [['cover', 'grids'], ['hero', 'heroes'], ['logo', 'logos'], ['icon', 'icons']];
+    const kinds = [['cover', 'grids'], ['hero', 'heroes'], ['logo', 'logos'], ['icon', 'icons']].filter(([slot]) => keep(slot));
     const picked = await Promise.all(kinds.map(async ([slot, kind]) => {
       try {
         const top = await client.topOf(kind, gameId);
@@ -1462,22 +1527,10 @@ function createWindow() {
       }
     }));
 
-    const assets = {};
-    await Promise.all(picked.map(async ([slot, asset]) => {
-      if (!asset || !asset.url) return;
-      let local = asset.url;
-      try { local = await cacheImage(asset.url, slot); } catch (_) {}
-      assets[slot] = {
-        url: local,
-        remote: asset.url,
-        width: asset.width,
-        height: asset.height,
-        style: asset.style,
-        score: asset.score,
-      };
-    }));
-
-    return { match, assets };
+    const picks = {};
+    for (const [slot, asset] of picked) if (asset) picks[slot] = asset;
+    Object.assign(picks, await steamPicks(steamAppId, keep));
+    return { match, assets: await cacheAssets(picks) };
   }
 
   ipcMain.handle('sgdb:cache', sgdbWrap(async ({ url, kind } = {}) => {

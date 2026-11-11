@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('api', {
   steamOwned: (payload) => ipcRenderer.invoke('steam:owned', payload),
   steamLogin: () => ipcRenderer.invoke('steam:login'),
   gpuStatus: () => ipcRenderer.invoke('app:gpu'),
+  windowSnapshot: () => ipcRenderer.invoke('win:snapshot'),
   perfLog: (sample) => ipcRenderer.send('perf:log', sample),
   perfPath: () => ipcRenderer.invoke('perf:path'),
   perfReveal: () => ipcRenderer.send('perf:reveal'),
@@ -94,6 +95,7 @@ contextBridge.exposeInMainWorld('api', {
   // SteamGridDB search
   sgdbGames: (term) => ipcRenderer.invoke('sgdb:games', term),
   steamDetails: (appId) => ipcRenderer.invoke('steam:details', appId),
+  steamSearch: (term) => ipcRenderer.invoke('steam:search', term),
   sgdbResolve: (payload) => ipcRenderer.invoke('sgdb:resolve', payload),
   sgdbAssets: (payload) => ipcRenderer.invoke('sgdb:assets', payload),
   sgdbAutofill: (payload) => ipcRenderer.invoke('sgdb:autofill', payload),
