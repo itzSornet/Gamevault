@@ -3003,7 +3003,7 @@ body { font-size: 13.5px; }
 
 .toast {
   opacity: 0;
-  transform: translateY(10px) scale(0.97);
+  transform: translateY(4px) scale(0.99);
   transition: opacity 0.24s var(--ease-spring), transform 0.32s var(--ease-spring);
 }
 .toast.is-on { opacity: 1; transform: none; }
@@ -3789,7 +3789,7 @@ body { font-size: 13.5px; }
 ::view-transition-new(gv-search) { animation-duration: var(--morph-new, 420ms) !important; }
 
 /* row cascade after the surface lands */
-@keyframes cmd-row-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes cmd-row-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .cmd.is-full .cmd-item { animation: cmd-row-in 220ms cubic-bezier(.32,.72,0,1) both; }
 .cmd.is-full .cmd-item:nth-child(2) { animation-delay: 18ms; }
 .cmd.is-full .cmd-item:nth-child(3) { animation-delay: 36ms; }
@@ -4006,8 +4006,8 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 .side-item > span,
 .side-item > b {
   transition:
-    opacity 170ms var(--ease-out-quart) calc(40ms + var(--i, 0) * 8ms),
-    transform 200ms cubic-bezier(0.2, 0.9, 0.25, 1) calc(40ms + var(--i, 0) * 8ms);
+    opacity 170ms var(--ease-out-quart) calc(30ms + var(--i, 0) * 5ms),
+    transform 200ms cubic-bezier(0.2, 0.9, 0.25, 1) calc(30ms + var(--i, 0) * 5ms);
 }
 
 /* collapsed state (toggle) and auto-rail (narrow window) share one look */
@@ -4015,9 +4015,9 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 .sidebar.is-collapsed .side-item > span,
 .sidebar.is-collapsed .side-item > b {
   opacity: 0;
-  transform: translateX(-8px);
+  transform: translateX(-3px);
   transition-duration: 90ms, 120ms;
-  transition-delay: calc(var(--i, 0) * 6ms);
+  transition-delay: calc(var(--i, 0) * 4ms);
 }
 /* hairlines sit midway between the groups they separate; the first one
    also counts the brand row's bottom padding as part of its gap */
@@ -4039,7 +4039,7 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
   .sidebar, .sidebar.is-collapsed { width: 62px; flex-basis: 62px; }
   .sidebar .side-name,
   .sidebar .side-item > span,
-  .sidebar .side-item > b { opacity: 0; transform: translateX(-8px); }
+  .sidebar .side-item > b { opacity: 0; transform: translateX(-3px); }
   .sidebar .side-sec { color: transparent; }
   .sidebar .side-sec::after { opacity: 1; }
   .sidebar .side-stats { opacity: 0; visibility: hidden; }
@@ -4058,6 +4058,10 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 
 /* main column content is pinned to a px width while the sidebar animates */
 .main.is-side-moving > :not(.topbar) { flex-shrink: 0; }
+/* the empty-library block rides the moving edge as ONE layer: otherwise its
+   title / text / button snap to whole pixels independently each frame and the
+   lines wobble left and right against each other */
+.main.is-side-moving .empty { will-change: transform; transform: translateZ(0); backface-visibility: hidden; }
 /* (the main glass keeps its blur while the rail moves: swapping it out for a
    flat tint read as a flash. The fluid is paused instead, so the blur only
    follows the panel's size, not moving content.) */
