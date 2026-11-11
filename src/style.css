@@ -4867,3 +4867,18 @@ input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .sv-pick b { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-pick span { font-size: 11px; color: var(--text-mute); }
 .st-row-control .btn + .st-switch { margin-left: 4px; }
+
+/* ---- account card: social-first sign-in, code entry, delete ---- */
+.acct-socials { display: flex; flex-direction: column; gap: 8px; }
+.acct-social { justify-content: center; gap: 10px; height: 38px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--line-2); color: var(--text); font-weight: 600; }
+.acct-social:hover { background: rgba(255, 255, 255, 0.1); }
+[data-palette="paper"] .acct-social { background: rgba(0, 0, 0, 0.04); }
+img.acct-avatar { object-fit: cover; padding: 0; }
+.acct-code-form { grid-template-columns: 140px auto; }
+.acct-code-form .input { letter-spacing: 0.2em; font-variant-numeric: tabular-nums; }
+.acct-foot-end { justify-content: flex-end; padding: 0 18px 12px; }
+.acct-link-quiet { color: var(--text-mute); font-size: 12px; }
+.acct-link-quiet:hover { color: #ff8a8a; }
+.acct-danger { align-items: center; gap: 14px; background: rgba(255, 80, 80, 0.06); }
+.acct-delete { background: #d64545; color: #fff; border: 0; font-weight: 600; }
+.acct-delete:hover { background: #e25555; }

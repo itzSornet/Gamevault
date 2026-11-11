@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('api', {
   accountSignUp: (email, password) => ipcRenderer.invoke('account:signup', { email, password }),
   accountReset: (email) => ipcRenderer.invoke('account:reset', email),
   accountSetPassword: (password) => ipcRenderer.invoke('account:set-password', password),
+  accountCode: (code) => ipcRenderer.invoke('account:code', code),
+  accountDelete: () => ipcRenderer.invoke('account:delete', 'DELETE'),
   accountOAuth: (provider) => ipcRenderer.invoke('account:oauth', provider),
   accountCancel: () => ipcRenderer.invoke('account:cancel'),
   accountSignOut: () => ipcRenderer.invoke('account:signout'),

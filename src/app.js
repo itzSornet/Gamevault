@@ -3090,49 +3090,68 @@
     </div>`;
 
   // ---- GameVault account card (sign-in lives in main: src/backend/account.js)
-  const GOOGLE_G = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.63h6.46a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.27-2.09 3.56-5.17 3.56-8.8z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.9l-3.88-3.02c-1.07.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.71-4.95H1.28v3.11A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.29 14.28a7.2 7.2 0 0 1 0-4.56V6.61H1.28a12 12 0 0 0 0 10.78l4.01-3.11z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.61 4.59 1.8l3.44-3.44A11.97 11.97 0 0 0 12 0 12 12 0 0 0 1.28 6.61l4.01 3.11C6.23 6.88 8.88 4.77 12 4.77z"/></svg>';
+  const SOCIAL = [
+    ['google', 'Google', '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.67-.22-2.45H12v4.63h6.46a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.27-2.09 3.56-5.17 3.56-8.8z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.9l-3.88-3.02c-1.07.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.71-4.95H1.28v3.11A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.29 14.28a7.2 7.2 0 0 1 0-4.56V6.61H1.28a12 12 0 0 0 0 10.78l4.01-3.11z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.61 4.59 1.8l3.44-3.44A11.97 11.97 0 0 0 12 0 12 12 0 0 0 1.28 6.61l4.01 3.11C6.23 6.88 8.88 4.77 12 4.77z"/></svg>'],
+    ['discord', 'Discord', '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="#5865F2" d="M20.32 4.37a19.8 19.8 0 0 0-4.89-1.52.07.07 0 0 0-.08.04c-.21.38-.44.86-.6 1.25a18.27 18.27 0 0 0-5.49 0 12.6 12.6 0 0 0-.62-1.25.08.08 0 0 0-.08-.04 19.74 19.74 0 0 0-4.88 1.52.07.07 0 0 0-.03.03C.53 9.05-.32 13.58.1 18.06a.08.08 0 0 0 .03.06 19.9 19.9 0 0 0 5.99 3.03.08.08 0 0 0 .08-.03c.46-.63.87-1.29 1.23-1.99a.08.08 0 0 0-.04-.1 13.1 13.1 0 0 1-1.87-.89.08.08 0 0 1 0-.13l.37-.29a.07.07 0 0 1 .08-.01c3.93 1.79 8.18 1.79 12.06 0a.07.07 0 0 1 .08.01l.37.29a.08.08 0 0 1 0 .13c-.6.35-1.22.65-1.87.89a.08.08 0 0 0-.04.1c.36.7.77 1.36 1.23 1.99a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6-3.03.08.08 0 0 0 .03-.05c.5-5.18-.84-9.67-3.55-13.66a.06.06 0 0 0-.03-.03zM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.95 2.42-2.16 2.42z"/></svg>'],
+    ['github', 'GitHub', '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.49 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3"/></svg>'],
+  ];
+  const providerName = (p) => (SOCIAL.find(([id]) => id === p) || [p, p === 'email' ? 'email' : p])[1];
   const acctTitle = '<h2 class="st-card-title">GameVault account</h2>';
   const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const MAIL_ICON = '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/>';
 
   const acctInput = (name, type, placeholder, opts = {}) =>
     `<input class="input" type="${type}" name="${name}" placeholder="${esc(placeholder)}" aria-label="${esc(opts.label || placeholder)}"` +
-    ` autocomplete="${opts.autocomplete || 'off'}" spellcheck="false"${opts.value != null ? ` value="${esc(opts.value)}"` : ''} />`;
+    ` autocomplete="${opts.autocomplete || 'off'}" spellcheck="false"${opts.inputmode ? ` inputmode="${opts.inputmode}"` : ''}${opts.value != null ? ` value="${esc(opts.value)}"` : ''} />`;
+
+  const socialOn = () => SOCIAL.filter(([id]) => (state.accountProviders || {})[id]);
 
   function accountFormHtml() {
-    const mode = state._acctMode || 'signin';
-    const prov = state.accountProviders || {};
-    const email = acctInput('email', 'email', 'Email', { autocomplete: 'email', value: state._acctEmail || '' });
+    const social = socialOn();
+    const mode = state._acctMode || (social.length ? 'social' : 'signin');
     const link = (act, text) => `<button type="button" class="acct-link" data-acct="${act}">${text}</button>`;
+    const socialButtons = social.map(([id, name, icon]) => `<button type="button" class="btn acct-social" data-acct="oauth" data-provider="${id}">${icon}<span>Continue with ${name}</span></button>`).join('');
+    if (mode === 'social') {
+      return `
+        <div class="st-row is-wide acct-in">
+          <div class="st-row-text">
+            <div class="st-row-title">Sign in</div>
+            <div class="st-row-desc">One free account for cloud features: sync your library and back up your saves. Everything else in GameVault works without it.</div>
+          </div>
+          <div class="st-row-control acct-form">
+            <div class="acct-socials">${socialButtons}</div>
+            <div class="acct-foot">${link('mode-signin', 'Use email instead')}</div>
+          </div>
+        </div>`;
+    }
+    const email = acctInput('email', 'email', 'Email', { autocomplete: 'email', value: state._acctEmail || '' });
+    const back = social.length ? `<span class="acct-grow"></span>${link('mode-social', `Back to ${social.map(([, n]) => n).join(' or ')}`)}` : '';
     let title, desc, fields, submit, foot;
     if (mode === 'signup') {
       title = 'Create your account';
       desc = 'Free. We send one email to confirm it’s you.';
       fields = email + acctInput('password', 'password', 'Password (8+ characters)', { autocomplete: 'new-password', label: 'Password' });
       submit = 'Create account';
-      foot = `<span>Already have one?</span> ${link('mode-signin', 'Sign in')}`;
+      foot = `<span>Already have one?</span> ${link('mode-signin', 'Sign in')}${back}`;
     } else if (mode === 'forgot') {
       title = 'Reset your password';
-      desc = 'We email you a link. Open it on this PC, then pick a new password here.';
+      desc = 'We email you a link (and a code). Open it on this PC, then pick a new password here.';
       fields = email;
       submit = 'Send reset link';
-      foot = link('mode-signin', 'Back to sign in');
+      foot = link('mode-signin', 'Back to sign in') + back;
     } else if (mode === 'link') {
       title = 'Sign in without a password';
-      desc = 'We email you a sign-in link. Open it in a browser on this PC.';
+      desc = 'We email you a sign-in link. Open it in a browser on this PC, or type the code from the email.';
       fields = email;
       submit = 'Email me a link';
-      foot = link('mode-signin', 'Use a password instead');
+      foot = link('mode-signin', 'Use a password instead') + back;
     } else {
-      title = 'Sign in';
+      title = 'Sign in with email';
       desc = 'One free account for cloud features. Everything else in GameVault works without it.';
       fields = email + acctInput('password', 'password', 'Password', { autocomplete: 'current-password' });
       submit = 'Sign in';
-      foot = `${link('mode-forgot', 'Forgot password?')}<span class="acct-dot">·</span>${link('mode-link', 'Email me a link instead')}<span class="acct-grow"></span><span>New here?</span> ${link('mode-signup', 'Create an account')}`;
+      foot = `${link('mode-forgot', 'Forgot password?')}<span class="acct-dot">·</span>${link('mode-link', 'Email me a link')}<span class="acct-dot">·</span>${link('mode-signup', 'Create an account')}${back}`;
     }
-    const google = prov.google && mode !== 'forgot'
-      ? `<button type="button" class="btn acct-google" data-acct="google">${GOOGLE_G}<span>Continue with Google</span></button><div class="acct-or"><span>or</span></div>`
-      : '';
     return `
       <div class="st-row is-wide acct-in">
         <div class="st-row-text">
@@ -3140,7 +3159,6 @@
           <div class="st-row-desc">${desc}</div>
         </div>
         <div class="st-row-control acct-form">
-          ${google}
           <form class="acct-fields" data-acct-form="${mode}" novalidate>
             ${fields}
             <button type="submit" class="btn btn-primary">${submit}</button>
@@ -3161,19 +3179,22 @@
     }
     if (st.signedIn) {
       const u = st.user || {};
-      const who = u.email || u.name || 'Signed in';
-      const via = u.provider === 'google' ? 'Google' : u.provider === 'email' ? 'email' : (u.provider || '');
+      const who = u.name && u.email ? `${u.name}` : (u.email || u.name || 'Signed in');
+      const sub = u.name && u.email ? `${esc(u.email)} · ` : '';
       const initial = esc((u.name || u.email || '?').trim().charAt(0).toUpperCase());
+      const avatar = /^https:\/\//.test(u.avatar || '')
+        ? `<img class="acct-avatar" src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer" data-avatar-fallback="${initial}" />`
+        : `<div class="acct-avatar" aria-hidden="true">${initial}</div>`;
       const pwForm = st.mustSetPassword || state._acctChangePw;
       const me = `
         <div class="st-row acct-me">
-          <div class="acct-avatar" aria-hidden="true">${initial}</div>
+          ${avatar}
           <div class="st-row-text">
             <div class="st-row-title">${esc(who)}</div>
-            <div class="st-row-desc">Signed in${via ? ` with ${esc(via)}` : ''}. Artwork lookups now run on your account.</div>
+            <div class="st-row-desc">${sub}Signed in with ${esc(providerName(u.provider || 'email'))}</div>
           </div>
           <div class="st-row-control">
-            ${pwForm || u.provider === 'google' ? '' : '<button type="button" class="btn btn-ghost" data-acct="change-pw">Change password</button>'}
+            ${pwForm || (u.provider && u.provider !== 'email') ? '' : '<button type="button" class="btn btn-ghost" data-acct="change-pw">Change password</button>'}
             <button type="button" class="btn btn-ghost acct-out" data-acct="signout">Sign out</button>
           </div>
         </div>`;
@@ -3191,28 +3212,53 @@
             </form>
           </div>
         </div>` : '';
-      return acctTitle + me + pw + err;
+      const del = state._acctDelete ? `
+        <div class="st-row acct-danger">
+          <div class="st-row-text">
+            <div class="st-row-title">Delete your account?</div>
+            <div class="st-row-desc">This deletes your account, your synced library and every save backup from Gamevault Cloud, for good. The games on this PC stay.</div>
+          </div>
+          <div class="st-row-control">
+            <button type="button" class="btn btn-ghost" data-acct="delete-cancel">Cancel</button>
+            <button type="button" class="btn acct-delete" data-acct="delete-confirm">Delete forever</button>
+          </div>
+        </div>` : `<div class="acct-foot acct-foot-end"><button type="button" class="acct-link acct-link-quiet" data-acct="delete">Delete account…</button></div>`;
+      return acctTitle + me + pw + err + del;
     }
     if (st.pending && st.pending.kind !== 'oauth') {
       const k = st.pending.kind;
       const head = k === 'signup' ? 'Confirm your email' : 'Check your inbox';
       const what = k === 'signup' ? 'a link to confirm your account' : k === 'recovery' ? 'a password reset link' : 'a sign-in link';
+      const extra = k === 'signup' ? ' No email? If you already have an account with this address, go back and sign in or reset your password.' : ' Not there after a minute? Check spam.';
       return acctTitle + `
         <div class="st-row acct-wait">
           <div class="acct-mail" aria-hidden="true">${stIcon(MAIL_ICON)}</div>
           <div class="st-row-text">
             <div class="st-row-title">${head}</div>
-            <div class="st-row-desc">We sent ${what} to <b>${esc(st.pending.email)}</b>. Open it in a browser on this PC and GameVault picks it up by itself. Not there after a minute? Check spam.</div>
+            <div class="st-row-desc">We sent ${what} to <b>${esc(st.pending.email)}</b>. Open it in a browser on this PC and GameVault picks it up by itself.${extra}</div>
           </div>
           <div class="st-row-control">
             ${k === 'signup' ? '' : '<button type="button" class="btn btn-ghost" data-acct="resend">Resend</button>'}
             <button type="button" class="btn btn-ghost" data-acct="cancel">Back</button>
           </div>
+        </div>
+        <div class="st-row acct-code">
+          <div class="st-row-text">
+            <div class="st-row-title">Opened it on your phone?</div>
+            <div class="st-row-desc">Type the code from the email instead.</div>
+          </div>
+          <div class="st-row-control">
+            <form class="acct-fields acct-code-form" data-acct-form="code" novalidate>
+              ${acctInput('code', 'text', '123456', { autocomplete: 'one-time-code', inputmode: 'numeric', label: 'Code from the email' })}
+              <button type="submit" class="btn btn-ghost">Verify</button>
+            </form>
+          </div>
         </div>` + err;
     }
     if (st.pending && st.pending.kind === 'oauth') {
-      return acctTitle + stRow('Finish in your browser', 'A sign-in page opened in your default browser. Come back here when you’re done.',
-        '<button type="button" class="btn btn-ghost" data-acct="cancel">Cancel</button>') + err;
+      const name = providerName(st.pending.provider);
+      return acctTitle + stRow(`Finish in your browser`, `A ${esc(name)} sign-in page opened in your default browser. Come back here when you’re done.`,
+        '<button type="button" class="btn btn-ghost" data-acct="reopen">Open it again</button><button type="button" class="btn btn-ghost" data-acct="cancel">Cancel</button>') + err;
     }
     return acctTitle + accountFormHtml() + err;
   }
@@ -3232,6 +3278,8 @@
 
   function wireAccountCard(card) {
     if (!card) return;
+    const img = card.querySelector('img[data-avatar-fallback]');
+    if (img) img.addEventListener('error', () => { img.outerHTML = `<div class="acct-avatar" aria-hidden="true">${img.dataset.avatarFallback}</div>`; });
     const setError = (msg, focus) => {
       state.account = { ...(state.account || {}), error: msg };
       renderAccountCard(focus || true);
@@ -3249,11 +3297,18 @@
       const mode = form.dataset.acctForm;
       const emailIn = form.querySelector('input[name=email]');
       const pwIn = form.querySelector('input[name=password]');
+      const codeIn = form.querySelector('input[name=code]');
       if (emailIn) emailIn.addEventListener('input', () => { state._acctEmail = emailIn.value; });
       form.addEventListener('submit', (e) => {
         e.preventDefault();
         const btn = form.querySelector('button[type=submit]');
         const pw = pwIn ? pwIn.value : '';
+        if (mode === 'code') {
+          const code = codeIn.value.replace(/\s+/g, '');
+          if (!/^\d{6,10}$/.test(code)) return setError('Enter the code from the email.', 'code');
+          run(() => window.api.accountCode(code), btn, 'Checking…');
+          return;
+        }
         if (mode === 'setpw') {
           if (pw.length < 8) return setError('Pick a longer password: at least 8 characters.', 'password');
           run(() => window.api.accountSetPassword(pw), btn, 'Saving…').then((res) => {
@@ -3283,12 +3338,15 @@
         if (act.startsWith('mode-')) {
           state._acctMode = act.slice(5);
           if (state.account) state.account = { ...state.account, error: null };
-          renderAccountCard(true);
-        } else if (act === 'google') run(() => window.api.accountOAuth('google'), btn);
-        else if (act === 'resend') {
+          renderAccountCard(state._acctMode !== 'social');
+        } else if (act === 'oauth') {
+          run(() => window.api.accountOAuth(btn.dataset.provider), btn, 'Opening browser…');
+        } else if (act === 'reopen') {
+          run(() => window.api.accountOAuth(state.account.pending.provider), btn);
+        } else if (act === 'resend') {
           const p = state.account.pending;
           const res = await run(() => (p.kind === 'recovery' ? window.api.accountReset(p.email) : window.api.accountEmail(p.email)), btn, 'Sending…');
-          if (res && res.ok) toast('Sent a new link', 'ok');
+          if (res && res.ok) toast('Sent a new email', 'ok');
         } else if (act === 'cancel') {
           state.account = await window.api.accountCancel();
           renderAccountCard(true);
@@ -3296,9 +3354,22 @@
           state._acctChangePw = act === 'change-pw';
           if (state.account) state.account = { ...state.account, error: null };
           renderAccountCard(state._acctChangePw && 'password');
+        } else if (act === 'delete' || act === 'delete-cancel') {
+          state._acctDelete = act === 'delete';
+          renderAccountCard();
+        } else if (act === 'delete-confirm') {
+          const res = await run(() => window.api.accountDelete(), btn, 'Deleting…');
+          if (res && res.ok) {
+            state._acctDelete = false;
+            state._acctMode = null;
+            await saveConfigPatch({ cloudSync: false, cloudSaves: false, cloudSyncUser: null });
+            renderAccountCard();
+            toast('Your GameVault account is deleted', 'ok');
+          }
         } else if (act === 'signout') {
           state._acctChangePw = false;
-          state._acctMode = 'signin';
+          state._acctDelete = false;
+          state._acctMode = null;
           const res = await run(() => window.api.accountSignOut(), btn, 'Signing out…');
           if (res && res.ok) toast('Signed out of GameVault');
         }
@@ -3349,7 +3420,8 @@
     const syncSw = card.querySelector('[data-cloud-sync]');
     const savesSw = card.querySelector('[data-cloud-saves]');
     if (syncSw) syncSw.addEventListener('change', async () => {
-      await saveConfigPatch({ cloudSync: syncSw.checked });
+      // Turning it on is consent to merge this PC's library into this account.
+      await saveConfigPatch(syncSw.checked ? { cloudSync: true, cloudSyncUser: state.account.user.id } : { cloudSync: false });
       renderCloudCard();
       if (syncSw.checked) runCloudSync({ announce: true });
     });
@@ -3375,6 +3447,16 @@
   function runCloudSync({ announce = false } = {}) {
     if (!cloudOn('cloudSync') || !api.cloudSync) return Promise.resolve(null);
     if (cloudSyncJob) return cloudSyncJob;
+    // A different account than the one this PC synced with: don't pour this
+    // library into it without asking. Sync stays off until turned on again.
+    const uid = state.account.user && state.account.user.id;
+    if (state.config.cloudSyncUser && uid && state.config.cloudSyncUser !== uid) {
+      saveConfigPatch({ cloudSync: false });
+      toast('Library sync is off for this account. Turn it on in Settings to merge this PC’s library into it.');
+      renderCloudCard();
+      return Promise.resolve(null);
+    }
+    if (!state.config.cloudSyncUser && uid) saveConfigPatch({ cloudSyncUser: uid });
     clearTimeout(cloudSyncTimer);
     state._syncing = true;
     renderCloudCard();

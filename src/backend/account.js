@@ -71,26 +71,31 @@ function createAccount(opts = {}) {
   const openExternal = opts.openExternal || (() => {});
   const configured = () => !!(cloudUrl && anonKey);
   const FILE = path.join(dir, 'session.bin');
+  const PENDING_FILE = path.join(dir, 'pending.bin'); // an unfinished sign-in survives a restart
 
   let session; // undefined = not read yet, null = signed out
   let refreshJob = null;
   let pending = null; // { kind, email?, provider?, server, verifier, timer }
   let lastError = null;
   let providersCache = null;
-  let mustSetPassword = false; // signed in through a "forgot password" link
 
   // ---------------------------------------------------------------- storage
 
   function readSession() {
     if (session !== undefined) return session;
     session = null;
+    if (!fs.existsSync(FILE)) return session;
     try {
-      if (fs.existsSync(FILE)) {
-        const parsed = JSON.parse(decrypt(fs.readFileSync(FILE, 'utf8').trim()) || 'null');
-        if (parsed && parsed.refresh_token) session = parsed;
-      }
+      const parsed = JSON.parse(decrypt(fs.readFileSync(FILE, 'utf8').trim()) || 'null');
+      if (parsed && parsed.refresh_token) session = parsed;
     } catch (e) {
       console.warn('[account] session unreadable:', e.message);
+    }
+    if (!session) {
+      // Written with a key this PC can't use anymore (or damaged). Say so once
+      // instead of looking silently signed out forever, and start clean.
+      lastError = 'Your saved sign-in couldn’t be read on this PC, so you’re signed out. Sign in again.';
+      try { fs.rmSync(FILE, { force: true }); } catch (_) {}
     }
     return session;
   }
@@ -178,7 +183,7 @@ function createAccount(opts = {}) {
       signedIn: !!s,
       user: s ? s.user : null,
       pending: pending ? { kind: pending.kind, email: pending.email || null, provider: pending.provider || null } : null,
-      mustSetPassword: !!s && mustSetPassword,
+      mustSetPassword: !!(s && s.mustSetPassword),
       error: lastError,
     };
   }
@@ -194,7 +199,7 @@ function createAccount(opts = {}) {
     try {
       const json = await auth('GET', 'settings');
       const ext = (json && json.external) || {};
-      const value = { email: !!ext.email, google: !!ext.google, signupOpen: !json.disable_signup };
+      const value = { email: !!ext.email, google: !!ext.google, discord: !!ext.discord, github: !!ext.github, signupOpen: !json.disable_signup };
       providersCache = { at: now(), value };
       return value;
     } catch (_) {
@@ -204,31 +209,60 @@ function createAccount(opts = {}) {
 
   // -------------------------------------------------------------- loopback
 
+  function savePending(entry) {
+    try {
+      if (!entry) { fs.rmSync(PENDING_FILE, { force: true }); return; }
+      fs.mkdirSync(dir, { recursive: true });
+      const { kind, email, provider, verifier, port, expires } = entry;
+      fs.writeFileSync(PENDING_FILE, encrypt(JSON.stringify({ kind, email, provider, verifier, port, expires })));
+    } catch (_) {}
+  }
+
   function cancel() {
     if (!pending) return false;
     clearTimeout(pending.timer);
     try { pending.server.close(); } catch (_) {}
     pending = null;
+    savePending(null);
     return true;
   }
 
   /** Start a one-shot callback server; resolves to its redirect URL. */
-  function listen(entry) {
+  function listen(entry, port = 0) {
+    if (!entry.expires) entry.expires = now() + PENDING_MS;
     return new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => handleCallback(entry, req, res));
       server.on('error', reject);
-      server.listen(0, '127.0.0.1', () => {
+      server.listen(port, '127.0.0.1', () => {
         entry.server = server;
+        entry.port = server.address().port;
         entry.timer = setTimeout(() => {
           if (pending !== entry) return;
           cancel();
           lastError = 'The sign-in link expired. Send a new one.';
           emit();
-        }, PENDING_MS);
-        resolve(`http://127.0.0.1:${server.address().port}/auth/callback`);
+        }, Math.max(1000, entry.expires - now()));
+        resolve(`http://127.0.0.1:${entry.port}/auth/callback`);
       });
     });
   }
+
+  /** After a restart: listen again where the emailed link / browser will land. */
+  async function resume() {
+    if (pending || !configured()) return;
+    let saved = null;
+    try { saved = fs.existsSync(PENDING_FILE) ? JSON.parse(decrypt(fs.readFileSync(PENDING_FILE, 'utf8').trim()) || 'null') : null; } catch (_) {}
+    if (!saved || !saved.verifier || !saved.port || !(saved.expires > now())) { savePending(null); return; }
+    const entry = { ...saved };
+    try {
+      await listen(entry, saved.port);
+      pending = entry;
+      emit();
+    } catch (_) {
+      savePending(null); // port taken by something else: the link can't be caught anymore
+    }
+  }
+  const resumed = resume();
 
   async function handleCallback(entry, req, res) {
     const send = (code, html) => {
@@ -258,11 +292,12 @@ function createAccount(opts = {}) {
     }
     try {
       const json = await auth('POST', 'token?grant_type=pkce', { auth_code: code, code_verifier: entry.verifier });
-      saveSession(toSession(json));
+      const next = toSession(json);
+      if (entry.kind === 'recovery') next.mustSetPassword = true;
+      saveSession(next);
       lastError = null;
-      mustSetPassword = entry.kind === 'recovery';
       cancel();
-      send(200, mustSetPassword
+      send(200, next.mustSetPassword
         ? page('Almost done', 'Go back to GameVault and choose a new password.', true)
         : page('You’re signed in', 'You can close this tab and go back to GameVault.', true));
     } catch (e) {
@@ -302,6 +337,7 @@ function createAccount(opts = {}) {
     const entry = { kind, email: addr, verifier };
     const redirect = await listen(entry);
     pending = entry;
+    savePending(entry);
     let json;
     try {
       json = await auth('POST', `${endpoint}?redirect_to=${encodeURIComponent(redirect)}`, {
@@ -341,7 +377,32 @@ function createAccount(opts = {}) {
     cancel();
     const json = await auth('POST', 'token?grant_type=password', { email: addr, password: pw });
     saveSession(toSession(json));
-    mustSetPassword = false;
+    lastError = null;
+    emit();
+    return status();
+  }
+
+  /**
+   * The 6-digit code from the email instead of the link (works when the link
+   * is opened on another device). Needs {{ .Token }} in the email templates.
+   */
+  async function verifyCode(code) {
+    const p = pending;
+    if (!p || p.kind === 'oauth' || !p.email) throw Object.assign(new Error('Ask for a new email first.'), { code: 'AUTH' });
+    const tokenStr = String(code || '').replace(/\s+/g, '');
+    if (!/^\d{6,10}$/.test(tokenStr)) throw Object.assign(new Error('Enter the code from the email.'), { code: 'AUTH' });
+    const type = p.kind === 'recovery' ? 'recovery' : p.kind === 'signup' ? 'signup' : 'email';
+    let json;
+    try {
+      json = await auth('POST', 'verify', { type, email: p.email, token: tokenStr });
+    } catch (e) {
+      if (e.code === 'AUTH' && /expired|invalid/i.test(e.message)) throw Object.assign(new Error('That code is wrong or expired. Check the newest email.'), { code: 'AUTH' });
+      throw e;
+    }
+    const next = toSession(json);
+    if (p.kind === 'recovery') next.mustSetPassword = true;
+    cancel();
+    saveSession(next);
     lastError = null;
     emit();
     return status();
@@ -353,7 +414,8 @@ function createAccount(opts = {}) {
     const access = await token();
     if (!access) throw Object.assign(new Error('Sign in first.'), { code: 'AUTH' });
     await auth('PUT', 'user', { password: pw }, access);
-    mustSetPassword = false;
+    const s = readSession();
+    if (s && s.mustSetPassword) { delete s.mustSetPassword; saveSession(s); }
     lastError = null;
     emit();
     return status();
@@ -367,6 +429,7 @@ function createAccount(opts = {}) {
     const entry = { kind: 'oauth', provider, verifier };
     const redirect = await listen(entry);
     pending = entry;
+    savePending(entry);
     const q = new URLSearchParams({
       provider,
       redirect_to: redirect,
@@ -391,6 +454,7 @@ function createAccount(opts = {}) {
       try {
         const json = await auth('POST', 'token?grant_type=refresh_token', { refresh_token: s.refresh_token });
         const next = toSession(json);
+        if (s.mustSetPassword) next.mustSetPassword = true;
         if (!next.user.email && s.user) next.user = { ...s.user, ...Object.fromEntries(Object.entries(next.user).filter(([, v]) => v)) };
         saveSession(next);
         return next.access_token;
@@ -417,15 +481,45 @@ function createAccount(opts = {}) {
       } catch (_) { /* signing out locally is what matters */ }
     }
     saveSession(null);
-    mustSetPassword = false;
     lastError = null;
     emit();
     return status();
   }
 
+  /**
+   * Delete the account and everything stored with it (server function
+   * delete-account: save files, synced library, key, then the user).
+   * Returns the deleted user's id so the caller can clear local state.
+   */
+  async function deleteAccount() {
+    const s = readSession();
+    const access = await token();
+    if (!s || !access) throw Object.assign(new Error('Sign in first.'), { code: 'AUTH' });
+    let res;
+    try {
+      res = await doFetch(`${cloudUrl}/functions/v1/delete-account`, {
+        method: 'POST',
+        headers: { apikey: anonKey, Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (_) {
+      throw Object.assign(new Error('Can’t reach Gamevault Cloud. Check your connection.'), { code: 'NETWORK' });
+    }
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || !json.ok) {
+      throw Object.assign(new Error((json && json.error && json.error.message) || `Couldn’t delete the account (${res.status})`), { code: 'SERVER' });
+    }
+    cancel();
+    saveSession(null);
+    lastError = null;
+    emit();
+    return { userId: s.user && s.user.id, status: status() };
+  }
+
   function clearError() { lastError = null; }
 
-  return { configured, status, providers, startEmail, signUp, resetPassword, signInPassword, setPassword, startOAuth, cancel, token, signOut, clearError };
+  return { configured, status, providers, startEmail, signUp, resetPassword, signInPassword, setPassword, verifyCode, startOAuth, cancel, token, signOut, deleteAccount, clearError, resumed };
 }
 
 module.exports = { createAccount };
