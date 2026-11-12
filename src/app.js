@@ -130,7 +130,33 @@
     el.style.transform = 'translateY(6px)';
     setTimeout(() => el.remove(), 250);
   }
+  /** Play a UI sound. Pass the element it came from and the sound sits
+   *  where that is on screen: a little left or right, a touch higher near
+   *  the top. */
+  function sfx(name, prio, el) {
+    if (!window.Sfx) return;
+    let opts;
+    if (el && el.getBoundingClientRect) {
+      const r = el.getBoundingClientRect();
+      if (r.width || r.height) {
+        const cx = (r.left + r.width / 2) / Math.max(1, innerWidth);
+        const cy = (r.top + r.height / 2) / Math.max(1, innerHeight);
+        opts = { pan: (cx * 2 - 1) * 0.45, pitch: (0.5 - cy) * 2 };
+      }
+    }
+    window.Sfx.play(name, prio, opts);
+  }
+  function applySfxConfig() {
+    if (!window.Sfx) return;
+    const c = state.config || {};
+    window.Sfx.setEnabled(c.sfx !== false);
+    window.Sfx.setVolume(typeof c.sfxVolume === 'number' ? c.sfxVolume : 0.6);
+    window.Sfx.setTheme(c.sfxTheme || 'crisp');
+    window.Sfx.setNav(c.sfxNav !== false);
+  }
+
   function toast(message, kind, actions) {
+    sfx(kind === 'error' ? 'error' : 'notify');
     const wrap = $('#toasts');
     const cls = 'toast' + (kind === 'error' ? ' is-error' : kind === 'ok' ? ' is-ok' : '');
     const live = () => [...wrap.children].filter((t) => !t.classList.contains('is-leaving'));
@@ -1510,6 +1536,7 @@
 
   async function selectShelfGame(id) {
     if (String(id) === state.shelfId) return;
+    sfx('move', null, $('#shelf-strip').querySelector(`.shelf-tile[data-id="${CSS.escape(String(id))}"]`));
     state.shelfId = String(id);
     for (const tile of $('#shelf-strip').querySelectorAll('.shelf-tile')) {
       tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
@@ -2013,6 +2040,7 @@
 
   function openDetail(id) {
     window.__gvPerfMark && window.__gvPerfMark('detail');
+    sfx('open');
     if (state.settingsOpen) closeSettings({ restoreFocus: false });
     const active = document.activeElement;
     state._focusReturn = (active && active.id === 'q') ? null : active;
@@ -2032,6 +2060,7 @@
   }
 
   function closeDetail() {
+    if (state.selectedId) sfx('close');
     stopDetailTick();
     state.selectedId = null;
     const view = $('#game-view');
@@ -2544,6 +2573,7 @@
 
   function openModal(html, { className = '' } = {}) {
     const wrap = $('#modal');
+    sfx('open');
     modalSeq += 1;
     state._modalOpener = document.activeElement;
     const app = $('#app');
@@ -2588,6 +2618,7 @@
 
   function closeModal() {
     const wrap = $('#modal');
+    if (!wrap.hidden) sfx('close');
     const card = wrap.firstElementChild;
     modalSeq += 1;
     const seq = modalSeq;
@@ -4538,6 +4569,7 @@
     if (!state.settingsOpen) {
       const active = document.activeElement;
       state._settingsFocusReturn = (active && active.id === 'q') ? null : active;
+      sfx('open');
     }
     state.settingsOpen = true;
     state.settingsSection = SETTINGS_SECTIONS.some((s) => s.id === section) ? section : (state.settingsSection || 'general');
@@ -4556,6 +4588,7 @@
   function closeSettings({ restoreFocus = true } = {}) {
     const view = settingsView();
     if (!view || !state.settingsOpen) return;
+    sfx('close');
     state.settingsOpen = false;
     view.hidden = true;
     view.innerHTML = '';
@@ -4576,26 +4609,27 @@
     if (!view.querySelector('.st-wrap')) {
       view.innerHTML = `
         <div class="st-wrap">
-          <nav class="st-nav" aria-label="Settings sections">
+          <nav class="st-nav" aria-label="Settings sections" data-pad-region="st-nav">
             <button type="button" class="st-back" data-st-close>
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
               Library
             </button>
             <div class="st-nav-title">Settings</div>
-            <div class="st-tabs" role="tablist" aria-orientation="vertical">
+            <div class="st-tabs" role="tablist" aria-orientation="vertical" data-pad-enter>
               ${SETTINGS_SECTIONS.map((s) => `
                 <button type="button" class="st-tab" role="tab" id="st-tab-${s.id}" data-st-section="${s.id}" aria-controls="st-panel">
                   ${stIcon(s.icon)}<span>${esc(s.label)}</span>
                 </button>`).join('')}
             </div>
           </nav>
-          <div class="st-panel" id="st-panel" role="tabpanel" tabindex="-1"></div>
+          <div class="st-panel" id="st-panel" role="tabpanel" tabindex="-1" data-pad-region="st-panel"></div>
         </div>`;
       view.querySelector('[data-st-close]').onclick = () => closeSettings();
       const tabs = [...view.querySelectorAll('.st-tab')];
       for (const tab of tabs) {
         tab.onclick = () => {
           if (state.settingsSection === tab.dataset.stSection) return;
+          sfx('tab');
           state.settingsSection = tab.dataset.stSection;
           renderSettings();
         };
@@ -4718,6 +4752,14 @@
             stRow('Closing the window', toTray ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.',
               stPills('data-close-mode', [['tray', 'Hide to tray'], ['quit', 'Quit']], toTray ? 'tray' : 'quit'), { descId: 'st-close-desc' }) +
             stRow('Default layout', 'How the library opens.', stPills('data-layout', [['shelf', 'Shelf'], ['poster', 'Cards']], state.view))) +
+          stCard('Sound',
+            stRow('Sound effects', 'Small sounds when you click, move around, open things and launch games. Never plays over a game.',
+              stSwitch('data-sfx-on', state.config.sfx !== false, { label: 'Sound effects' })) +
+            stRow('Volume', '', `<input type="range" class="st-range" data-sfx-vol min="0" max="100" step="5" value="${Math.round((typeof state.config.sfxVolume === 'number' ? state.config.sfxVolume : 0.6) * 100)}" aria-label="Sound volume" />`) +
+            stRow('Style', 'Crisp is short and clicky, like a real button. Airy is soft and glassy with a little room around it. Pick one to hear it.',
+              stPills('data-sfx-theme', [['crisp', 'Crisp'], ['airy', 'Airy']], state.config.sfxTheme || 'crisp', { disabled: state.config.sfx === false })) +
+            stRow('Navigation sounds', 'A tiny sound each time you move to another item with a controller or the arrow keys.',
+              stSwitch('data-sfx-nav', state.config.sfxNav !== false, { label: 'Navigation sounds', disabled: state.config.sfx === false }))) +
           stCard('In-game overlay',
             info.wayland
               ? stRow('Shortcut', 'Wayland blocks global hotkeys. Bind this in your compositor:<br><code class="st-code">gamevault --toggle-overlay</code>', '')
@@ -4733,6 +4775,35 @@
             if (d) d.textContent = v === 'tray' ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.';
           });
           wirePills(panel, '[data-layout]', (v) => { if (v !== state.view) cycleView(); });
+          const sfxOn = panel.querySelector('[data-sfx-on]');
+          const sfxVol = panel.querySelector('[data-sfx-vol]');
+          if (sfxOn) sfxOn.onchange = () => {
+            saveConfigPatch({ sfx: sfxOn.checked });
+            applySfxConfig();
+            if (sfxVol) sfxVol.disabled = !sfxOn.checked;
+            for (const pill of panel.querySelectorAll('[data-sfx-theme] .pill')) pill.disabled = !sfxOn.checked;
+            const navSw = panel.querySelector('[data-sfx-nav]');
+            if (navSw) { navSw.disabled = !sfxOn.checked; navSw.closest('.st-switch')?.classList.toggle('is-disabled', !sfxOn.checked); }
+          };
+          if (sfxVol) {
+            sfxVol.disabled = state.config.sfx === false;
+            sfxVol.oninput = () => { if (window.Sfx) window.Sfx.setVolume(Number(sfxVol.value) / 100); };
+            sfxVol.onchange = () => {
+              saveConfigPatch({ sfxVolume: Number(sfxVol.value) / 100 });
+              applySfxConfig();
+              if (window.Sfx) window.Sfx.preview('select');
+            };
+          }
+          wirePills(panel, '[data-sfx-theme]', (v) => {
+            saveConfigPatch({ sfxTheme: v });
+            applySfxConfig();
+            if (window.Sfx) window.Sfx.previewTheme();
+          });
+          const sfxNav = panel.querySelector('[data-sfx-nav]');
+          if (sfxNav) sfxNav.onchange = () => {
+            saveConfigPatch({ sfxNav: sfxNav.checked });
+            applySfxConfig();
+          };
         },
       };
     },
@@ -4845,12 +4916,32 @@
     },
 
     async controller() {
+      const pads = livePads();
+      const on = padEnabled();
+      const glyph = ['xbox', 'ps'].includes(state.config.padGlyphs) ? state.config.padGlyphs : 'auto';
+      const status = pads.length
+        ? `Connected: ${pads.map((p) => esc(window.PadInput ? window.PadInput.padName(p.id) : 'Controller')).join(', ')}.`
+        : 'No controller found yet: connect one and press any button.';
       return {
-        html: stCard('Controller & Big Picture',
-          stRow('Controller', 'Navigate the whole app with an Xbox or PlayStation controller.', '', { disabled: true }) +
-          stRow('Button style', 'Which button icons to show.', stPills('data-glyphs', [['auto', 'Automatic'], ['xbox', 'Xbox'], ['ps', 'PlayStation']], 'auto', { disabled: true }), { disabled: true }) +
-          stRow('Big Picture mode', 'A fullscreen, TV-sized GameVault. Open it from the app, with the controller’s Home button, or on startup.', '', { disabled: true }),
-        { soon: true }),
+        html:
+          stCard('Controller',
+            stRow('Use a controller', `Works everywhere in GameVault, next to your mouse and keyboard. ${status}`,
+              stSwitch('data-pad-on', on, { label: 'Use a controller' })) +
+            stRow('Button style', 'Which button icons to show.', stPills('data-glyphs', [['auto', 'Automatic'], ['xbox', 'Xbox'], ['ps', 'PlayStation']], glyph)) +
+            stRow('Buttons', padLegendHtml(), '', { wide: true })) +
+          stCard('Big Picture',
+            stRow('Big Picture mode', 'A fullscreen, TV-sized GameVault. Open it from the app, with the controller’s Home button (or View + Menu), or on startup.', '', { disabled: true }),
+          { soon: true }),
+        wire(panel) {
+          const sw = panel.querySelector('[data-pad-on]');
+          if (sw) sw.onchange = () => { saveConfigPatch({ padEnabled: sw.checked }); if (!sw.checked) setPadMode(false); };
+          wirePills(panel, '[data-glyphs]', (v) => {
+            saveConfigPatch({ padGlyphs: v });
+            const legend = panel.querySelector('[data-pad-legend]');
+            if (legend) legend.outerHTML = padLegendHtml();
+            paintPadHints();
+          });
+        },
       };
     },
 
@@ -5119,6 +5210,7 @@
 
   async function setFilter(filter) {
     window.__gvPerfMark && window.__gvPerfMark('filter:' + filter);
+    if (filter !== state.filter) sfx('tab');
     if (state.settingsOpen) closeSettings({ restoreFocus: false });
     if (state.selectedId) closeDetail();
     state.filter = filter;
@@ -5183,6 +5275,7 @@
     const live = state.live[key];
 
     if (typeof live === 'number' || live === 'stopping') {
+      sfx('close');
       state.live[key] = 'stopping';
       refreshGameUi(g);
       const done = () => {
@@ -5214,6 +5307,7 @@
       return;
     }
 
+    sfx('launch');
     state.live[key] = 'launching';
     armLaunchWatchdog(g);
     refreshGameUi(g);
@@ -5411,12 +5505,12 @@
       if (modalOpen || spotHooks.isOpen()) return;
       const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-      if (!typing && state.view === 'shelf' && state.filter !== 'Want' && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+      if (!typing && (!e.gvPad || padInShelfStrip()) && state.view === 'shelf' && state.filter !== 'Want' && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
         const list = filteredGames();
         if (list.length) {
-          e.preventDefault();
           const idx = Math.max(0, list.findIndex((g) => String(g.id) === state.shelfId));
           const next = Math.max(0, Math.min(list.length - 1, idx + (e.key === 'ArrowRight' ? 1 : -1)));
+          if (next !== idx || !e.gvPad) e.preventDefault();
           if (next !== idx) selectShelfGame(list[next].id);
         }
       }
@@ -5639,6 +5733,10 @@
     applyTier(state.tier);
     applyView();
     wire();
+    applySfxConfig();
+    initGameActions();
+    initUiSounds();
+    initController();
 
     updateSortUi();
     syncPerfRecorder();
@@ -6564,6 +6662,7 @@
       const prev = from || document.activeElement;
       returnFocus = prev && prev !== input && prev !== document.body && !spot.contains(prev) ? prev : null;
       isOpen = true;
+      sfx('open', 3);
       spot.classList.add('open'); scrim.classList.add('open');
       spot.setAttribute('aria-expanded', 'true'); input.setAttribute('aria-expanded', 'true');
       if (!keepValue) input.value = '';
@@ -6573,6 +6672,7 @@
     function closeSpot({ restoreFocus = true } = {}) {
       if (!isOpen) return;
       isOpen = false;
+      sfx('close', 3);
       spot.classList.remove('open'); scrim.classList.remove('open');
       spot.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-expanded', 'false');
       input.removeAttribute('aria-activedescendant');
@@ -6643,7 +6743,11 @@
       requestAnimationFrame(() => requestAnimationFrame(() => spot.classList.remove('snap')));
     }
     addEventListener('resize', resync);
-    new ResizeObserver(() => { if (!isOpen) resync(); }).observe(slot);
+    // The slot can move without changing size: the title next to it or the
+    // buttons after it change width (Sort hides on the Wishlist, the title
+    // turns into "Settings"…) and the grid re-centres it. Watch those too.
+    const slotRO = new ResizeObserver(() => { if (!isOpen) resync(); });
+    for (const el of [slot, $s('#topbar'), $s('#filter-title'), $s('#topbar .top-actions')]) if (el) slotRO.observe(el);
 
     window.__spotToggle = () => (isOpen ? closeSpot() : openSpot());
     window.__spotOpen = () => openSpot();
@@ -6663,6 +6767,577 @@
     }
     setTimeout(() => { if (!isOpen) resync(); }, 800);
   })();
+
+  // ---------------------------------------------------------------------------
+  // Controller (M5). Works on every screen, next to mouse and keyboard: the
+  // pad moves real focus, and each screen's own keyboard handling (menus,
+  // combo boxes, the spotlight, settings tabs, the shelf) gets the same keys
+  // a keyboard would send. src/lib/padinput.js reads the pad.
+  // ---------------------------------------------------------------------------
+
+  const PAD_FILTERS = ['All', 'Playing', 'Finished', 'Want'];
+  const PAD_NATIVE = 'button, a[href], input:not([type="hidden"]), select, textarea, summary';
+  const PAD_KEYS = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' };
+  const PAD_GLYPH_TEXT = {
+    xbox: { a: 'A', b: 'B', x: 'X', y: 'Y', lb: 'LB', rb: 'RB', lt: 'LT', rt: 'RT', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS' },
+    ps: { a: '✕', b: '○', x: '□', y: '△', lb: 'L1', rb: 'R1', lt: 'L2', rt: 'R2', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS' },
+  };
+  const pad = { reader: null, raf: 0, on: false, glyphs: 'xbox', away: true, mx: -1, my: -1, lastT: 0, ensure: 0 };
+
+  function padEnabled() { return !state.config || state.config.padEnabled !== false; }
+  function padGlyphSet() {
+    const g = state.config && state.config.padGlyphs;
+    return g === 'xbox' || g === 'ps' ? g : pad.glyphs;
+  }
+  function livePads() {
+    try { return Array.from(navigator.getGamepads() || []).filter(Boolean); } catch (_) { return []; }
+  }
+
+  // ---- game options: right-click a game, the Menu key, or ≡ on a controller
+
+  const GA_ICONS = {
+    play: '<path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/>',
+    stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/>',
+    move: '<path d="M12 5v14M5 12h14"/>',
+    open: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 9h17"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+    finish: '<path d="m4.5 12.5 5 5L19.5 7"/>',
+    unfinish: '<path d="M7 4.5v15l12-7.5z"/>',
+    wish: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/>',
+    folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
+    art: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4.5v4h-4"/>',
+  };
+
+  function openGameActions(g) {
+    if (!g) return;
+    const id = String(g.id);
+    const wish = gvIsWishlisted(g);
+    const running = typeof state.live[id] === 'number';
+    const items = [];
+    if (wish) items.push(['move', 'Move to library', 'move']);
+    else items.push(['play', running ? 'Stop playing' : 'Play', running ? 'stop' : 'play']);
+    if (state.selectedId !== id) items.push(['open', 'Open game page', 'open']);
+    items.push(['edit', 'Edit game', 'edit']);
+    if (!wish) {
+      items.push(g.status === 'Finished' ? ['finish', 'Mark as playing', 'unfinish'] : ['finish', 'Mark as finished', 'finish']);
+      items.push(['wish', 'Add to wishlist', 'wish']);
+    }
+    if (g.exePath) items.push(['folder', 'Show in folder', 'folder']);
+    items.push(['art', 'Refresh artwork', 'art']);
+    const card = openModal(`
+      <div class="ga">
+        <div class="ga-head">
+          <div class="ga-cover"></div>
+          <div class="ga-text"><div class="ga-title">${esc(g.name || 'Untitled')}</div><div class="ga-sub">${esc(statusLabel(g))}</div></div>
+        </div>
+        <div class="ga-list" role="menu">
+          ${items.map(([act, label, icon]) => `<button type="button" class="ga-item" role="menuitem" data-ga="${act}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${GA_ICONS[icon]}</svg><span>${esc(label)}</span></button>`).join('')}
+        </div>
+      </div>`, { className: 'ga-modal' });
+    if (!card) return;
+    const cover = card.querySelector('.ga-cover');
+    const src = g._cover || g.coverUrl;
+    if (cover && src) cover.style.backgroundImage = cssUrl(src);
+    const first = card.querySelector('.ga-item');
+    if (first) requestAnimationFrame(() => first.focus({ preventScroll: true }));
+    const list = card.querySelector('.ga-list');
+    list.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      const btns = Array.from(list.querySelectorAll('.ga-item'));
+      const i = btns.indexOf(document.activeElement);
+      if (i < 0) return;
+      e.preventDefault();
+      btns[(i + (e.key === 'ArrowDown' ? 1 : -1) + btns.length) % btns.length].focus();
+    });
+    for (const btn of card.querySelectorAll('[data-ga]')) {
+      btn.onclick = () => {
+        const act = btn.dataset.ga;
+        closeModal();
+        if (act === 'play') togglePlay(id);
+        else if (act === 'move') moveToLibrary(g);
+        else if (act === 'open') openDetail(id);
+        else if (act === 'edit') openGameModal(g);
+        else if (act === 'finish') {
+          const done = g.status !== 'Finished';
+          setFinished(g, done);
+          toast(done ? 'Marked as finished' : 'Marked as playing', 'ok');
+        }
+        else if (act === 'wish') toggleDetailWish(g);
+        else if (act === 'folder') api.showInFolder(g.exePath);
+        else if (act === 'art') { refreshArt(g, { focus: false }); toast('Artwork refreshed', 'ok'); }
+      };
+    }
+  }
+
+  function gameFromEl(el) {
+    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id]');
+    return host ? state.games.find((g) => String(g.id) === host.dataset.id) || null : null;
+  }
+
+  function initGameActions() {
+    // right-click a game anywhere (cards, shelf covers, wishlist, its page)
+    document.addEventListener('contextmenu', (e) => {
+      if (!$('#modal').hidden) return;
+      let g = gameFromEl(e.target);
+      if (!g && state.selectedId && e.target.closest && e.target.closest('#game-view')) {
+        g = state.games.find((x) => String(x.id) === state.selectedId) || null;
+      }
+      if (!g) return;
+      e.preventDefault();
+      openGameActions(g);
+    });
+    // the keyboard's Menu key, or Shift+F10
+    document.addEventListener('keydown', (e) => {
+      if (e.gvPad || !(e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) return;
+      if (!$('#modal').hidden || spotHooks.isOpen()) return;
+      const g = gameFromEl(document.activeElement)
+        || (state.selectedId ? state.games.find((x) => String(x.id) === state.selectedId) : null);
+      if (!g) return;
+      e.preventDefault();
+      openGameActions(g);
+    });
+  }
+
+  // ---- interface sounds not tied to one action: clicks, switches, and
+  // focus moving by keyboard or controller
+  function initUiSounds() {
+    let lastInput = '';
+    let lastInputAt = 0;
+    const mark = (kind) => { lastInput = kind; lastInputAt = performance.now(); };
+    addEventListener('keydown', (e) => mark(e.gvPad ? 'pad' : 'key'), true);
+    addEventListener('mousedown', () => mark('mouse'), true);
+    document.addEventListener('click', (e) => {
+      const el = e.target.closest && e.target.closest('button, a[href], [role="button"], [role="tab"], [role="option"], .card, summary');
+      if (!el || el.disabled) return;
+      sfx('click', null, el);
+    }, true);
+    document.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t && t.matches && t.matches('input[type="checkbox"]')) sfx(t.checked ? 'toggleOn' : 'toggleOff', null, t.closest('.st-switch') || t);
+    });
+    document.addEventListener('focusin', (e) => {
+      const recent = performance.now() - lastInputAt < 500;
+      if ((recent && lastInput === 'key') || pad.on) sfx('move', null, e.target);
+    });
+  }
+
+  function initController() {
+    if (!window.PadInput || !navigator.getGamepads) return;
+    pad.reader = window.PadInput.createReader();
+    const hints = document.createElement('div');
+    hints.id = 'pad-hints';
+    hints.className = 'pad-hints';
+    hints.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(hints);
+
+    addEventListener('gamepadconnected', (e) => {
+      pad.glyphs = window.PadInput.glyphsFor(e.gamepad && e.gamepad.id);
+      if (padEnabled() && document.hasFocus()) toast(`${window.PadInput.padName(e.gamepad && e.gamepad.id)} connected`, 'ok');
+      startPadLoop();
+      if (state.settingsOpen && state.settingsSection === 'controller') renderSettings();
+    });
+    addEventListener('gamepaddisconnected', () => {
+      if (!livePads().length) setPadMode(false);
+      if (state.settingsOpen && state.settingsSection === 'controller') renderSettings();
+    });
+    // a pad connected before launch appears on its first button press
+    // (that fires gamepadconnected); if one is already visible, start now
+    startPadLoop();
+
+    // the mouse or keyboard takes over as soon as it's used
+    addEventListener('mousemove', (e) => {
+      if (!pad.on) return;
+      if (pad.mx < 0) { pad.mx = e.screenX; pad.my = e.screenY; return; }
+      if (Math.abs(e.screenX - pad.mx) + Math.abs(e.screenY - pad.my) > 8) setPadMode(false);
+    }, { passive: true });
+    addEventListener('mousedown', () => setPadMode(false), true);
+    addEventListener('wheel', () => setPadMode(false), { passive: true, capture: true });
+    addEventListener('keydown', (e) => { if (!e.gvPad) setPadMode(false); }, true);
+    document.addEventListener('focusin', () => { if (pad.on) paintPadHints(); });
+  }
+
+  function startPadLoop() {
+    if (pad.raf || !pad.reader) return;
+    const tick = (t) => {
+      pad.raf = 0;
+      const pads = livePads();
+      if (!pads.length) { pad.reader.reset(); pad.away = true; return; } // the next connect restarts it
+      const dt = pad.lastT ? Math.min(64, t - pad.lastT) : 16;
+      pad.lastT = t;
+      // never act on a pad while a game (or anything else) has focus
+      if (!padEnabled() || !document.hasFocus() || document.hidden) {
+        pad.reader.reset();
+        pad.away = true;
+      } else {
+        const out = pad.reader.poll(pads, t);
+        if (out.active) pad.glyphs = out.glyphs;
+        // first frame back: whatever is already held is not a new press
+        if (pad.away) pad.away = false;
+        else {
+          if (out.actions.length) {
+            setPadMode(true);
+            for (const a of out.actions) {
+              try { padAction(a); } catch (err) { console.warn('pad action failed', a, err); }
+            }
+          }
+          if (out.scroll.y || out.scroll.x) { setPadMode(true); padScroll(out.scroll.y * dt * 1.6); }
+        }
+      }
+      pad.raf = requestAnimationFrame(tick);
+    };
+    pad.raf = requestAnimationFrame(tick);
+  }
+
+  function setPadMode(on) {
+    if (pad.on === on) return;
+    pad.on = on;
+    pad.mx = -1;
+    document.documentElement.classList.toggle('is-pad', on);
+    if (on) paintPadHints();
+  }
+
+  // ---- where focus may go
+
+  function padScope() {
+    const modal = $('#modal');
+    if (modal && !modal.hidden) return modal;
+    if (spotHooks.isOpen()) return $('#spot');
+    const sort = $('#sort-menu');
+    if (sort && !sort.hidden) return sort;
+    const menu = Array.from(document.querySelectorAll('[role="menu"]')).find((m) => !m.hidden && m.getClientRects().length);
+    if (menu) return menu;
+    return $('#app');
+  }
+
+  function padFocusable(el) {
+    if (!el || el.disabled || !el.isConnected) return false;
+    if (el.closest('[hidden], [inert], [aria-hidden="true"], [data-pad-skip]')) return false;
+    const native = el.matches(PAD_NATIVE);
+    if (!native && !(el.hasAttribute('tabindex') && el.tabIndex >= 0)) return false;
+    // inside a focusable card the card is the stop, not the buttons in it
+    const host = el.parentElement && el.parentElement.closest('[tabindex]:not([tabindex="-1"])');
+    if (host && !host.matches(PAD_NATIVE)) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    // also catches the inside of a closed <details>, which still has a size
+    if (el.checkVisibility && !el.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })) return false;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none') return false;
+    if (cs.opacity === '0' && !el.matches('input[type="checkbox"], input[type="radio"]')) return false;
+    return true;
+  }
+
+  function padCandidates(root) {
+    if (!root) return [];
+    return Array.from(root.querySelectorAll(`${PAD_NATIVE}, [tabindex]`)).filter(padFocusable);
+  }
+
+  function padPane() {
+    if (state.settingsOpen) return $('#settings-view');
+    if (state.selectedId) return $('#game-view');
+    if (state.filter === 'Want') return $('#wishlist-view');
+    return state.view === 'shelf' ? $('#shelf') : $('#library');
+  }
+
+  function padInShelfStrip() {
+    const strip = $('#shelf-strip');
+    return !!strip && strip.contains(document.activeElement);
+  }
+
+  function padFocus(el, { select = true } = {}) {
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    if (select && el.classList.contains('shelf-tile') && el.dataset.id) selectShelfGame(el.dataset.id);
+    paintPadHints();
+  }
+
+  /** Focus the obvious thing on the current screen. */
+  function padFocusDefault() {
+    const scope = padScope();
+    let el = null;
+    if (scope === $('#app')) {
+      if (state.settingsOpen) el = $('#settings-view .st-tab.is-active');
+      else if (state.selectedId) el = $('#game-view .gvx-play');
+      else if (state.filter !== 'Want') el = state.view === 'shelf' ? $('#shelf-strip .shelf-tile.is-active') : $('#grid .card');
+      if (!padFocusable(el)) {
+        const vh = innerHeight;
+        // something to press beats a text box (there's no on-screen keyboard yet)
+        const list = padCandidates(padPane() || $('#main'))
+          .sort((x, y) => Number(x.matches('input:not([type="checkbox"]):not([type="radio"]), textarea')) - Number(y.matches('input:not([type="checkbox"]):not([type="radio"]), textarea')));
+        el = list.find((x) => { const r = x.getBoundingClientRect(); return r.top >= 0 && r.bottom <= vh; }) || list[0] || null;
+      }
+    } else {
+      const list = padCandidates(scope);
+      el = list.find((x) => x.matches('.is-active, [aria-selected="true"], [autofocus]')) || list[0] || null;
+    }
+    if (el) padFocus(el, { select: false });
+  }
+
+  /** After a screen change: if focus got lost (or should move), put it somewhere useful. */
+  function padEnsureFocus(force = false) {
+    clearTimeout(pad.ensure);
+    const check = (again) => {
+      if (!pad.on) return;
+      const a = document.activeElement;
+      const scope = padScope();
+      const ok = a && a !== document.body && scope.contains(a) && padFocusable(a);
+      if (force || !ok) padFocusDefault();
+      else paintPadHints();
+      if (again) pad.ensure = setTimeout(() => check(false), 320);
+    };
+    pad.ensure = setTimeout(() => check(true), 140);
+  }
+
+  // ---- actions
+
+  function padKey(key, target) {
+    const t = target || document.activeElement || document.body;
+    const ev = new KeyboardEvent('keydown', {
+      key, code: key === ' ' ? 'Space' : key, bubbles: true, cancelable: true,
+    });
+    ev.gvPad = true;
+    t.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  }
+
+  function padCycleSelect(sel, d) {
+    const n = sel.options.length;
+    if (!n) return;
+    sel.selectedIndex = (sel.selectedIndex + d + n) % n;
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function padAction(a) {
+    if (a in PAD_KEYS) return padMove(a);
+    if (a === 'confirm') { sfx('select', null, document.activeElement); padConfirm(); return padEnsureFocus(); }
+    if (a === 'back') { sfx('back'); padBack(); return padEnsureFocus(); }
+    if (a === 'play') return padPlay();
+    if (a === 'search') {
+      if (!$('#modal').hidden) return;
+      if (spotHooks.isOpen()) spotHooks.close(); else spotHooks.open();
+      return padEnsureFocus();
+    }
+    if (a === 'prev' || a === 'next') return padTab(a === 'next' ? 1 : -1);
+    if (a === 'pageUp' || a === 'pageDown') {
+      const s = padScroller();
+      return padScroll((a === 'pageDown' ? 1 : -1) * s.clientHeight * 0.85, true);
+    }
+    if (a === 'menu') {
+      if (!$('#modal').hidden || spotHooks.isOpen()) return;
+      // on a game: its options (edit, finished, folder…); anywhere else: Settings
+      const g = padMenuGame();
+      if (g) { openGameActions(g); return padEnsureFocus(); }
+      if (state.settingsOpen) closeSettings(); else openSettings();
+      return padEnsureFocus(true);
+    }
+    if (a === 'view') {
+      if (!$('#modal').hidden || spotHooks.isOpen() || state.settingsOpen) return;
+      // on a game page: edit it straight away
+      if (state.selectedId) {
+        const g = state.games.find((x) => String(x.id) === state.selectedId);
+        if (g) openGameModal(g);
+        return padEnsureFocus();
+      }
+      if (state.filter === 'Want') return;
+      cycleView();
+      return padEnsureFocus(true);
+    }
+    if (a === 'sidebar') {
+      if (!$('#modal').hidden || spotHooks.isOpen()) return;
+      const t = $('#side-toggle');
+      if (t) { sfx('tab'); t.click(); }
+      return;
+    }
+    if (a === 'top') {
+      const s = padScroller();
+      sfx('back', 1);
+      s.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+      return;
+    }
+    if (a === 'guide') toast('Big Picture mode is coming soon', 'ok');
+  }
+
+  function padMove(dir) {
+    const scope = padScope();
+    const active = document.activeElement;
+    if (!active || active === document.body || !scope.contains(active) || !padFocusable(active)) {
+      padFocusDefault();
+      return;
+    }
+    if (active.matches('select') && (dir === 'left' || dir === 'right')) { padCycleSelect(active, dir === 'right' ? 1 : -1); sfx('move', null, active); return; }
+    if (active.matches('input[type="range"]') && (dir === 'left' || dir === 'right')) {
+      if (dir === 'right') active.stepUp(); else active.stepDown();
+      active.dispatchEvent(new Event('input', { bubbles: true }));
+      active.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    // the focused widget's own arrow keys come first (lists, tabs, menus, the
+    // shelf). A text box only gets them while its suggestion list is open:
+    // otherwise the pad just moves on past it.
+    const textBox = active.matches('input:not([type="checkbox"]):not([type="radio"]), textarea');
+    const ownsArrows = !textBox || active.getAttribute('aria-expanded') === 'true';
+    if (ownsArrows && padKey(PAD_KEYS[dir], active)) {
+      const strip = $('#shelf-strip');
+      if (strip && strip.contains(document.activeElement)) {
+        const tile = strip.querySelector('.shelf-tile.is-active');
+        if (tile && tile !== document.activeElement) padFocus(tile, { select: false });
+      }
+      paintPadHints();
+      return;
+    }
+    if (spotHooks.isOpen()) return;
+    // Up and down stay in their column: the sidebar and the settings menu are
+    // only entered and left sideways, never by running off the end of a list.
+    const region = (el) => { const r = el.closest('[data-pad-region]'); return r ? r.dataset.padRegion : 'main'; };
+    const here = region(active);
+    const vertical = dir === 'up' || dir === 'down';
+    const cands = padCandidates(scope)
+      .filter((el) => el !== active && (!vertical || region(el) === here))
+      .map((el) => ({ el, rect: el.getBoundingClientRect() }));
+    const next = window.PadInput.pickNext(active.getBoundingClientRect(), cands, dir);
+    if (next) {
+      // coming into a list from outside (sidebar, settings menu, cover strip):
+      // land on its selected item, not whichever happens to be nearest
+      const box = next.el.closest('[data-pad-enter]');
+      const picked = box && !box.contains(active)
+        ? Array.from(box.querySelectorAll('.is-active, [aria-selected="true"]')).find(padFocusable)
+        : null;
+      padFocus(picked || next.el);
+      return;
+    }
+    // nothing further that way: scroll, so text below the last button is reachable
+    const s = padScroller();
+    const room = dir === 'down' ? s.scrollHeight - s.clientHeight - s.scrollTop : dir === 'up' ? s.scrollTop : 0;
+    if (room > 2) padScroll((dir === 'down' ? 1 : -1) * s.clientHeight * 0.4, true);
+    else sfx('bump');
+  }
+
+  function padConfirm() {
+    if (spotHooks.isOpen()) { padKey('Enter', $('#q')); return; }
+    const scope = padScope();
+    const el = document.activeElement;
+    if (!el || el === document.body || !scope.contains(el)) { padFocusDefault(); return; }
+    if (el.matches('select')) { padCycleSelect(el, 1); return; }
+    if (el.matches('input[type="checkbox"], input[type="radio"]')) { el.click(); return; }
+    if (el.classList.contains('shelf-tile') && el.dataset.id) { openDetail(el.dataset.id); return; }
+    if (padKey('Enter', el)) return;
+    if (el.matches('input, textarea')) return; // no on-screen keyboard yet
+    el.click();
+  }
+
+  function padBack() {
+    const atRoot = !state.selectedId && !state.settingsOpen && $('#modal').hidden && !spotHooks.isOpen();
+    const el = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.body;
+    // popups (sort menu, the game page menu, combo boxes) close on their own Escape
+    if (padKey('Escape', el)) return;
+    // nothing was open: B takes you back to the library's current game
+    if (atRoot) padFocusDefault();
+  }
+
+  /** The game the Menu button would act on, or null. */
+  function padMenuGame() {
+    if (!$('#modal').hidden || spotHooks.isOpen() || state.settingsOpen) return null;
+    if (state.selectedId) return state.games.find((g) => String(g.id) === state.selectedId) || null;
+    const el = document.activeElement;
+    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id]');
+    if (host) return state.games.find((g) => String(g.id) === host.dataset.id) || null;
+    if (state.view === 'shelf' && state.filter !== 'Want' && el && el.closest && el.closest('#shelf')) {
+      return state.games.find((g) => String(g.id) === state.shelfId) || null;
+    }
+    return null;
+  }
+
+  function padGame() {
+    if (state.selectedId) return state.games.find((g) => String(g.id) === state.selectedId) || null;
+    const el = document.activeElement;
+    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id]');
+    const id = host ? host.dataset.id : (state.view === 'shelf' && state.filter !== 'Want' ? state.shelfId : null);
+    return id ? state.games.find((g) => String(g.id) === String(id)) || null : null;
+  }
+
+  function padPlay() {
+    if (!$('#modal').hidden || spotHooks.isOpen() || state.settingsOpen) return;
+    const g = padGame();
+    if (g && !gvIsWishlisted(g)) togglePlay(g.id);
+    setTimeout(paintPadHints, 60);
+  }
+
+  function padTab(d) {
+    if (!$('#modal').hidden || spotHooks.isOpen()) return;
+    if (state.settingsOpen) {
+      const tabs = Array.from(document.querySelectorAll('#settings-view .st-tab'));
+      const i = tabs.findIndex((t) => t.classList.contains('is-active'));
+      const next = tabs[(i + d + tabs.length) % tabs.length];
+      if (next) { next.click(); padFocus(next); }
+      return;
+    }
+    if (state.selectedId) closeDetail();
+    const i = Math.max(0, PAD_FILTERS.indexOf(state.filter));
+    setFilter(PAD_FILTERS[(i + d + PAD_FILTERS.length) % PAD_FILTERS.length]);
+    padEnsureFocus(true);
+  }
+
+  function padScroller() {
+    const scope = padScope();
+    let el = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+    if (!el || !scope.contains(el)) el = scope === $('#app') ? padPane() : scope;
+    for (let n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 2) return n;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function padScroll(dy, smooth = false) {
+    if (!dy) return;
+    const s = padScroller();
+    s.scrollBy({ top: dy, behavior: smooth && !prefersReducedMotion() ? 'smooth' : 'auto' });
+  }
+
+  // ---- button hints
+
+  function padGlyph(btn, set = padGlyphSet()) {
+    const t = (PAD_GLYPH_TEXT[set] || PAD_GLYPH_TEXT.xbox)[btn] || btn.toUpperCase();
+    return `<i class="pad-btn" data-glyph="${set}" data-btn="${btn}">${t}</i>`;
+  }
+
+  function paintPadHints() {
+    const el = $('#pad-hints');
+    if (!el) return;
+    const items = [];
+    const add = (btns, label) => items.push(`<span class="pad-hint">${btns.map((b) => padGlyph(b)).join('')}<span>${esc(label)}</span></span>`);
+    const modalOpen = !$('#modal').hidden;
+    if (spotHooks.isOpen()) { add(['a'], 'Open'); add(['b'], 'Close'); }
+    else if (modalOpen) { add(['a'], 'Select'); add(['b'], 'Close'); }
+    else if (state.settingsOpen) { add(['a'], 'Select'); add(['lb', 'rb'], 'Section'); add(['b'], 'Back'); }
+    else {
+      const a = document.activeElement;
+      const onGame = a && a.matches && a.matches('.card, .shelf-tile');
+      add(['a'], onGame ? 'Open' : 'Select');
+      const g = padGame();
+      if (g && !gvIsWishlisted(g)) add(['x'], typeof state.live[String(g.id)] === 'number' ? 'Stop' : 'Play');
+      if (state.selectedId) { add(['view'], 'Edit'); add(['b'], 'Back'); }
+      else add(['lb', 'rb'], 'Switch');
+      add(['y'], 'Search');
+      add(['menu'], padMenuGame() ? 'Options' : 'Settings');
+    }
+    const html = items.join('');
+    if (el._html !== html) { el._html = html; el.innerHTML = html; }
+  }
+
+  /** The button list shown in Settings → Controller. */
+  function padLegendHtml() {
+    const rows = [
+      [['a'], 'Select / open'], [['b'], 'Back'], [['x'], 'Play or stop the game'], [['y'], 'Search'],
+      [['lb', 'rb'], 'Switch library list or settings section'], [['lt', 'rt'], 'Page up / down'],
+      [['rs'], 'Right stick scrolls; click it to jump to the top'], [['ls'], 'Click the left stick to fold the sidebar'],
+      [['menu'], 'Options for the selected game (Settings when there is none)'], [['view'], 'Switch layout; on a game page, edit the game'],
+    ];
+    return `<div class="pad-legend" data-pad-legend>${rows.map(([b, t]) => `<div class="pad-legend-row"><span class="pad-legend-btns">${b.map((x) => padGlyph(x)).join('')}</span><span>${esc(t)}</span></div>`).join('')}</div>`;
+  }
+
 
   boot();
 })();
