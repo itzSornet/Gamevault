@@ -17,6 +17,7 @@ import {
   type RateVerdict,
   type StoredGame,
   type StoredPage,
+  type StoredSearch,
 } from "../../functions/art-lookup/lib.ts";
 
 // ------------------------------------------------------------- fake DB
@@ -27,6 +28,8 @@ class FakeDb implements ArtDb {
   inflight = new Map<string, number>();
   requests: { uid: string; at: number }[] = [];
   pages = new Map<string, StoredPage>();
+  searches = new Map<string, StoredSearch>();
+  searchRequests: { uid: string; at: number }[] = [];
   storeCalls = 0;
   storePageCalls = 0;
   constructor(public now: () => number) {}
@@ -87,6 +90,22 @@ class FakeDb implements ArtDb {
     if (this.requests.filter((r) => r.uid === uid && t - r.at < 3600_000).length >= hourLimit) return "user";
     if (this.requests.filter((r) => t - r.at < 86400_000).length >= dailyCap) return "global";
     this.requests.push({ uid, at: t });
+    return "ok";
+  }
+  async getSearch(term: string) {
+    await tick();
+    return structuredClone(this.searches.get(term) ?? null);
+  }
+  async storeSearch(term: string, candidates: Game[]) {
+    await tick();
+    this.searches.set(term, structuredClone({ candidates, fetchedAt: new Date(this.now()).toISOString() }));
+  }
+  async searchRateCheck(uid: string, hourLimit: number, dailyCap: number): Promise<RateVerdict> {
+    await tick();
+    const t = this.now();
+    if (this.searchRequests.filter((r) => r.uid === uid && t - r.at < 3600_000).length >= hourLimit) return "user";
+    if (this.searchRequests.filter((r) => t - r.at < 86400_000).length >= dailyCap) return "global";
+    this.searchRequests.push({ uid, at: t });
     return "ok";
   }
 }
@@ -427,4 +446,60 @@ Deno.test("rows stored under an older ASSETS_SCHEMA are refreshed", async () => 
   assertEquals(r.body.data.source, "sgdb");
   assert(sgdb.calls.slice(before).includes("/games/id/7"), "refreshed by id");
   assertEquals(db.games.get(7)!.assets.v, 2);
+});
+
+// ------------------------------------------------------------ title search
+
+Deno.test("search: one autocomplete call, cached per term, no artwork fetched", async () => {
+  const { db, sgdb, call } = setup();
+  const first = await call({ search: "  Counter " });
+  assertEquals(first.status, 200);
+  assertEquals(first.body.data.term, "counter");
+  assertEquals(first.body.data.source, "sgdb");
+  assert(first.body.data.candidates.length >= 1);
+  assertEquals(first.body.data.candidates[0].name.toLowerCase().includes("counter"), true);
+  assertEquals(sgdb.calls.length, 1, "only the autocomplete call");
+  assertEquals(db.searchRequests.length, 1);
+  assertEquals(db.requests.length, 0, "searches never touch the game bucket");
+
+  const again = await call({ search: "COUNTER" }, "user-b");
+  assertEquals(again.body.data.source, "cache");
+  assertEquals(sgdb.calls.length, 1);
+  assertEquals(db.searchRequests.length, 1, "cache hits are free");
+});
+
+Deno.test("search: own hourly limit, separate from game lookups", async () => {
+  const { call, advance } = setup({ hourLimit: 1, searchHourLimit: 2 });
+  assertEquals((await call({ sgdbId: 7 })).status, 200);
+  assertEquals((await call({ sgdbId: 8 })).status, 429, "game bucket is full");
+  assertEquals((await call({ search: "counter" })).status, 200, "search still works");
+  assertEquals((await call({ search: "half" })).status, 200);
+  const limited = await call({ search: "portal" });
+  assertEquals(limited.status, 429);
+  assertEquals(limited.body.error.code, "RATE_LIMIT");
+  assert(limited.body.error.message.includes("2 searches per hour"));
+  assertEquals((await call({ search: "counter" })).status, 200, "cached terms still answer");
+  advance(3601_000);
+  assertEquals((await call({ search: "portal" })).status, 200);
+});
+
+Deno.test("search: empty results are cached; stale terms are refreshed", async () => {
+  const { db, sgdb, call, advance } = setup();
+  const none = await call({ search: "zzzz nothing" });
+  assertEquals(none.status, 200);
+  assertEquals(none.body.data.candidates, []);
+  assert(db.searches.has("zzzz nothing"));
+  await call({ search: "counter" });
+  advance(8 * 24 * 3600_000);
+  const before = sgdb.calls.length;
+  const res = await call({ search: "counter" }, "user-c");
+  assertEquals(res.status, 200);
+  assertEquals(sgdb.calls.length, before + 1, "stale term is refreshed");
+});
+
+Deno.test("search: input validation", async () => {
+  const { call } = setup();
+  assertEquals((await call({ search: 5 })).status, 400);
+  assertEquals((await call({ search: "   " })).status, 400);
+  assertEquals((await call({ search: "x".repeat(101) })).status, 400);
 });

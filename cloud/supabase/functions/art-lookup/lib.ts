@@ -23,6 +23,8 @@ export const ITEMS_PER_KIND = 8;
 export const FRESH_MS = 30 * 24 * 60 * 60 * 1000; // refresh after 30 days
 export const NEGATIVE_MS = 7 * 24 * 60 * 60 * 1000; // re-ask SGDB about a miss after 7 days
 export const CLAIM_TTL_S = 30;
+export const SEARCH_FRESH_MS = 7 * 24 * 60 * 60 * 1000; // title search results: re-ask after 7 days
+export const SEARCH_MAX = 10;
 /** Bump when stored asset shape or SGDB filters change: older rows count as stale. */
 export const ASSETS_SCHEMA = 2;
 export const PAGE_SIZE = 50; // SteamGridDB's page size
@@ -116,6 +118,24 @@ export interface ArtDb {
   getPage(sgdbId: number, kind: AssetKind, page: number): Promise<StoredPage | null>;
   storePage(sgdbId: number, kind: AssetKind, page: number, items: Asset[], hasMore: boolean, claimKey: string): Promise<void>;
   rateCheck(uid: string, hourLimit: number, dailyCap: number): Promise<RateVerdict>;
+  getSearch(term: string): Promise<StoredSearch | null>;
+  storeSearch(term: string, candidates: Game[]): Promise<void>;
+  /** Title searches have their own bucket, separate from game lookups. */
+  searchRateCheck(uid: string, hourLimit: number, dailyCap: number): Promise<RateVerdict>;
+}
+
+export interface StoredSearch {
+  candidates: Game[];
+  fetchedAt: string; // ISO
+}
+
+/** Response for a { search } request. */
+export interface SearchData {
+  term: string;
+  candidates: Game[];
+  source: "cache" | "sgdb";
+  stale: boolean;
+  fetchedAt: string;
 }
 
 export interface Deps {
@@ -126,6 +146,8 @@ export interface Deps {
   fetch?: typeof fetch;
   hourLimit?: number; // misses per uid per hour, default 60
   dailyCap?: number; // misses per rolling 24 h, all users, default 2000
+  searchHourLimit?: number; // title searches per uid per hour, default 300
+  searchDailyCap?: number; // title searches per rolling 24 h, all users, default 20000
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   waitMs?: number; // how long a loser of a claim waits for the winner, default 8000
@@ -162,6 +184,8 @@ export interface LookupInput {
   steamAppId?: number;
   sgdbId?: number;
   term?: string;
+  /** Title search only: SteamGridDB autocomplete hits, no artwork. */
+  search?: string;
   /** Picker paging: with sgdbId, return one raw SteamGridDB page of this kind. */
   kind?: AssetKind;
   page?: number;
@@ -304,6 +328,13 @@ export function parseInput(body: unknown): LookupInput {
     if (t.length > 100) throw new ArtError("BAD_REQUEST", "term is too long (max 100 characters)");
     if (t) out.term = t;
   }
+  if (b.search != null) {
+    if (typeof b.search !== "string") throw new ArtError("BAD_REQUEST", "search must be a string");
+    const t = normalizeTerm(b.search);
+    if (t.length > 100) throw new ArtError("BAD_REQUEST", "search is too long (max 100 characters)");
+    if (!t) throw new ArtError("BAD_REQUEST", "search is empty");
+    return { search: t };
+  }
   if (b.kind != null || b.page != null) {
     if (!ASSET_KINDS.includes(b.kind as AssetKind)) throw new ArtError("BAD_REQUEST", "kind must be one of grids, heroes, logos, icons");
     const page = b.page == null || b.page === 0 || b.page === "0" ? 0 : positiveInt(b.page);
@@ -358,6 +389,8 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
   const hourLimit = deps.hourLimit ?? 60;
   const dailyCap = deps.dailyCap ?? 2000;
+  const searchHourLimit = deps.searchHourLimit ?? 300;
+  const searchDailyCap = deps.searchDailyCap ?? 20000;
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const waitMs = deps.waitMs ?? 8000;
@@ -640,7 +673,43 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
   }
 
-  async function lookup(input: LookupInput, uid: string): Promise<LookupData | PageData> {
+  /** Title search: one autocomplete call, cached per term, own rate bucket. */
+  async function lookupSearch(term: string, uid: string): Promise<SearchData> {
+    const cached = await db.getSearch(term);
+    const out = (c: StoredSearch, source: "cache" | "sgdb", stale: boolean): SearchData => ({
+      term,
+      candidates: c.candidates,
+      source,
+      stale,
+      fetchedAt: c.fetchedAt,
+    });
+    if (cached && isFresh(cached.fetchedAt, SEARCH_FRESH_MS)) return out(cached, "cache", false);
+
+    const verdict = await db.searchRateCheck(uid, searchHourLimit, searchDailyCap);
+    if (verdict !== "ok") {
+      if (cached) return out(cached, "cache", true);
+      throw verdict === "user"
+        ? new ArtError("RATE_LIMIT", `Search limit reached (${searchHourLimit} searches per hour). Try again in a bit.`, 600)
+        : new ArtError("RATE_LIMIT", "The shared search has reached today's limit. Try again tomorrow.", 3600);
+    }
+    try {
+      let raw: Raw[] = [];
+      try {
+        raw = ((await sgdbGet(`/search/autocomplete/${encodeURIComponent(term)}`)) as Raw[]) || [];
+      } catch (err) {
+        if (!(err instanceof ArtError && err.code === "NOT_FOUND")) throw err;
+      }
+      const candidates = raw.filter((g: Raw) => g && g.id).slice(0, SEARCH_MAX).map(normalizeGame);
+      await db.storeSearch(term, candidates);
+      return out({ candidates, fetchedAt: new Date(now()).toISOString() }, "sgdb", false);
+    } catch (err) {
+      if (cached) return out(cached, "cache", true);
+      throw err;
+    }
+  }
+
+  async function lookup(input: LookupInput, uid: string): Promise<LookupData | PageData | SearchData> {
+    if (input.search) return lookupSearch(input.search, uid);
     if (input.sgdbId && input.kind) return lookupPage(input.sgdbId, input.kind, input.page ?? 0, uid);
     if (input.sgdbId) {
       return lookupKey(`sgdb:${input.sgdbId}`, { kind: "sgdb", id: input.sgdbId, steamAppId: input.steamAppId ?? null }, uid);

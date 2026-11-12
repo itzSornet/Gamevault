@@ -48,6 +48,12 @@
  *   page in SteamGridDB's own order (not re-ranked), nsfw/humor/epilepsy removed.
  *   Each page is cached on first request and counts as one miss.
  *
+ * Title search: body { search: string }
+ *   -> { ok: true, data: { term, candidates: Game[] (max 10), source, stale, fetchedAt } }
+ *   One SteamGridDB autocomplete call, cached per term for 7 days. Counted in
+ *   its own bucket (ART_SEARCH_HOURLY_LIMIT per user, default 300;
+ *   ART_SEARCH_DAILY_CAP overall, default 20000), not the game lookups' one.
+ *
  * SteamGridDB is queried with nsfw=false, humor=false, png/jpeg/webp only (no
  * GIFs), covers limited to 600x900 / 342x482 / 660x930 (top-8 falls back to any
  * size if a game has none).
@@ -69,6 +75,7 @@ import {
   type RateVerdict,
   type StoredGame,
   type StoredPage,
+  type StoredSearch,
 } from "./lib.ts";
 
 function env(name: string, fallback?: string): string {
@@ -168,6 +175,26 @@ const db: ArtDb = {
       "art_rate_check",
     ) as RateVerdict;
   },
+  async getSearch(term) {
+    const row = check(
+      await supabase.from("art_searches").select("candidates, fetched_at").eq("term", term).maybeSingle(),
+      "art_searches read",
+    );
+    if (!row) return null;
+    return { candidates: row.candidates as Game[], fetchedAt: row.fetched_at } as StoredSearch;
+  },
+  async storeSearch(term, candidates) {
+    check(
+      await supabase.from("art_searches").upsert({ term, candidates, fetched_at: new Date().toISOString() }),
+      "art_searches write",
+    );
+  },
+  async searchRateCheck(uid, hourLimit, dailyCap) {
+    return check(
+      await supabase.rpc("art_search_rate_check", { p_uid: uid, p_hour_limit: hourLimit, p_daily_cap: dailyCap }),
+      "art_search_rate_check",
+    ) as RateVerdict;
+  },
 };
 
 const handler = createHandler({
@@ -176,6 +203,8 @@ const handler = createHandler({
   sgdbKey: Deno.env.get("SGDB_KEY") ?? "",
   hourLimit: intEnv("ART_HOURLY_LIMIT", 60),
   dailyCap: intEnv("ART_DAILY_CAP", 2000),
+  searchHourLimit: intEnv("ART_SEARCH_HOURLY_LIMIT", 300),
+  searchDailyCap: intEnv("ART_SEARCH_DAILY_CAP", 20000),
   // Ask Supabase Auth who the token belongs to. Refuses the anon key itself
   // (no user) and expired/forged tokens; accepts anonymous users.
   async verifyUser(token) {

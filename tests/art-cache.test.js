@@ -244,3 +244,28 @@ test('installSgdbImageCaching: 3-day Cache-Control on SGDB image GETs only', () 
   handler({ method: 'GET', resourceType: 'xhr', responseHeaders: {} }, (r) => { out = r; });
   assert.deepStrictEqual(out, {});
 });
+
+test('search: sends { search }, caches per term on disk, no second call', async () => {
+  const { cache, artCalls } = setup({
+    art: (body) => json(200, { ok: true, data: { term: body.search, candidates: [{ id: 7, name: 'Counter-Strike 2' }], source: 'sgdb', stale: false } }),
+  });
+  const r = await cache.search('  Counter ');
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(JSON.parse(artCalls()[0].body), { search: 'counter' });
+  assert.strictEqual(r.data.candidates[0].id, 7);
+  const again = await cache.search('COUNTER');
+  assert.strictEqual(again.data.source, 'local');
+  assert.strictEqual(artCalls().length, 1);
+});
+
+test('search: older server without { search } falls back to a term lookup', async () => {
+  const { cache, artCalls } = setup({
+    art: (body) => (body.search
+      ? json(400, { ok: false, error: { code: 'BAD_REQUEST', message: 'Give at least one of steamAppId, sgdbId or term' } })
+      : json(200, { ok: true, data: { ...lookupData(), candidates: [{ id: 7, name: 'Counter-Strike 2' }, { id: 9, name: 'Counter Fight' }] } })),
+  });
+  const r = await cache.search('counter');
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.data.candidates.map((c) => c.id), [7, 9]);
+  assert.deepStrictEqual(JSON.parse(artCalls()[1].body), { term: 'counter' });
+});
