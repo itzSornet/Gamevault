@@ -8,7 +8,7 @@
  *
  * On disk, under `dir` (e.g. <userData>/art-cache):
  *   session.json            anonymous Supabase session (access + refresh token)
- *   lookups/<key>.json      art-lookup answers  (steam-730, sgdb-5363838, term-<sha1>)
+ *   lookups/<key>.json      art-lookup answers  (steam-730, sgdb-5363838, term-<sha1>, search-<sha1>)
  *   pages/<id>-<kind>-<n>.json  picker pages ("show more")
  *   steam/<appId>.json      which official Steam images exist for a game
  *   thumbs/<sha1>.<ext>     downloaded thumbnails of the top picks (LRU-pruned)
@@ -27,6 +27,7 @@ const crypto = require('crypto');
 const DAY = 24 * 60 * 60 * 1000;
 const LOOKUP_TTL = 7 * DAY; // server keeps 30 days; re-check weekly
 const PAGE_TTL = 7 * DAY;
+const SEARCH_TTL = 3 * DAY; // title search hits (server keeps 7 days)
 const MISS_TTL = 1 * DAY; // "SteamGridDB has nothing" answers
 const STEAM_TTL = 30 * DAY;
 const THUMB_MAX_BYTES = 300 * 1024 * 1024;
@@ -226,6 +227,28 @@ function createArtCache(opts = {}) {
     }));
   }
 
+  /**
+   * Title search: SteamGridDB games whose name matches, no artwork. The
+   * server counts these in their own (much bigger) bucket, so typing in a
+   * search box never eats into the "new games per hour" budget.
+   */
+  function search(term) {
+    const t = normalizeTerm(term);
+    if (!t) return Promise.resolve(fail('BAD_REQUEST', 'Give a search term'));
+    return once(`search:${t}`, async () => {
+      const res = await cached(P.lookup(`search-${sha1(t)}`), SEARCH_TTL, { search: t });
+      // An art server from before { search } existed answers BAD_REQUEST:
+      // fall back to a term lookup's candidates.
+      if (!res.ok && res.error && res.error.code === 'BAD_REQUEST') {
+        const r = await lookup({ term: t });
+        if (!r.ok) return r;
+        const c = r.data.candidates && r.data.candidates.length ? r.data.candidates : (r.data.game ? [r.data.game] : []);
+        return { ok: true, data: { term: t, candidates: c, source: r.data.source, stale: !!r.data.stale } };
+      }
+      return res;
+    });
+  }
+
   /** One picker page: { items, total, hasMore } like sgdb.assets(kind, id, { page }). */
   function page(sgdbId, kind, n = 0) {
     if (!KINDS.includes(kind)) return Promise.resolve(fail('BAD_REQUEST', `Unknown kind ${kind}`));
@@ -366,7 +389,7 @@ function createArtCache(opts = {}) {
     return { downloaded, failed };
   }
 
-  return { configured, lookup, page, steamArt, prefetchThumbs, localThumb, pruneThumbs, token, normalizeTerm };
+  return { configured, lookup, search, page, steamArt, prefetchThumbs, localThumb, pruneThumbs, token, normalizeTerm };
 }
 
 /**

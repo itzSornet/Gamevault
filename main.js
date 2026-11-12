@@ -1397,14 +1397,13 @@ function createWindow() {
 
   ipcMain.handle('sgdb:games', sgdbWrap(async (term) => {
     if (!term || !String(term).trim()) return [];
-    // Typing searches burn the cloud's per-user miss budget, so the user's own
-    // key goes first here; without one, the cloud's candidates (cached per term).
+    // The user's own key goes first; without one, the cloud's title search
+    // (cached per term, its own rate bucket apart from game lookups).
     if (hasUserKey()) return sgdbOrThrow().searchGames(String(term).trim());
     if (String(term).trim().length < 3) return [];
-    const r = await artCache().lookup({ term: String(term) });
+    const r = await artCache().search(String(term));
     if (!r.ok && r.error.code === 'NOT_FOUND') return [];
-    const data = unwrap(r);
-    return data.candidates && data.candidates.length ? data.candidates : (data.game ? [data.game] : []);
+    return unwrap(r).candidates || [];
   }));
 
   ipcMain.handle('sgdb:resolve', sgdbWrap(async ({ name, steamAppId } = {}) => {
