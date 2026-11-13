@@ -25,24 +25,26 @@ test('zoom is clamped and rounded', () => {
 
 test('sections map to a layout, a list and a sort', () => {
   const ids = BP.SECTIONS.map((s) => s.id);
-  assert.deepStrictEqual(ids, ['home', 'library', 'playing', 'finished', 'wishlist', 'settings']);
+  assert.deepStrictEqual(ids, ['home', 'library', 'active', 'finished', 'wishlist', 'activity', 'settings']);
   assert.deepStrictEqual(
     (({ view, filter, sort }) => ({ view, filter, sort }))(BP.section('home')),
     { view: 'shelf', filter: 'All', sort: 'lastPlayed' });
   assert.strictEqual(BP.section('library').view, 'poster');
-  assert.strictEqual(BP.section('playing').filter, 'Playing');
+  assert.strictEqual(BP.section('active').filter, 'Active');
   assert.strictEqual(BP.section('finished').filter, 'Finished');
   assert.strictEqual(BP.section('wishlist').filter, 'Want');
+  assert.strictEqual(BP.section('activity').filter, 'Activity');
   assert.strictEqual(BP.section('settings').settings, true);
   assert.strictEqual(BP.section('nope').id, 'home', 'unknown ids fall back to Home');
 });
 
 test('LB / RB step through the sections and wrap, skipping Settings', () => {
   assert.strictEqual(BP.stepSection('home', 1), 'library');
-  assert.strictEqual(BP.stepSection('library', 1), 'playing');
-  assert.strictEqual(BP.stepSection('wishlist', 1), 'home');
-  assert.strictEqual(BP.stepSection('home', -1), 'wishlist');
-  assert.strictEqual(BP.stepSection('playing', -1), 'library');
+  assert.strictEqual(BP.stepSection('library', 1), 'active');
+  assert.strictEqual(BP.stepSection('wishlist', 1), 'activity');
+  assert.strictEqual(BP.stepSection('activity', 1), 'home');
+  assert.strictEqual(BP.stepSection('home', -1), 'activity');
+  assert.strictEqual(BP.stepSection('active', -1), 'library');
   // from Settings (not in the cycle) it starts over from Home
   assert.strictEqual(BP.stepSection('settings', 1), 'library');
   assert.strictEqual(BP.stepSection(undefined, 1), 'library');
@@ -56,6 +58,7 @@ test('Back: closes the menu, lets the page handle it, goes Home, then exits', ()
   assert.strictEqual(BP.backAction({ settings: true }), 'pass');
   assert.strictEqual(BP.backAction({ section: 'library' }), 'home');
   assert.strictEqual(BP.backAction({ section: 'wishlist' }), 'home');
+  assert.strictEqual(BP.backAction({ section: 'activity' }), 'home');
   assert.strictEqual(BP.backAction({ section: 'home' }), 'exit');
   assert.strictEqual(BP.backAction({}), 'exit');
 });

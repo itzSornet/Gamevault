@@ -45,7 +45,7 @@
     palette: 'ash',
     live: {},          // gameId -> minutes (number) | 'launching' | 'stopping'
     selectedId: null,
-    counts: { All: 0, Playing: 0, Finished: 0, Want: 0 },
+    counts: { All: 0, Active: 0, Finished: 0, Want: 0 },
   };
 
   const cards = new Map();     // id -> { el, refs }
@@ -340,12 +340,19 @@
     return saveChain.then(() => true, () => true);
   }
 
+  // Active: opened in the last 7 days, or running right now
+  function isActiveGame(g) {
+    if (state.live[String(g.id)] != null) return true;
+    return Sessions.isActive(g, Date.now());
+  }
+
   function filteredGames() {
     const q = state.query.trim();
     let list = state.games.filter((g) => {
       const wanted = gvIsWishlisted(g);
-      if (state.filter === 'All') return !wanted;
+      if (state.filter === 'All' || state.filter === 'Activity') return !wanted;
       if (state.filter === 'Want') return wanted;
+      if (state.filter === 'Active') return !wanted && isActiveGame(g);
       return !wanted && g.status === state.filter;
     });
 
@@ -382,11 +389,11 @@
   }
 
   function refreshCounts() {
-    const c = { All: 0, Playing: 0, Finished: 0, Want: 0 };
+    const c = { All: 0, Active: 0, Finished: 0, Want: 0 };
     for (const g of state.games) {
       if (gvIsWishlisted(g)) { c.Want += 1; continue; }
       c.All += 1;
-      if (g.status === 'Playing') c.Playing += 1;
+      if (isActiveGame(g)) c.Active += 1;
       if (g.status === 'Finished') c.Finished += 1;
     }
     state.counts = c;
@@ -397,6 +404,7 @@
       const wanted = gvIsWishlisted(g);
       if (state.filter === 'Want') return wanted;
       if (state.filter === 'All') return !wanted;
+      if (state.filter === 'Active') return !wanted && isActiveGame(g);
       return !wanted && g.status === state.filter;
     };
     const gamesWord = (n) => `${n.toLocaleString()} game${n === 1 ? '' : 's'}`;
@@ -421,7 +429,9 @@
     if (hoursEl) hoursEl.textContent = `${hoursOf((g) => !gvIsWishlisted(g)).toLocaleString()} h`;
   }
 
-  const FILTER_LABELS = { All: 'Library', Playing: 'Playing', Finished: 'Finished', Want: 'Wishlist' };
+  const FILTER_LABELS = { All: 'Library', Active: 'Active', Finished: 'Finished', Want: 'Wishlist', Activity: 'Activity' };
+  // Wishlist and Activity are pages of their own, not a filtered shelf/grid
+  const onPageFilter = () => state.filter === 'Want' || state.filter === 'Activity';
   function filterLabel(filter) {
     // Big Picture names its sections itself (Home and Library are both "All")
     if (bp.on && window.BigPicture && BigPicture.section(bp.section).filter === filter) return BigPicture.section(bp.section).label;
@@ -805,15 +815,28 @@
     // While a game page is open the library must stay hidden; otherwise it
     // reappears stacked above the detail view.
     const wishView = $('#wishlist-view');
+    const actView = $('#activity-view');
     const wishMode = state.filter === 'Want';
+    const actMode = state.filter === 'Activity';
     $('#main')?.classList.toggle('is-wish', wishMode);
+    $('#main')?.classList.toggle('is-activity', actMode);
+    if (actView && !actMode) { actView.hidden = true; actView.innerHTML = ''; }
     if (state.selectedId || state.settingsOpen) {
       $('#shelf').hidden = true;
       $('#library').hidden = true;
       if (wishView) wishView.hidden = true;
+      if (actView) actView.hidden = true;
       // sidebar counts still have to follow status/wishlist edits made on
       // the game page
       refreshCounts();
+      return;
+    }
+    if (actMode && actView) {
+      $('#shelf').hidden = true;
+      $('#library').hidden = true;
+      if (wishView) wishView.hidden = true;
+      actView.hidden = false;
+      renderActivity();
       return;
     }
     if (wishMode && wishView) {
@@ -848,7 +871,206 @@
 
   function currentPane() {
     if (state.filter === 'Want' && $('#wishlist-view')) return $('#wishlist-view');
+    if (state.filter === 'Activity' && $('#activity-view')) return $('#activity-view');
     return state.view === 'shelf' ? $('#shelf') : $('#library');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Activity — playtime across every game, its own page in the sidebar
+  // ---------------------------------------------------------------------------
+  const ACT_RANGES = {
+    '30d': { label: '30 days', unit: 'day' },
+    '12w': { label: '12 weeks', unit: 'week' },
+  };
+  const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const actHours = (h) => (h > 0 ? Sessions.formatDuration(h) : '0h');
+  const actDay = (ts) => { const d = new Date(ts); return `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`; };
+
+  // round the top of the scale up to a number a person would draw
+  function actNiceMax(max) {
+    const steps = [1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24, 30, 40, 50, 60, 80, 100, 120, 160, 200];
+    return steps.find((v) => v >= max) || Math.ceil(max / 50) * 50;
+  }
+
+  function actThumb(g) {
+    const src = g && (g._cover || g.coverUrl);
+    return src
+      ? `<span class="act-thumb" style="background-image:${esc(cssUrl(src))}" aria-hidden="true"></span>`
+      : `<span class="act-thumb is-empty" aria-hidden="true">${esc(String((g && g.name) || '?').trim().charAt(0).toUpperCase())}</span>`;
+  }
+
+  function actChartHtml(buckets, unit) {
+    const max = buckets.reduce((m, b) => Math.max(m, b.hours), 0);
+    const top = actNiceMax(Math.max(max, 0.5));
+    const n = buckets.length;
+    const last = n - 1;
+    const label = (i) => {
+      if (unit === 'day') {
+        if (i === last) return 'Today';
+        return (last - i) % 7 === 0 ? actDay(buckets[i].start) : '';
+      }
+      if (i === last) return 'This week';
+      return (last - i) % 3 === 0 ? actDay(buckets[i].start) : '';
+    };
+    const best = buckets.reduce((b, x) => (x.hours > b.hours ? x : b), buckets[0]);
+    const total = buckets.reduce((t, b) => t + b.hours, 0);
+    const summary = total > 0
+      ? `${actHours(total)} in the last ${n} ${unit}s. Most on ${unit === 'day' ? actDay(best.start) : `the week of ${actDay(best.start)}`}: ${actHours(best.hours)}.`
+      : `No play in the last ${n} ${unit}s.`;
+    return `
+      <div class="act-chart" style="--n:${n}" role="img" aria-label="${esc(summary)}">
+        <div class="act-plot">
+          <div class="act-gridline" style="bottom:100%"><span>${top}h</span></div>
+          <div class="act-gridline" style="bottom:50%"><span>${top / 2}h</span></div>
+          <div class="act-bars">
+            ${buckets.map((b, i) => `<div class="act-slot${i === last ? ' is-now' : ''}" data-i="${i}">${b.hours > 0 ? `<i style="height:${Math.max(2, (b.hours / top) * 100).toFixed(2)}%"></i>` : ''}</div>`).join('')}
+          </div>
+        </div>
+        <div class="act-x" aria-hidden="true">${buckets.map((_, i) => `<span>${label(i)}</span>`).join('')}</div>
+        <div class="act-tip" hidden></div>
+      </div>
+      ${total > 0 ? '' : '<p class="act-chart-empty">Nothing played in this stretch yet.</p>'}`;
+  }
+
+  function renderActivity() {
+    const view = $('#activity-view');
+    if (!view) return;
+    const now = Date.now();
+    const games = state.games.filter((g) => !gvIsWishlisted(g));
+    const byId = new Map(games.map((g) => [String(g.id), g]));
+    const sessions = Sessions.allSessions(games);
+    const stats = Sessions.sessionStats(sessions, now);
+    const lastWeek = Sessions.weekBuckets(sessions, 2, now)[0].hours;
+    const streak = Sessions.playStreak(sessions, now);
+    const allHours = games.reduce((t, g) => t + (Number(g.hours) || 0), 0);
+    const range = ACT_RANGES[state.actRange] ? state.actRange : '30d';
+    const unit = ACT_RANGES[range].unit;
+    const buckets = unit === 'day' ? Sessions.dayBuckets(sessions, 30, now) : Sessions.weekBuckets(sessions, 12, now);
+    const rangeHours = buckets.reduce((t, b) => t + b.hours, 0);
+    let top = Sessions.topGames(games, buckets[0].start, 6);
+    let topAllTime = false;
+    if (!top.length) { top = Sessions.topGames(games, null, 6); topAllTime = true; }
+    const topMax = top.length ? top[0].hours : 1;
+    const recent = sessions.slice(0, 10);
+
+    const diff = stats.weekHours - lastWeek;
+    const weekNote = !stats.weekHours && !lastWeek
+      ? 'Nothing yet this week'
+      : (Math.abs(diff) < 1 / 60 ? 'Same as last week' : `${diff > 0 ? '+' : '−'}${Sessions.formatDuration(Math.abs(diff))} vs last week`);
+
+    const tile = (label, value, note) => `
+      <div class="act-tile">
+        <span class="act-tile-label">${label}</span>
+        <b class="act-tile-value">${value}</b>
+        <span class="act-tile-note">${note}</span>
+      </div>`;
+
+    const gameRow = (g, right, sub, extra = '') => `
+      <button type="button" class="act-game" data-act-game data-id="${esc(String(g.id))}">
+        ${actThumb(g)}
+        <span class="act-game-text"><span class="act-game-name">${esc(g.name || 'Untitled')}</span><span class="act-game-sub">${sub}</span></span>
+        ${extra}
+        <span class="act-game-right">${right}</span>
+      </button>`;
+
+    view.innerHTML = `
+      <div class="act">
+        <header class="act-head">
+          <div>
+            <h1 class="act-title">Activity</h1>
+            <p class="act-sub">Your playtime across every game</p>
+          </div>
+        </header>
+        <div class="act-tiles">
+          ${tile('This week', actHours(stats.weekHours), esc(weekNote))}
+          ${tile('This month', actHours(stats.monthHours), `${MONTHS[new Date(now).getMonth()]}`)}
+          ${tile('Day streak', `${streak.current} day${streak.current === 1 ? '' : 's'}`, streak.best ? `Best: ${streak.best} day${streak.best === 1 ? '' : 's'}` : 'Play today to start one')}
+          ${tile('All time', actHours(allHours), `${stats.count.toLocaleString()} session${stats.count === 1 ? '' : 's'} tracked`)}
+        </div>
+        <section class="act-card act-playtime">
+          <div class="act-card-head">
+            <h2>Playtime <span>${actHours(rangeHours)} in the last ${ACT_RANGES[range].label}</span></h2>
+            <div class="act-seg" role="group" aria-label="Range">
+              ${Object.entries(ACT_RANGES).map(([key, r]) => `<button type="button" class="act-seg-btn${key === range ? ' is-on' : ''}" data-act-range="${key}" aria-pressed="${key === range}">${r.label}</button>`).join('')}
+            </div>
+          </div>
+          ${actChartHtml(buckets, unit)}
+        </section>
+        <div class="act-cols">
+          <section class="act-card">
+            <div class="act-card-head"><h2>Most played <span>${topAllTime ? 'all time' : `last ${ACT_RANGES[range].label}`}</span></h2></div>
+            <div class="act-list">
+              ${top.length
+                ? top.map((row) => {
+                    const g = byId.get(String(row.id));
+                    if (!g) return '';
+                    const meter = `<span class="act-meter" aria-hidden="true"><i style="width:${Math.max(3, (row.hours / topMax) * 100).toFixed(1)}%"></i></span>`;
+                    return gameRow(g, actHours(row.hours), row.count ? `${row.count} session${row.count === 1 ? '' : 's'}` : 'Playtime imported', meter);
+                  }).join('')
+                : '<p class="act-empty">Play a game and it shows up here.</p>'}
+            </div>
+          </section>
+          <section class="act-card">
+            <div class="act-card-head"><h2>Recent sessions</h2></div>
+            <div class="act-list">
+              ${recent.length
+                ? recent.map((x) => {
+                    const g = byId.get(String(x.gameId));
+                    if (!g) return '';
+                    const d = new Date(x.start);
+                    return gameRow(g, Sessions.formatDuration(x.duration), `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(x.start)} · ${hhmm(x.start)}`);
+                  }).join('')
+                : '<p class="act-empty">No sessions yet. Press Play on any game and each session is saved here when you stop.</p>'}
+            </div>
+          </section>
+        </div>
+      </div>`;
+
+    wireActivity(view, buckets, unit);
+  }
+
+  function wireActivity(view, buckets, unit) {
+    for (const btn of view.querySelectorAll('[data-act-range]')) {
+      btn.onclick = () => {
+        if (state.actRange === btn.dataset.actRange) return;
+        state.actRange = btn.dataset.actRange;
+        renderActivity();
+        $('#activity-view').querySelector(`[data-act-range="${state.actRange}"]`)?.focus({ preventScroll: true });
+      };
+    }
+    for (const row of view.querySelectorAll('[data-act-game]')) {
+      row.onclick = () => openDetail(row.dataset.id);
+    }
+    // hover a bar: its day (or week), time and session count
+    const chart = view.querySelector('.act-chart');
+    const tip = chart && chart.querySelector('.act-tip');
+    if (!chart || !tip) return;
+    let on = null;
+    const hide = () => { tip.hidden = true; if (on) on.classList.remove('is-hover'); on = null; };
+    chart.addEventListener('pointermove', (e) => {
+      const slot = e.target.closest && e.target.closest('.act-slot');
+      if (!slot) { hide(); return; }
+      if (slot === on) return;
+      if (on) on.classList.remove('is-hover');
+      on = slot;
+      slot.classList.add('is-hover');
+      const b = buckets[Number(slot.dataset.i)];
+      const d = new Date(b.start);
+      const when = unit === 'day' ? `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(b.start)}` : `Week of ${actDay(b.start)}`;
+      tip.innerHTML = `<b>${esc(when)}</b><span>${b.hours > 0 ? `${esc(Sessions.formatDuration(b.hours))} · ${b.count} session${b.count === 1 ? '' : 's'}` : 'No play'}</span>`;
+      tip.hidden = false;
+      const cr = chart.getBoundingClientRect();
+      const sr = slot.getBoundingClientRect();
+      const bar = slot.querySelector('i');
+      const topY = bar ? bar.getBoundingClientRect().top : sr.bottom;
+      const half = tip.offsetWidth / 2;
+      const x = Math.min(cr.width - half, Math.max(half, sr.left + sr.width / 2 - cr.left));
+      tip.style.left = `${x}px`;
+      tip.style.top = `${topY - cr.top - 8}px`;
+    });
+    chart.addEventListener('pointerleave', hide);
   }
 
   // ---------------------------------------------------------------------------
@@ -1384,8 +1606,8 @@
     if (state.filter === 'Finished') {
       return { title: 'Nothing finished yet', sub: 'Mark a game as finished from its page.', line: 'Nothing finished yet — mark a game as finished from its page.' };
     }
-    if (state.filter === 'Playing') {
-      return { title: 'Nothing in Playing', sub: 'Games you are playing show up here.', line: 'Nothing in Playing right now.' };
+    if (state.filter === 'Active') {
+      return { title: 'Nothing active', sub: 'Games you opened in the last 7 days show up here.', line: 'Nothing opened in the last 7 days.' };
     }
     return { title: 'No matches', sub: 'Try a different filter or search term.', line: 'Nothing matches this filter.' };
   }
@@ -2058,6 +2280,7 @@
     $('#library').hidden = true;
     $('#shelf').hidden = true;
     if ($('#wishlist-view')) $('#wishlist-view').hidden = true;
+    if ($('#activity-view')) $('#activity-view').hidden = true;
     const view = $('#game-view');
     view.hidden = false;
     view.scrollTop = 0;
@@ -2167,7 +2390,6 @@
     const liveHours = typeof liveMins === 'number' ? liveMins / 60 : 0;
     const totalHours = (Number(g.hours) || 0) + liveHours;
     facts.push(['Playtime', totalHours > 0 ? fmtHours(totalHours) : '—']);
-    facts.push(['Sessions', String(gvSessions(g).length)]);
     facts.push(['Last played', g.lastPlayed ? fmtDate(g.lastPlayed) : 'Never']);
     if (g.added) facts.push(['Added', fmtDate(g.added)]);
     if (g.source) facts.push(['Source', g.source]);
@@ -2263,7 +2485,7 @@
         <div class="gvx-top">
           <button class="gvx-chip" data-back>
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
-            ${state.filter === 'Want' ? 'Wishlist' : 'Library'}
+            ${state.filter === 'Want' ? 'Wishlist' : state.filter === 'Activity' ? 'Activity' : 'Library'}
           </button>
           <div class="gvx-top-right">
             <button class="gvx-chip gvx-icon${wish ? ' is-on' : ''}" data-wish aria-pressed="${wish}" title="Wishlist">
@@ -2278,6 +2500,7 @@
                 <button role="menuitem" data-copy ${g.exePath ? '' : 'disabled'}>Copy path</button>
                 <button role="menuitem" data-edit>Edit…</button>
                 <button role="menuitem" data-refresh>Refresh artwork</button>
+                <button role="menuitem" class="is-danger" data-remove-game>${wish ? 'Remove from wishlist' : 'Remove from library…'}</button>
               </div>
             </div>
           </div>
@@ -2295,11 +2518,11 @@
                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">${typeof state.live[String(g.id)] === 'number' ? '<rect x="6" y="6" width="12" height="12" rx="2"/>' : '<path d="M8 5v14l11-7z"/>'}</svg>
                    <span data-play-label>${typeof state.live[String(g.id)] === 'number' ? 'Stop' : 'Play'}</span>
                  </button>
-                 <div class="gvx-timer" data-timer role="timer" aria-live="off">${detailTimerHtml(g)}</div>
                  <button class="gvx-finish${status === 'Finished' ? ' is-done' : ''}" data-finish aria-pressed="${status === 'Finished'}" title="${status === 'Finished' ? 'Finished — click to unmark' : 'Mark this game as finished'}">
                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>
                    <span>${status === 'Finished' ? 'Finished' : 'Mark as finished'}</span>
-                 </button>`}
+                 </button>
+                 <div class="gvx-timer" data-timer role="timer" aria-live="off">${detailTimerHtml(g)}</div>`}
           </div>
         </div>
         </div>
@@ -2324,9 +2547,10 @@
         ` : `
           <div class="gvx-main">
             <div class="gvx-ledger-head">
-              <span>SESSIONS</span>
+              <h2>Sessions</h2>
               <span class="gvx-ledger-count">${stats.count} session${stats.count === 1 ? '' : 's'}</span>
             </div>
+            <div class="gvx-ses-top" data-ses-top></div>
             <div class="gvx-list" data-ledger role="list" aria-label="Session history"></div>
           </div>
           <aside class="gvx-rail" data-rail>${railHtml(g)}<div class="gvx-card sv-card" data-saves-card></div></aside>
@@ -2349,6 +2573,56 @@
     if (!wish) loadSteamMeta(g);
   }
 
+  const SES_WEEKS = 26;
+  const SES_WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const SES_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Stats and a day-by-day heat map over the last SES_WEEKS weeks
+  // (columns are Monday-first weeks, the last one is this week).
+  function sessionsTopHtml(g, sessions) {
+    const stats = Sessions.sessionStats(sessions);
+    const live = state.live[String(g.id)];
+    const total = (Number(g.hours) || 0) + (typeof live === 'number' ? live / 60 : 0);
+    const stat = (label, value) => `<div class="gvx-ses-stat"><span>${label}</span><b>${value}</b></div>`;
+
+    const today = new Date();
+    const dow = (today.getDay() + 6) % 7; // Monday = 0
+    const days = Sessions.dayBuckets(sessions, (SES_WEEKS - 1) * 7 + dow + 1);
+    const max = days.reduce((m, d) => Math.max(m, d.hours), 0);
+    const level = (h) => (h <= 0 || !max ? 0 : Math.min(4, Math.ceil((h / max) * 4)));
+    const cols = [];
+    const months = [];
+    for (let w = 0; w < SES_WEEKS; w++) {
+      const week = days.slice(w * 7, w * 7 + 7);
+      const first = new Date(week[0].start);
+      const prev = w ? new Date(days[(w - 1) * 7].start) : null;
+      months.push(!prev || prev.getMonth() !== first.getMonth() ? SES_MON[first.getMonth()] : '');
+      cols.push(`<div class="gvx-heat-col">${week.map((d) => {
+        const dt = new Date(d.start);
+        const tip = `${SES_WD[dt.getDay()]}, ${SES_MON[dt.getMonth()]} ${dt.getDate()} · ${d.hours > 0 ? Sessions.formatDuration(d.hours) : 'no play'}`;
+        return `<i class="lv${level(d.hours)}" title="${esc(tip)}"></i>`;
+      }).join('')}</div>`);
+    }
+    // a month name needs two columns of room
+    for (let i = 0; i < months.length; i++) if (months[i] && months[i + 1]) months[i] = '';
+
+    return `
+      <div class="gvx-ses-stats">
+        ${stat('Total', total > 0 ? fmtHours(total) : '0h')}
+        ${stat('This week', stats.weekHours > 0 ? Sessions.formatDuration(stats.weekHours) : '0h')}
+        ${stat('Average', stats.count ? Sessions.formatDuration(stats.averageMinutes / 60) : '—')}
+        ${stat('Longest', stats.count ? Sessions.formatDuration(stats.longestMinutes / 60) : '—')}
+      </div>
+      <div class="gvx-heat" style="--weeks:${SES_WEEKS}" role="img" aria-label="Days played over the last ${SES_WEEKS} weeks">
+        <div class="gvx-heat-months" aria-hidden="true">${months.map((m) => `<span>${m}</span>`).join('')}</div>
+        <div class="gvx-heat-body">
+          <div class="gvx-heat-days" aria-hidden="true"><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span></span></div>
+          <div class="gvx-heat-grid">${cols.join('')}</div>
+        </div>
+        <div class="gvx-heat-key" aria-hidden="true">Less <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> More</div>
+      </div>`;
+  }
+
   function paintLedger(g) {
     const listEl = document.querySelector('[data-ledger]');
     if (!listEl) return;
@@ -2357,12 +2631,22 @@
     const running = typeof live === 'number';
     const groups = Sessions.groupSessions(sessions);
     const MAX_ROWS = 100;
+    const longest = sessions.reduce((m, x) => Math.max(m, x.duration), 0) || 1;
+
+    const topEl = document.querySelector('[data-ses-top]');
+    if (topEl) {
+      const show = sessions.length > 0 || running;
+      topEl.hidden = !show;
+      topEl.innerHTML = show ? sessionsTopHtml(g, sessions) : '';
+    }
 
     const rows = [];
     if (running) {
       const started = state.liveStart && state.liveStart[String(g.id)];
       rows.push(`<div class="gvx-row is-live" role="listitem">
-        <span class="gvx-row-when"><b>Now</b>${started ? ` · started ${hhmm(started)}` : ''}</span>
+        <span class="gvx-row-date"><b><i class="gvx-live-dot"></i></b><i>Now</i></span>
+        <span class="gvx-row-when">${started ? `Started ${hhmm(started)}` : 'Playing'}</span>
+        <span class="gvx-row-bar" aria-hidden="true"></span>
         <span class="gvx-row-dur" data-live-dur>${Sessions.formatClock(live * 60000)}</span>
       </div>`);
     }
@@ -2370,11 +2654,14 @@
     let rendered = 0;
     for (const group of groups) {
       if (rendered >= MAX_ROWS) break;
-      rows.push(`<div class="gvx-month">${group.label}</div>`);
+      rows.push(`<div class="gvx-month"><span>${group.label}</span><span>${Sessions.formatDuration(group.totalHours)} · ${group.count} session${group.count === 1 ? '' : 's'}</span></div>`);
       for (const s of group.items) {
         if (rendered >= MAX_ROWS) break;
+        const d = new Date(s.start);
         rows.push(`<div class="gvx-row" role="listitem">
-          <span class="gvx-row-when"><b>${s.dayLabel}</b> · ${s.startLabel}${s.end ? ` – ${hhmm(s.end)}` : ''}${s.crossesMidnight ? ' +1' : ''}</span>
+          <span class="gvx-row-date"><b>${d.getDate()}</b><i>${SES_WD[d.getDay()]}</i></span>
+          <span class="gvx-row-when">${s.startLabel}${s.end ? ` – ${hhmm(s.end)}` : ''}${s.crossesMidnight ? ' <em>+1</em>' : ''}</span>
+          <span class="gvx-row-bar" aria-hidden="true"><i style="width:${Math.max(2, (s.duration / longest) * 100).toFixed(1)}%"></i></span>
           <span class="gvx-row-dur">${s.durationLabel}</span>
         </div>`);
         rendered += 1;
@@ -2387,7 +2674,15 @@
         listEl.insertAdjacentHTML('beforeend', `<div class="gvx-more">Showing the latest ${MAX_ROWS} of ${sessions.length}.</div>`);
       }
     } else {
-      listEl.innerHTML = `<div class="gvx-empty"><b>No sessions yet</b><span>Press Play. Your first session is saved when you stop.</span></div>`;
+      const imported = Number(g.hours) > 0
+        ? `<span class="gvx-empty-note">${fmtHours(g.hours)} of playtime came with the import. It isn't split into sessions.</span>`
+        : '';
+      listEl.innerHTML = `<div class="gvx-empty">
+        <span class="gvx-empty-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 2M9.5 3h5"/></svg></span>
+        <b>No sessions yet</b>
+        <span>Press Play. Each session is timed and saved here when you stop.</span>
+        ${imported}
+      </div>`;
     }
     listEl.classList.toggle('is-empty', !rows.length);
   }
@@ -2525,6 +2820,77 @@
     toast('Moved to library', 'ok');
   }
 
+  // ---- removing a game: the options popup, the game page's ⋯ menu, the
+  // edit dialog and the Delete key all come here. Wishlist entries keep
+  // their one-click remove.
+  function askRemoveGame(g) {
+    if (!g || !state.games.includes(g)) return;
+    if (gvIsWishlisted(g)) { wishRemove(g); return; }
+    if (state.live[String(g.id)] != null) {
+      toast(`Stop ${g.name || 'the game'} before removing it`, 'error');
+      return;
+    }
+    const card = openModal(`
+      <div class="modal-head">
+        <h2>Remove from library?</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body rm-body">
+        <p class="rm-text"><b>${esc(g.name || 'Untitled')}</b> leaves your library, with its playtime and sessions. The game's files stay on your PC.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close data-autofocus>Cancel</button>
+        <button class="btn btn-danger" data-rm>Remove</button>
+      </div>`, { className: 'rm-modal' });
+    if (!card) return;
+    for (const btn of card.querySelectorAll('[data-close]')) btn.onclick = closeModal;
+    card.querySelector('[data-rm]').onclick = () => {
+      closeModal();
+      removeGame(g);
+    };
+  }
+
+  function removeGame(g) {
+    const idx = state.games.indexOf(g);
+    if (idx < 0) return;
+    const id = String(g.id);
+    // the selection moves to a neighbour, not back to the first game
+    const shown = filteredGames();
+    const at = shown.indexOf(g);
+    const near = at < 0 ? null : (shown[at + 1] || shown[at - 1] || null);
+    if (state.selectedId === id) closeDetail();
+    state.games.splice(idx, 1);
+    if (state.shelfId === id) state.shelfId = near ? String(near.id) : null;
+    state._shelfKey = '';
+    renderLibrary();
+    saveGamesSoon();
+    // focus lands on the neighbour once the dialog has closed
+    setTimeout(() => focusGameIfLost(near), 360);
+    toast(`${g.name || 'Game'} removed from your library`, 'ok', [{ label: 'Undo', run: () => {
+      if (state.games.includes(g)) return;
+      state.games.splice(Math.min(idx, state.games.length), 0, g);
+      state._shelfKey = '';
+      renderLibrary();
+      saveGamesSoon();
+      requestAnimationFrame(() => focusGameIfLost(g));
+    } }]);
+  }
+
+  // On the shelf focus goes to the picked cover (focus and pick never
+  // split into two rings); in the grid, to the given game's card.
+  function focusGameIfLost(g) {
+    const a = document.activeElement;
+    if (a && a !== document.body && a.isConnected && !a.closest('#toasts')) return;
+    const shelf = $('#shelf');
+    let el = null;
+    if (shelf && !shelf.hidden) {
+      el = shelf.querySelector('.shelf-tile.is-active');
+    } else if (g) {
+      el = document.querySelector(`#library:not([hidden]) .card[data-id="${CSS.escape(String(g.id))}"]`);
+    }
+    if (el) el.focus({ preventScroll: true });
+  }
+
   function wireDetail(g, wish) {
     const view = $('#game-view');
 
@@ -2549,6 +2915,7 @@
         else if (item.hasAttribute('data-copy')) navigator.clipboard.writeText(g.exePath || '').then(() => toast('Path copied', 'ok')).catch(() => {});
         else if (item.hasAttribute('data-edit')) openGameModal(g);
         else if (item.hasAttribute('data-refresh')) { refreshArt(g, { focus: false }); toast('Artwork refreshed', 'ok'); }
+        else if (item.hasAttribute('data-remove-game')) askRemoveGame(g);
       });
       view.onpointerdown = (e) => { if (!e.target.closest('.gvx-more-wrap')) closeMenu(); };
       menu.addEventListener('keydown', (e) => {
@@ -2712,7 +3079,7 @@
   function syncSidePill() {
     const pill = document.querySelector('.side-pill');
     const side = document.querySelector('.sidebar');
-    const active = side && side.querySelector('.side-item.is-active:not(.side-wish)');
+    const active = side && side.querySelector('.side-item.is-active:not(.side-wish):not(.side-act)');
     if (!pill || !side) return;
     pill.classList.toggle('is-away', !active);
     // when it comes back it appears in place instead of flying in
@@ -2914,6 +3281,7 @@
         </section>
       </div>
       <div class="modal-foot">
+        ${isNew ? '' : `<button class="btn btn-ghost ge-remove" data-remove-game>${editWish ? 'Remove from wishlist' : 'Remove from library'}</button>`}
         <button class="btn btn-ghost" data-close>Cancel</button>
         <button class="btn btn-primary" data-save>${isNew ? 'Add game' : 'Save'}</button>
       </div>
@@ -3421,6 +3789,8 @@
     };
 
     for (const btn of card.querySelectorAll('[data-close]')) btn.onclick = closeModal;
+    const removeBtn = card.querySelector('[data-remove-game]');
+    if (removeBtn) removeBtn.onclick = () => { closeModal(); askRemoveGame(g); };
 
     let saving = false;
     const saveBtnEl = card.querySelector('[data-save]');
@@ -4353,7 +4723,56 @@
       `<p class="st-note">${on ? 'Both stay off until you turn them on.' : 'Sign in above to turn these on.'}</p>`;
   }
 
+  // ---- the account row at the bottom of the sidebar (and atop the Big
+  // Picture menu): picture, name and sync state; opens Account in Settings
+  const PERSON_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>';
+
+  function sideAccountParts() {
+    const st = state.account;
+    if (!st || !st.configured || st.needsRestart) return null;
+    if (!st.signedIn) {
+      return { out: true, pic: PERSON_ICON, name: 'Sign in', sub: 'Sync your library', title: 'Sign in to GameVault' };
+    }
+    const u = st.user || {};
+    const name = u.name || (u.email ? String(u.email).split('@')[0] : 'You');
+    const initial = esc(String(u.name || u.email || '?').trim().charAt(0).toUpperCase());
+    const pic = /^https:\/\//.test(u.avatar || '')
+      ? `<img src="${esc(u.avatar)}" alt="" referrerpolicy="no-referrer" data-initial="${initial}" />`
+      : initial;
+    let sub;
+    let bad = false;
+    if (!state.config.cloudSync) sub = 'Sync is off';
+    else if (state._syncing) sub = 'Syncing…';
+    else if (state._syncError) { sub = 'Sync problem'; bad = true; }
+    else sub = state._lastSync ? `Synced ${agoLabel(state._lastSync)}` : 'Not synced yet';
+    return { out: false, pic, name, sub, bad, title: `${name} · ${u.email || 'Account'}` };
+  }
+
+  function sideAccountInner(a) {
+    return `<span class="side-av${a.out ? ' is-out' : ''}">${a.pic}</span>`
+      + `<span class="side-acc-text"><span class="side-acc-name">${esc(a.name)}</span>`
+      + `<span class="side-acc-sub${a.bad ? ' is-bad' : ''}">${esc(a.sub)}</span></span>`;
+  }
+
+  function paintSideAccount() {
+    const a = sideAccountParts();
+    const targets = [$('#side-account'), document.querySelector('#bp-menu [data-bp-account]')].filter(Boolean);
+    for (const el of targets) {
+      el.hidden = !a;
+      if (!a) continue;
+      const html = sideAccountInner(a);
+      if (el._gvAcct === html) continue;   // no flicker on the minute tick
+      el._gvAcct = html;
+      el.innerHTML = html;
+      el.title = a.title;
+      el.setAttribute('aria-label', a.out ? 'Sign in' : `Account: ${a.name}, ${a.sub}`);
+      const img = el.querySelector('img[data-initial]');
+      if (img) img.addEventListener('error', () => { img.replaceWith(document.createTextNode(img.dataset.initial)); });
+    }
+  }
+
   function renderCloudCard() {
+    paintSideAccount();
     const card = document.querySelector('[data-cloud-card]');
     if (!card) return;
     card.innerHTML = cloudCardHtml();
@@ -4562,6 +4981,7 @@
       if (st.signedIn && !was) toast(st.mustSetPassword ? 'Now choose a new password' : `Signed in as ${(st.user && (st.user.email || st.user.name)) || 'you'}`, 'ok');
       else if (!st.signedIn && was && st.error) toast(st.error);
       renderAccountCard();
+      paintSideAccount();
       if (st.signedIn && !was) runCloudSync({});
       if (state.selectedId) paintSavesCard(gameById(state.selectedId));
     });
@@ -4583,6 +5003,7 @@
     $('#library').hidden = true;
     $('#shelf').hidden = true;
     if ($('#wishlist-view')) $('#wishlist-view').hidden = true;
+    if ($('#activity-view')) $('#activity-view').hidden = true;
     const fb = $('#filterbar'); if (fb) fb.hidden = true;
     view.hidden = false;
     const title = $('#filter-title'); if (title) title.textContent = 'Settings';
@@ -5069,7 +5490,7 @@
             syncPerfRecorder();
             try {
               await wait(600);
-              for (const f of ['Playing', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
+              for (const f of ['Active', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
               mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
               mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
               mark('bench:grid'); $('#btn-view').click(); await wait(800);
@@ -5194,6 +5615,12 @@
       );
     }
 
+    if (state.filter === 'Activity') {
+      const av = $('#activity-view');
+      if (av) Array.from(av.querySelectorAll('.act-head, .act-tile, .act-card'))
+        .slice(0, 12).forEach((el, i) => popIn(el, i * 45));
+      return;
+    }
     if (state.filter === 'Want') {
       const wv = $('#wishlist-view');
       if (wv) Array.from(wv.querySelectorAll('.wl-head > *, .wl-top, .wl-card, .wl-empty:not([hidden])'))
@@ -5244,6 +5671,8 @@
       if (lib) lib.scrollTop = 0;
       const wv = $('#wishlist-view');
       if (wv) wv.scrollTop = 0;
+      const av = $('#activity-view');
+      if (av) av.scrollTop = 0;
     };
     apply();
   }
@@ -5323,6 +5752,8 @@
     }
 
     sfx('launch');
+    g.lastOpened = Date.now();
+    saveGamesSoon();
     state.live[key] = 'launching';
     armLaunchWatchdog(g);
     refreshGameUi(g);
@@ -5526,18 +5957,38 @@
       if (modalOpen || spotHooks.isOpen()) return;
       const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-      if (!typing && (!e.gvPad || padInShelfStrip()) && state.view === 'shelf' && state.filter !== 'Want' && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+      if (!typing && (!e.gvPad || padInShelfStrip()) && state.view === 'shelf' && !onPageFilter() && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
         const list = filteredGames();
         if (list.length) {
           const idx = Math.max(0, list.findIndex((g) => String(g.id) === state.shelfId));
           const next = Math.max(0, Math.min(list.length - 1, idx + (e.key === 'ArrowRight' ? 1 : -1)));
           if (next !== idx || !e.gvPad) e.preventDefault();
-          if (next !== idx) selectShelfGame(list[next].id);
+          if (next !== idx) {
+            selectShelfGame(list[next].id);
+            // focus follows the selection: a clicked cover must not keep its
+            // focus ring while the arrows select the next one (two rings)
+            const a = document.activeElement;
+            if (!e.gvPad && a && a.classList.contains('shelf-tile')) {
+              const t = $('#shelf-strip').querySelector(`.shelf-tile[data-id="${CSS.escape(String(list[next].id))}"]`);
+              if (t) t.focus({ preventScroll: true });
+            }
+          }
         }
       }
       if (e.key === 'Backspace' && state.selectedId && !typing) {
         e.preventDefault();
         closeDetail();
+      }
+      // Delete removes the focused game, the open game page's game, or the
+      // game picked on the shelf
+      if (e.key === 'Delete' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat
+          && $('#modal').hidden && !spotHooks.isOpen() && !state.settingsOpen) {
+        const a = document.activeElement;
+        const onPage = !a || a === document.body || !!a.closest('#shelf, #library, #game-view, #wishlist-view');
+        const g = gameFromEl(a)
+          || (onPage && state.selectedId ? state.games.find((x) => String(x.id) === state.selectedId) : null)
+          || (onPage && !$('#shelf').hidden && state.shelfId ? state.games.find((x) => String(x.id) === state.shelfId) : null);
+        if (g) { e.preventDefault(); askRemoveGame(g); return; }
       }
       if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
@@ -5624,6 +6075,7 @@
       }
       refreshGameUi(g);
       repaintDetailHistory(g);
+      if (hours > 0 && state.filter === 'Activity' && !state.selectedId && !state.settingsOpen) renderActivity();
     });
 
     // Launched, but no session will be recorded: the track process never
@@ -5710,7 +6162,8 @@
       if (api.accountStatus) {
         api.accountStatus().then((st) => {
           state.account = st;
-          if (api.cloudLastSync) api.cloudLastSync().then((t) => { state._lastSync = t; }).catch(() => {});
+          paintSideAccount();
+          if (api.cloudLastSync) api.cloudLastSync().then((t) => { state._lastSync = t; paintSideAccount(); }).catch(() => {});
           setTimeout(() => runCloudSync({}), 3000);
         }).catch(() => {});
       }
@@ -6003,7 +6456,7 @@
     }
     if (name === 'detailfilter') {
       openDetail(state.games[0].id);
-      setTimeout(() => { const t = document.querySelector('.tab[data-filter="Playing"]'); if (t) t.click(); }, 700);
+      setTimeout(() => { const t = document.querySelector('.tab[data-filter="Active"]'); if (t) t.click(); }, 700);
     }
     if (name === 'detailsave') {
       openDetail(state.games[0].id);
@@ -6255,7 +6708,7 @@
       }, 1800);
     }
     if (name === 'playing') {
-      setTimeout(() => { setFilter('Playing'); }, 400);
+      setTimeout(() => { setFilter('Active'); }, 400);
     }
     if (name === 'gridview') {
       state.view = 'poster';
@@ -6516,6 +6969,10 @@
     }, { passive: true });
   }
 
+  const sideAcct = $('#side-account');
+  if (sideAcct) sideAcct.onclick = () => openSettings('account');
+  setInterval(paintSideAccount, 60000);
+
   for (const b of $$('[data-rail-action]')) {
     b.onclick = () => { const target = document.getElementById(b.dataset.railAction); if (target) target.click(); };
   }
@@ -6535,7 +6992,8 @@
       down: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
       sliders: '<path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.2"/><circle cx="8" cy="17" r="2.2"/>',
       tv: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/>',
-      star: '<path d="m12 4 2.4 5 5.4.7-4 3.8 1 5.4-4.8-2.7-4.8 2.7 1-5.4-4-3.8 5.4-.7z"/>'
+      star: '<path d="m12 4 2.4 5 5.4.7-4 3.8 1 5.4-4.8-2.7-4.8 2.7 1-5.4-4-3.8 5.4-.7z"/>',
+      chart: '<path d="M4 20h16"/><path d="M7 16v-4M12 16V6M17 16v-7"/>'
     };
     const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     // First letter of the first two words that have one: letters only (any
@@ -6568,6 +7026,7 @@
       { icon: 'plus', title: 'Add game', run: () => $('#btn-add')?.click() },
       { icon: 'down', title: 'Import games', run: () => $('#btn-import')?.click() },
       { icon: 'star', title: 'Open wishlist', run: () => setFilter('Want') },
+      { icon: 'chart', title: 'Open activity', run: () => (bp.on ? bpGo('activity') : setFilter('Activity')) },
       { icon: 'sliders', title: 'Open settings', run: () => (bp.on ? bpGo('settings') : $('#btn-settings')?.click()) },
       bp.on
         ? { icon: 'tv', title: 'Exit Big Picture', run: () => exitBigPicture() }
@@ -6802,7 +7261,7 @@
   // a keyboard would send. src/lib/padinput.js reads the pad.
   // ---------------------------------------------------------------------------
 
-  const PAD_FILTERS = ['All', 'Playing', 'Finished', 'Want'];
+  const PAD_FILTERS = ['All', 'Active', 'Finished', 'Activity', 'Want'];
   const PAD_NATIVE = 'button, a[href], input:not([type="hidden"]), select, textarea, summary';
   const PAD_KEYS = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' };
   const PAD_GLYPH_TEXT = {
@@ -6833,6 +7292,7 @@
     wish: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/>',
     folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
     art: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4.5v4h-4"/>',
+    remove: '<path d="M4.5 7h15M10 4.5h4M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5"/>',
   };
 
   function openGameActions(g) {
@@ -6851,6 +7311,7 @@
     }
     if (g.exePath) items.push(['folder', 'Show in folder', 'folder']);
     items.push(['art', 'Refresh artwork', 'art']);
+    items.push(['remove', wish ? 'Remove from wishlist' : 'Remove from library', 'remove']);
     const card = openModal(`
       <div class="ga">
         <div class="ga-head">
@@ -6858,7 +7319,7 @@
           <div class="ga-text"><div class="ga-title">${esc(g.name || 'Untitled')}</div><div class="ga-sub">${esc(statusLabel(g))}</div></div>
         </div>
         <div class="ga-list" role="menu">
-          ${items.map(([act, label, icon]) => `<button type="button" class="ga-item" role="menuitem" data-ga="${act}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${GA_ICONS[icon]}</svg><span>${esc(label)}</span></button>`).join('')}
+          ${items.map(([act, label, icon]) => `<button type="button" class="ga-item" role="menuitem" data-ga="${act}"${act === 'remove' ? ' data-danger' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${GA_ICONS[icon]}</svg><span>${esc(label)}</span></button>`).join('')}
         </div>
       </div>`, { className: 'ga-modal' });
     if (!card) return;
@@ -6892,12 +7353,13 @@
         else if (act === 'wish') toggleDetailWish(g);
         else if (act === 'folder') api.showInFolder(g.exePath);
         else if (act === 'art') { refreshArt(g, { focus: false }); toast('Artwork refreshed', 'ok'); }
+        else if (act === 'remove') askRemoveGame(g);
       };
     }
   }
 
   function gameFromEl(el) {
-    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id]');
+    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id], [data-act-game][data-id]');
     return host ? state.games.find((g) => String(g.id) === host.dataset.id) || null : null;
   }
 
@@ -7063,6 +7525,7 @@
     if (state.settingsOpen) return $('#settings-view');
     if (state.selectedId) return $('#game-view');
     if (state.filter === 'Want') return $('#wishlist-view');
+    if (state.filter === 'Activity') return $('#activity-view');
     return state.view === 'shelf' ? $('#shelf') : $('#library');
   }
 
@@ -7086,7 +7549,7 @@
     if (scope === $('#app')) {
       if (state.settingsOpen) el = $('#settings-view .st-tab.is-active');
       else if (state.selectedId) el = $('#game-view .gvx-play');
-      else if (state.filter !== 'Want') el = state.view === 'shelf' ? $('#shelf-strip .shelf-tile.is-active') : $('#grid .card');
+      else if (!onPageFilter()) el = state.view === 'shelf' ? $('#shelf-strip .shelf-tile.is-active') : $('#grid .card');
       if (!padFocusable(el)) {
         const vh = innerHeight;
         // something to press beats a text box (there's no on-screen keyboard yet)
@@ -7173,7 +7636,7 @@
         if (g) openGameModal(g);
         return padEnsureFocus();
       }
-      if (state.filter === 'Want' || bp.on) return;
+      if (onPageFilter() || bp.on) return;
       cycleView();
       return padEnsureFocus(true);
     }
@@ -7302,9 +7765,9 @@
     if (!$('#modal').hidden || spotHooks.isOpen() || state.settingsOpen) return null;
     if (state.selectedId) return state.games.find((g) => String(g.id) === state.selectedId) || null;
     const el = document.activeElement;
-    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id]');
+    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id], [data-act-game][data-id]');
     if (host) return state.games.find((g) => String(g.id) === host.dataset.id) || null;
-    if (state.view === 'shelf' && state.filter !== 'Want' && el && el.closest && el.closest('#shelf')) {
+    if (state.view === 'shelf' && !onPageFilter() && el && el.closest && el.closest('#shelf')) {
       return state.games.find((g) => String(g.id) === state.shelfId) || null;
     }
     return null;
@@ -7313,8 +7776,8 @@
   function padGame() {
     if (state.selectedId) return state.games.find((g) => String(g.id) === state.selectedId) || null;
     const el = document.activeElement;
-    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id]');
-    const id = host ? host.dataset.id : (state.view === 'shelf' && state.filter !== 'Want' ? state.shelfId : null);
+    const host = el && el.closest && el.closest('.card[data-id], .shelf-tile[data-id], [data-wl-item][data-id], [data-act-game][data-id]');
+    const id = host ? host.dataset.id : (state.view === 'shelf' && !onPageFilter() ? state.shelfId : null);
     return id ? state.games.find((g) => String(g.id) === String(id)) || null : null;
   }
 
@@ -7417,9 +7880,10 @@
   const BP_ICONS = {
     home: '<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10v9h11v-9"/>',
     library: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
-    playing: '<path d="M7 4.5v15l12-7.5z"/>',
+    active: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
     finished: '<path d="m4.5 12.5 5 5L19.5 7"/>',
     wishlist: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/>',
+    activity: '<path d="M4 20h16"/><path d="M7 16v-4M12 16V6M17 16v-7"/>',
     settings: '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
     exit: '<path d="M9 14 4.5 9.5 9 5"/><path d="M4.5 9.5H15a4.5 4.5 0 0 1 0 9h-3"/>',
   };
@@ -7439,6 +7903,7 @@
       <div class="bp-menu-scrim" data-bp-close></div>
       <nav class="bp-menu-panel" role="menu" aria-label="Big Picture">
         <div class="bp-menu-brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><span>GameVault</span></div>
+        <button type="button" class="bp-menu-item bp-menu-acct" role="menuitem" data-bp-account hidden></button>
         ${BigPicture.SECTIONS.map((s) => `<button type="button" class="bp-menu-item" role="menuitem" data-bp-go="${s.id}">${bpIcon(s.id)}<span>${esc(s.label)}</span>${s.filter && s.id !== 'home' ? `<b data-bp-count="${s.filter}"></b>` : ''}</button>`).join('')}
         <div class="bp-menu-sep" role="separator"></div>
         <button type="button" class="bp-menu-item" role="menuitem" data-bp-exit>${bpIcon('exit')}<span>Exit Big Picture</span></button>
@@ -7447,6 +7912,13 @@
     menu.querySelector('[data-bp-close]').onclick = () => bpCloseMenu();
     for (const b of menu.querySelectorAll('[data-bp-go]')) b.onclick = () => bpGo(b.dataset.bpGo);
     menu.querySelector('[data-bp-exit]').onclick = () => exitBigPicture();
+    menu.querySelector('[data-bp-account]').onclick = async () => {
+      bpCloseMenu({ refocus: false });
+      await openSettings('account');
+      bpSyncMenu();
+      padEnsureFocus(true);
+    };
+    paintSideAccount();
     const panel = menu.querySelector('.bp-menu-panel');
     panel.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); sfx('back'); bpCloseMenu(); return; }

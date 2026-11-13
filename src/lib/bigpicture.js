@@ -30,9 +30,10 @@
   const SECTIONS = [
     { id: 'home', label: 'Home', view: 'shelf', filter: 'All', sort: 'lastPlayed' },
     { id: 'library', label: 'Library', view: 'poster', filter: 'All', sort: 'name' },
-    { id: 'playing', label: 'Playing', view: 'poster', filter: 'Playing', sort: 'lastPlayed' },
+    { id: 'active', label: 'Active', view: 'poster', filter: 'Active', sort: 'lastPlayed' },
     { id: 'finished', label: 'Finished', view: 'poster', filter: 'Finished', sort: 'lastPlayed' },
     { id: 'wishlist', label: 'Wishlist', view: 'shelf', filter: 'Want', sort: 'lastPlayed' },
+    { id: 'activity', label: 'Activity', view: 'shelf', filter: 'Activity', sort: 'lastPlayed' },
     { id: 'settings', label: 'Settings', settings: true },
   ];
 
