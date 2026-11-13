@@ -83,3 +83,15 @@ test('ingestFile makes an ELF executable', { skip: process.platform === 'win32' 
   assert.ok(fs.statSync(file).mode & 0o111);
   fs.rmSync(file, { force: true });
 });
+
+test('listSources says which launchers can auto sync, and why the others cannot', () => {
+  const sources = importers.listSources();
+  const by = Object.fromEntries(sources.map((s) => [s.id, s]));
+  assert.equal(by.steam.sync, true);
+  for (const id of ['heroic', 'legendary', 'itch']) assert.equal(by[id].sync, true, id);
+  for (const id of ['pc', 'folder', 'file', 'steam-owned']) {
+    assert.equal(by[id].sync, false, id);
+    assert.ok(by[id].syncNote.length > 10, id);
+  }
+  assert.ok(sources.every((s) => typeof s.found === 'boolean'));
+});

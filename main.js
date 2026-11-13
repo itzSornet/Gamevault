@@ -806,6 +806,17 @@ function createWindow() {
     }
   }
 
+  // Renderer errors, kept next to the library (local only, capped at ~200 KB)
+  ipcMain.on('log:renderer-error', (_e, entry) => {
+    try {
+      const file = path.join(app.getPath('userData'), 'renderer-errors.log');
+      const where = String((entry && entry.where) || '').slice(0, 80);
+      const text = String((entry && entry.text) || '').slice(0, 4000);
+      try { if (fs.statSync(file).size > 200 * 1024) fs.renameSync(file, `${file}.old`); } catch (_) {}
+      fs.appendFileSync(file, `${new Date().toISOString()} [${where}] ${text}\n`);
+    } catch (_) {}
+  });
+
   ipcMain.handle('img:thumb', async (_e, { src, width, kind }) => {
     try {
       if (!src) return null;

@@ -949,6 +949,37 @@
     return steps.find((v) => v >= max) || Math.ceil(max / 50) * 50;
   }
 
+  // "Today", "Yesterday", or "Tue, Nov 10"
+  function actRelDay(ts, now) {
+    const d = new Date(ts);
+    const a = new Date(now);
+    const days = Math.round((new Date(a.getFullYear(), a.getMonth(), a.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    return `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(ts)}`;
+  }
+
+  // One line that says what a run of play was, the way a person would.
+  function actRunSub(run, now) {
+    if (run.days > 1) {
+      const from = new Date(run.from), to = new Date(run.to);
+      const range = from.getMonth() === to.getMonth() ? `${actDay(run.from)} – ${to.getDate()}` : `${actDay(run.from)} – ${actDay(run.to)}`;
+      const end = actRelDay(run.to, now);
+      return `${run.days} days in a row · ${end === 'Today' ? 'through today' : end === 'Yesterday' ? 'until yesterday' : range}`;
+    }
+    const day = actRelDay(run.to, now);
+    if (run.brief) return `Opened briefly · ${day}`;
+    return run.count > 1 ? `${day} · ${run.count} sessions` : `${day} · ${hhmm(run.lastStart)}`;
+  }
+
+  // A run of several days gets a tiny bar per day (the last 14).
+  function actSparkHtml(run) {
+    if (run.days < 2) return '';
+    const days = run.perDay.slice(-14);
+    const max = days.reduce((m, h) => Math.max(m, h), 0) || 1;
+    return `<span class="act-spark" aria-hidden="true">${days.map((h) => `<i style="height:${Math.max(14, (h / max) * 100).toFixed(0)}%"></i>`).join('')}</span>`;
+  }
+
   function actThumb(g) {
     const src = g && (g._cover || g.coverUrl);
     return src
@@ -1008,7 +1039,7 @@
     let topAllTime = false;
     if (!top.length) { top = Sessions.topGames(games, null, 6); topAllTime = true; }
     const topMax = top.length ? top[0].hours : 1;
-    const recent = sessions.slice(0, 10);
+    const recent = Sessions.recentRuns(games, 8);
 
     const diff = stats.weekHours - lastWeek;
     const weekNote = !stats.weekHours && !lastWeek
@@ -1022,8 +1053,8 @@
         <span class="act-tile-note">${note}</span>
       </div>`;
 
-    const gameRow = (g, right, sub, extra = '') => `
-      <button type="button" class="act-game" data-act-game data-id="${esc(String(g.id))}">
+    const gameRow = (g, right, sub, extra = '', cls = '') => `
+      <button type="button" class="act-game${cls}" data-act-game data-id="${esc(String(g.id))}">
         ${actThumb(g)}
         <span class="act-game-text"><span class="act-game-name">${esc(g.name || 'Untitled')}</span><span class="act-game-sub">${sub}</span></span>
         ${extra}
@@ -1068,14 +1099,12 @@
             </div>
           </section>
           <section class="act-card">
-            <div class="act-card-head"><h2>Recent sessions</h2></div>
+            <div class="act-card-head"><h2>Recently played</h2></div>
             <div class="act-list">
               ${recent.length
-                ? recent.map((x) => {
-                    const g = byId.get(String(x.gameId));
-                    if (!g) return '';
-                    const d = new Date(x.start);
-                    return gameRow(g, Sessions.formatDuration(x.duration), `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(x.start)} · ${hhmm(x.start)}`);
+                ? recent.map((run) => {
+                    const g = byId.get(String(run.gameId));
+                    return g ? gameRow(g, Sessions.formatDuration(run.hours), actRunSub(run, now), actSparkHtml(run), run.brief ? ' is-brief' : '') : '';
                   }).join('')
                 : '<p class="act-empty">No sessions yet. Press Play on any game and each session is saved here when you stop.</p>'}
             </div>
@@ -2566,7 +2595,6 @@
           </div>
         </div>
 
-        ${!wish && Rating.value(g) >= Rating.PEAK ? peakMedalHtml(g) : ''}
         <div class="gvx-hero-body" tabindex="-1" aria-label="${esc(g.name)}">
           ${logo
             ? `<span class="gv-logo3d" data-logo3d><img class="gvx-logo" src="${esc(toFileUrl(logo))}" alt="${esc(g.name)}" /><i class="gv-logo-sheen" style="--logo:${esc(cssUrl(logo))}" aria-hidden="true"><b></b></i></span>`
@@ -2605,7 +2633,7 @@
           <div class="gvx-main">
             <div class="gvx-ledger-head">
               <h2>Sessions</h2>
-              <span class="gvx-ledger-count">${stats.count} session${stats.count === 1 ? '' : 's'}</span>
+              <span class="gvx-ledger-count">${ledgerCountText(gvSessions(g))}</span>
             </div>
             <div class="gvx-ses-top" data-ses-top></div>
             <div class="gvx-list" data-ledger role="list" aria-label="Session history"></div>
@@ -2630,54 +2658,53 @@
     if (!wish) loadSteamMeta(g);
   }
 
-  const SES_WEEKS = 26;
   const SES_WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const SES_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  // Stats and a day-by-day heat map over the last SES_WEEKS weeks
-  // (columns are Monday-first weeks, the last one is this week).
+  // Three plain numbers and one sentence. No charts.
   function sessionsTopHtml(g, sessions) {
     const stats = Sessions.sessionStats(sessions);
     const live = state.live[String(g.id)];
     const total = (Number(g.hours) || 0) + (typeof live === 'number' ? live / 60 : 0);
     const stat = (label, value) => `<div class="gvx-ses-stat"><span>${label}</span><b>${value}</b></div>`;
-
-    const today = new Date();
-    const dow = (today.getDay() + 6) % 7; // Monday = 0
-    const days = Sessions.dayBuckets(sessions, (SES_WEEKS - 1) * 7 + dow + 1);
-    const max = days.reduce((m, d) => Math.max(m, d.hours), 0);
-    const level = (h) => (h <= 0 || !max ? 0 : Math.min(4, Math.ceil((h / max) * 4)));
-    const cols = [];
-    const months = [];
-    for (let w = 0; w < SES_WEEKS; w++) {
-      const week = days.slice(w * 7, w * 7 + 7);
-      const first = new Date(week[0].start);
-      const prev = w ? new Date(days[(w - 1) * 7].start) : null;
-      months.push(!prev || prev.getMonth() !== first.getMonth() ? SES_MON[first.getMonth()] : '');
-      cols.push(`<div class="gvx-heat-col">${week.map((d) => {
-        const dt = new Date(d.start);
-        const tip = `${SES_WD[dt.getDay()]}, ${SES_MON[dt.getMonth()]} ${dt.getDate()} · ${d.hours > 0 ? Sessions.formatDuration(d.hours) : 'no play'}`;
-        return `<i class="lv${level(d.hours)}" title="${esc(tip)}"></i>`;
-      }).join('')}</div>`);
-    }
-    // a month name needs two columns of room
-    for (let i = 0; i < months.length; i++) if (months[i] && months[i + 1]) months[i] = '';
-
+    // a typical day of real play: quick launches would drag an average to "1m"
+    const realDays = Sessions.dayGroups(sessions).filter((d) => !d.brief);
+    const typical = realDays.length ? realDays.reduce((t, d) => t + d.hours, 0) / realDays.length : 0;
+    const habit = sessionHabitText(Sessions.habits(sessions));
     return `
       <div class="gvx-ses-stats">
         ${stat('Total', total > 0 ? fmtHours(total) : '0h')}
         ${stat('This week', stats.weekHours > 0 ? Sessions.formatDuration(stats.weekHours) : '0h')}
-        ${stat('Average', stats.count ? Sessions.formatDuration(stats.averageMinutes / 60) : '—')}
-        ${stat('Longest', stats.count ? Sessions.formatDuration(stats.longestMinutes / 60) : '—')}
+        ${stat('Typical day', typical > 0 ? Sessions.formatDuration(typical) : '—')}
       </div>
-      <div class="gvx-heat" style="--weeks:${SES_WEEKS}" role="img" aria-label="Days played over the last ${SES_WEEKS} weeks">
-        <div class="gvx-heat-months" aria-hidden="true">${months.map((m) => `<span>${m}</span>`).join('')}</div>
-        <div class="gvx-heat-body">
-          <div class="gvx-heat-days" aria-hidden="true"><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span></span></div>
-          <div class="gvx-heat-grid">${cols.join('')}</div>
-        </div>
-        <div class="gvx-heat-key" aria-hidden="true">Less <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> More</div>
-      </div>`;
+      ${habit ? `<p class="gvx-ses-habit">${esc(habit)}</p>` : ''}`;
+  }
+
+  function ledgerCountText(sessions) {
+    const n = Sessions.sessionStats(sessions).count;
+    const days = Sessions.dayGroups(sessions).length;
+    return days > 1 ? `Played on ${days} days` : `${n} session${n === 1 ? '' : 's'}`;
+  }
+
+  const SES_DAY_NAMES = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+  function sessionHabitText(h) {
+    if (!h) return '';
+    const part = { morning: 'Mostly a morning game', afternoon: 'Mostly an afternoon game', evening: 'Mostly an evening game', night: 'Mostly a late-night game' }[h.part] || '';
+    const day = h.weekday == null ? '' : `${SES_DAY_NAMES[h.weekday]} get the most time`;
+    if (part && day) return `${part}, and ${day}.`;
+    return part ? `${part}.` : (day ? `${day}.` : '');
+  }
+
+  // A closed month: one small bar per day of the month.
+  function monthSparkHtml(month) {
+    const [y, m] = month.key.split('-').map(Number);
+    const n = new Date(y, m, 0).getDate();
+    const hours = new Array(n).fill(0);
+    for (const row of month.rows) {
+      if (row.kind === 'day') hours[new Date(row.day).getDate() - 1] = row.hours;
+      else for (let d = new Date(row.from).getDate(); d <= new Date(row.to).getDate(); d++) hours[d - 1] = Math.max(hours[d - 1], 0.01);
+    }
+    const max = hours.reduce((a, b) => Math.max(a, b), 0) || 1;
+    return `<span class="gvx-month-spark" aria-hidden="true">${hours.map((h) => (h > 0 ? `<i style="height:${Math.max(16, (h / max) * 100).toFixed(0)}%"></i>` : '<i class="is-off"></i>')).join('')}</span>`;
   }
 
   function paintLedger(g) {
@@ -2686,9 +2713,14 @@
     const sessions = gvSessions(g);
     const live = state.live[String(g.id)];
     const running = typeof live === 'number';
-    const groups = Sessions.groupSessions(sessions);
-    const MAX_ROWS = 100;
-    const longest = sessions.reduce((m, x) => Math.max(m, x.duration), 0) || 1;
+    const book = Sessions.ledger(sessions);
+    const MAX_ROWS = 120;
+    // The two newest months are open; older ones are a one-line summary you
+    // can open. Which ones are open is remembered while you stay on the game.
+    if (!state._ledgerOpen || state._ledgerOpen.id !== String(g.id)) {
+      state._ledgerOpen = { id: String(g.id), keys: new Set(book.months.slice(0, 2).map((m) => m.key)) };
+    }
+    const openKeys = state._ledgerOpen.keys;
 
     const topEl = document.querySelector('[data-ses-top]');
     if (topEl) {
@@ -2697,38 +2729,58 @@
       topEl.innerHTML = show ? sessionsTopHtml(g, sessions) : '';
     }
 
+    // (the running session is the timer beside Play/Stop; no extra row here)
     const rows = [];
-    if (running) {
-      const started = state.liveStart && state.liveStart[String(g.id)];
-      rows.push(`<div class="gvx-row is-live" role="listitem">
-        <span class="gvx-row-date"><b><i class="gvx-live-dot"></i></b><i>Now</i></span>
-        <span class="gvx-row-when">${started ? `Started ${hhmm(started)}` : 'Playing'}</span>
-        <span class="gvx-row-bar" aria-hidden="true"></span>
-        <span class="gvx-row-dur" data-live-dur>${Sessions.formatClock(live * 60000)}</span>
-      </div>`);
-    }
 
+    // One row per day played: when in the day it happened, and for how long.
     let rendered = 0;
-    for (const group of groups) {
+    let longestDay = 0;
+    for (const m of book.months) for (const r of m.rows) if (r.kind === 'day' && r.hours > longestDay) longestDay = r.hours;
+    for (const month of book.months) {
       if (rendered >= MAX_ROWS) break;
-      rows.push(`<div class="gvx-month"><span>${group.label}</span><span>${Sessions.formatDuration(group.totalHours)} · ${group.count} session${group.count === 1 ? '' : 's'}</span></div>`);
-      for (const s of group.items) {
+      const open = openKeys.has(month.key);
+      rows.push(`<button type="button" class="gvx-month${open ? ' is-open' : ''}" data-month="${month.key}" aria-expanded="${open}">
+        <span class="gvx-month-name"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>${month.label}</span>
+        ${open ? '<span></span>' : monthSparkHtml(month)}
+        <span class="gvx-month-sum">${Sessions.formatDuration(month.hours)} · ${month.days} day${month.days === 1 ? '' : 's'}</span>
+      </button>`);
+      if (!open) continue;
+      for (const row of month.rows) {
         if (rendered >= MAX_ROWS) break;
-        const d = new Date(s.start);
-        rows.push(`<div class="gvx-row" role="listitem">
-          <span class="gvx-row-date"><b>${d.getDate()}</b><i>${SES_WD[d.getDay()]}</i></span>
-          <span class="gvx-row-when">${s.startLabel}${s.end ? ` – ${hhmm(s.end)}` : ''}${s.crossesMidnight ? ' <em>+1</em>' : ''}</span>
-          <span class="gvx-row-bar" aria-hidden="true"><i style="width:${Math.max(2, (s.duration / longest) * 100).toFixed(1)}%"></i></span>
-          <span class="gvx-row-dur">${s.durationLabel}</span>
-        </div>`);
+        if (row.kind === 'brief') {
+          const range = row.days > 1 ? `${actDay(row.from)} – ${new Date(row.to).getDate()}` : actDay(row.to);
+          rows.push(`<div class="gvx-row is-brief" role="listitem">
+            <span class="gvx-row-date"><b>·</b></span>
+            <span class="gvx-row-note">${row.count} quick launch${row.count === 1 ? '' : 'es'} · ${range}</span>
+            <span class="gvx-row-dur">${Sessions.formatDuration(row.hours)}</span>
+          </div>`);
+        } else {
+          const d = new Date(row.day);
+          const tip = row.count > 1 ? `${row.count} sessions, from ${hhmm(row.first)}` : `${hhmm(row.first)} – ${hhmm(row.last)}`;
+          rows.push(`<div class="gvx-row" role="listitem" title="${esc(tip)}">
+            <span class="gvx-row-date"><b>${d.getDate()}</b><i>${SES_WD[d.getDay()]}</i></span>
+            <span class="gvx-row-bar" aria-hidden="true"><i style="width:${Math.max(1.5, (row.hours / (longestDay || 1)) * 100).toFixed(1)}%"></i></span>
+            <span class="gvx-row-dur">${Sessions.formatDuration(row.hours)}</span>
+          </div>`);
+        }
         rendered += 1;
       }
     }
+    const totalRows = book.months.reduce((n, m) => n + (openKeys.has(m.key) ? m.rows.length : 0), 0);
+    listEl.onclick = (e) => {
+      const btn = e.target.closest && e.target.closest('[data-month]');
+      if (!btn) return;
+      const key = btn.dataset.month;
+      if (openKeys.has(key)) openKeys.delete(key); else openKeys.add(key);
+      paintLedger(g);
+      const again = listEl.querySelector(`[data-month="${key}"]`);
+      if (again) again.focus({ preventScroll: true });
+    };
 
     if (rows.length) {
       listEl.innerHTML = rows.join('');
-      if (sessions.length > MAX_ROWS) {
-        listEl.insertAdjacentHTML('beforeend', `<div class="gvx-more">Showing the latest ${MAX_ROWS} of ${sessions.length}.</div>`);
+      if (totalRows > MAX_ROWS) {
+        listEl.insertAdjacentHTML('beforeend', `<div class="gvx-more">Showing the latest ${MAX_ROWS} days. Older play is in the totals above.</div>`);
       }
     } else {
       const imported = Number(g.hours) > 0
@@ -2753,11 +2805,9 @@
 
     const paint = () => {
       const valueEl = document.querySelector('[data-timer-value]');
-      const liveDur = document.querySelector('[data-live-dur]');
       if (!valueEl || typeof state.live[String(g.id)] !== 'number') { stopDetailTick(); return; }
       const elapsed = Math.max(0, Date.now() - state.liveStart[String(g.id)]);
       valueEl.textContent = Sessions.formatClock(elapsed);
-      if (liveDur) liveDur.textContent = Sessions.formatClock(elapsed);
     };
     paint();
     if (state.tier === 'lite') return;
@@ -2771,10 +2821,7 @@
     paintLedger(g);
     paintRail(g);
     const countEl = view.querySelector('.gvx-ledger-count');
-    if (countEl) {
-      const n = Sessions.sessionStats(gvSessions(g)).count;
-      countEl.textContent = `${n} session${n === 1 ? '' : 's'}`;
-    }
+    if (countEl) countEl.textContent = ledgerCountText(gvSessions(g));
   }
 
   function updateDetailLive(g) {
@@ -2917,6 +2964,7 @@
     const near = at < 0 ? null : (shown[at + 1] || shown[at - 1] || null);
     if (state.selectedId === id) closeDetail();
     state.games.splice(idx, 1);
+    if (g.sourceId) importIgnore(g.sourceId, true);
     if (state.shelfId === id) state.shelfId = near ? String(near.id) : null;
     state._shelfKey = '';
     renderLibrary();
@@ -2925,6 +2973,7 @@
     setTimeout(() => focusGameIfLost(near), 360);
     toast(`${g.name || 'Game'} removed from your library`, 'ok', [{ label: 'Undo', run: () => {
       if (state.games.includes(g)) return;
+      if (g.sourceId) importIgnore(g.sourceId, false);
       state.games.splice(Math.min(idx, state.games.length), 0, g);
       state._shelfKey = '';
       renderLibrary();
@@ -3015,14 +3064,6 @@
       ? `${STAR_ICON}<span>Rate</span>`
       : r >= Rating.PEAK ? `<span class="peak-word">Peak</span>` : `${STAR_ICON}<span>${Rating.label(r)}</span><small>/10</small>`;
     return `<button class="gvx-chip gvx-rate${tier ? ` tier-${tier}` : ''}${r >= Rating.PEAK ? ' peak-foil' : ''}" data-rate title="${r ? 'Your rating: click to change' : 'Rate this game'}">${inner}</button>`;
-  }
-
-  // the "best game ever" medal over the logo on a PEAK game's page
-  function peakMedalHtml(g) {
-    return `<div class="peak-medal" role="button" tabindex="0" data-peak-open data-id="${esc(String(g.id))}" title="Rated PEAK: your best game ever">
-      <span class="peak-medal-disc"><b>10</b></span>
-      <span class="peak-medal-text"><b class="peak-word">Peak</b><small>Your best game ever</small></span>
-    </div>`;
   }
 
   // ---- PEAK showcase: the pill grows into a big 3D plaque that catches the
@@ -3134,8 +3175,8 @@
   }
   // every PEAK pill anywhere: shine on hover, open the showcase on click
   document.addEventListener('pointerover', (e) => {
-    const pill = e.target.closest && e.target.closest('.peak-foil, .peak-medal');
-    if (pill) peakTilt(pill, pill.classList.contains('peak-medal') ? 10 : 22);
+    const pill = e.target.closest && e.target.closest('.peak-foil');
+    if (pill) peakTilt(pill, 22);
   });
   document.addEventListener('click', (e) => {
     const pill = e.target.closest && e.target.closest('[data-peak-open]');
@@ -3147,12 +3188,6 @@
     e.stopPropagation();
     openPeakShowcase(g, pill);
   }, true);
-  document.addEventListener('keydown', (e) => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.peak-medal[data-peak-open]')) {
-      e.preventDefault();
-      e.target.click();
-    }
-  });
 
   function setRating(g, r) {
     const next = Rating.parse(r);
@@ -3259,6 +3294,7 @@
     const app = $('#app');
     if (app) app.inert = true;
     wrap.hidden = false;
+    wrap.classList.remove('is-closing');
     wrap.innerHTML = `<div class="modal-card ${className}" role="dialog" aria-modal="true" tabindex="-1">${html}</div>`;
     const card = wrap.firstElementChild;
     const head = card.querySelector('.modal-head h2');
@@ -3298,18 +3334,26 @@
 
   function closeModal() {
     const wrap = $('#modal');
-    if (!wrap.hidden) sfx('close');
+    const app = $('#app');
+    // nothing open, or already fading out: never restart the timer
+    if (wrap.hidden || wrap.classList.contains('is-closing')) {
+      if (app && wrap.hidden && !bp.menuOpen) app.inert = false;
+      return;
+    }
+    sfx('close');
     const card = wrap.firstElementChild;
     modalSeq += 1;
     const seq = modalSeq;
     const opener = state._modalOpener;
-    const app = $('#app');
     if (app) app.inert = false;
     if (card) card.classList.remove('is-open');
+    // while it fades the dialog lets clicks through to the app underneath
+    wrap.classList.add('is-closing');
     setTimeout(() => {
       // a new modal opened in the meantime — this close is stale
       if (seq !== modalSeq) return;
       wrap.hidden = true;
+      wrap.classList.remove('is-closing');
       wrap.innerHTML = '';
       if (app) app.inert = false;
       if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
@@ -4230,6 +4274,157 @@
     return `<span class="isk-ico ${cls}">${letter}</span>`;
   }
 
+  // ---- import: one set of rules for "is this game already here?" and for
+  // turning a found game into a library entry. The import dialog and auto
+  // sync both use them.
+  const IMPORT_IS_WIN = /Windows/i.test(navigator.userAgent);
+  const importNormPath = (p) => {
+    let s = String(p || '').trim().replace(/[\\/]+/g, '/').replace(/\/$/, '');
+    if (IMPORT_IS_WIN) s = s.toLowerCase();
+    return s;
+  };
+  const importAppId = (x) => {
+    const n = Number(x && x.steamAppId);
+    if (Number.isFinite(n) && n > 0) return n;
+    const m = /^steam(?:-owned|-wishlist)?:(\d+)$/.exec(String((x && x.sourceId) || ''));
+    return m ? Number(m[1]) : 0;
+  };
+  const importNameKey = (x) => String((x && x.name) || '').trim().toLowerCase();
+  // real files only: launcher links and shell: entries are not paths
+  const importFilePath = (x) => {
+    const v = String((x && x.exePath) || '');
+    return /^[a-z][a-z0-9+.-]+:(?![\\/])/i.test(v) && !/^[a-z]:[\\/]/i.test(v) ? '' : importNormPath(v);
+  };
+
+  function importIndex() {
+    const bySource = new Map(), byPath = new Map(), byApp = new Map(), byName = new Map();
+    for (const g of state.games) {
+      if (g.sourceId) bySource.set(String(g.sourceId), g);
+      const p = importFilePath(g);
+      if (p && !byPath.has(p)) byPath.set(p, g);
+      const app = importAppId(g);
+      if (app && !byApp.has(app)) byApp.set(app, g);
+      // name only identifies entries that have neither a sourceId nor a path
+      if (!g.sourceId && !p && importNameKey(g) && !byName.has(importNameKey(g))) byName.set(importNameKey(g), g);
+    }
+    return { bySource, byPath, byApp, byName, size: state.games.length };
+  }
+
+  function importFind(ix, c) {
+    if (c.sourceId && ix.bySource.has(String(c.sourceId))) return ix.bySource.get(String(c.sourceId));
+    const p = importFilePath(c);
+    if (p && ix.byPath.has(p)) return ix.byPath.get(p);
+    const app = importAppId(c);
+    if (app && ix.byApp.has(app)) return ix.byApp.get(app);
+    if (!c.sourceId && !p) return ix.byName.get(importNameKey(c)) || null;
+    return null;
+  }
+
+  function gameFromCandidate(c, sourceLabel) {
+    const g = {
+      id: crypto.randomUUID(),
+      name: c.name,
+      source: c.source || sourceLabel || 'Import',
+      sourceId: c.sourceId || null,
+      exePath: c.exePath || '',
+      installDir: c.installDir || '',
+      steamAppId: c.steamAppId || null,
+      launcherPath: '',
+      hours: Number(c.hours) || 0,
+      sessions: [],
+      status: 'Playing',
+      wishlisted: !!c.wishlisted,
+      notes: '',
+      added: Date.now(),
+      iconUrl: c.iconPath ? fileUrl(c.iconPath) : null,
+    };
+    // Heroic, Lutris and Bottles games start through their launcher
+    if (c.launchTarget) g.launchTarget = String(c.launchTarget);
+    return g;
+  }
+
+  // ---- auto sync: launchers you switched on are re-read on their own, and
+  // games you installed since show up without opening Import.
+  const AUTO_SYNC_EVERY = 30 * 60 * 1000;
+  let autoSyncBusy = false;
+  let autoSyncAt = 0;
+
+  function autoSyncOn(id) { return !!(state.config.autoSync && state.config.autoSync[id]); }
+
+  async function setAutoSync(id, on) {
+    const next = { ...(state.config.autoSync || {}) };
+    if (on) next[id] = true; else delete next[id];
+    await saveConfigPatch({ autoSync: next });
+  }
+
+  // Games you removed are remembered so auto sync does not bring them back.
+  function importIgnore(sourceId, on) {
+    if (!sourceId) return;
+    const list = (Array.isArray(state.config.importIgnored) ? state.config.importIgnored : []).filter((x) => x !== String(sourceId));
+    if (on) list.push(String(sourceId));
+    saveConfigPatch({ importIgnored: list.slice(-3000) });
+  }
+
+  async function runAutoSync({ only = null, quiet = true } = {}) {
+    if (autoSyncBusy || !api.importScan || !api.importSources) return 0;
+    const ids = Object.keys(state.config.autoSync || {}).filter((id) => state.config.autoSync[id] && (!only || id === only));
+    if (!ids.length) return 0;
+    // never while a game is running, and not under an open import dialog
+    if (Object.values(state.live).some((v) => typeof v === 'number')) {
+      if (!quiet) toast('Auto sync waits until your game is closed', 'ok', null, { quiet: true });
+      return 0;
+    }
+    if (document.querySelector('.imp3-modal')) return 0;
+    autoSyncBusy = true;
+    autoSyncAt = Date.now();
+    const added = [];
+    try {
+      const sources = await api.importSources().catch(() => []);
+      const ignored = new Set(Array.isArray(state.config.importIgnored) ? state.config.importIgnored : []);
+      for (const id of ids) {
+        const src = (sources || []).find((x) => x.id === id);
+        if (!src || !src.sync || !src.found) continue;
+        const found = await api.importScan(id).catch(() => null);
+        if (!Array.isArray(found)) continue;
+        let ix = importIndex();
+        for (const c of found) {
+          if (!c || !c.name || c.wishlisted) continue;
+          if (c.sourceId && ignored.has(String(c.sourceId))) continue;
+          // only what can actually be started
+          if (!c.exePath && !c.launchTarget && !c.steamAppId) continue;
+          if (importFind(ix, c)) continue;
+          const g = gameFromCandidate(c, src.label);
+          state.games.unshift(g);
+          added.push(g);
+          ix = importIndex();
+        }
+      }
+    } catch (e) {
+      reportError('autosync', e);
+    } finally {
+      autoSyncBusy = false;
+    }
+    if (added.length) {
+      saveGamesSoon();
+      state._shelfKey = '';
+      if (!state.selectedId && !state.settingsOpen) renderLibrary();
+      refreshCounts();
+      const names = added.slice(0, 2).map((g) => g.name).join(', ');
+      toast(`Auto sync added ${added.length === 1 ? names : `${added.length} games: ${names}${added.length > 2 ? '…' : ''}`}`, 'ok', null, { quiet: true });
+      enrichArt().catch(() => {});
+    } else if (!quiet) {
+      toast('Auto sync: nothing new', 'ok', null, { quiet: true });
+    }
+    return added.length;
+  }
+
+  function initAutoSync() {
+    setTimeout(() => runAutoSync(), 12000);
+    setInterval(() => runAutoSync(), AUTO_SYNC_EVERY);
+    // coming back to the window after a while (you were installing something?)
+    window.addEventListener('focus', () => { if (Date.now() - autoSyncAt > 5 * 60 * 1000) runAutoSync(); });
+  }
+
   function openImportModal() {
     const card = openModal(`
       <div class="modal-head">
@@ -4268,6 +4463,7 @@
           <button class="imp3-back" data-back>‹ Back</button>
           <span class="imp3-review-title" data-review-title></span>
         </div>
+        <div class="imp3-sync" data-sync-row hidden></div>
         <div class="imp3-list" data-list role="list"></div>
       </div>
 
@@ -4294,6 +4490,29 @@
     const summaryEl = card.querySelector('[data-summary]');
     const primaryBtn = card.querySelector('[data-primary]');
     const folderBtn = card.querySelector('[data-scan-folder]');
+    const syncRow = card.querySelector('[data-sync-row]');
+
+    // Auto sync is chosen here, per launcher. Launchers that can't do it show
+    // the switch off and locked, with the reason.
+    const paintSyncRow = () => {
+      const src = sources.find((x) => x.id === activeId);
+      if (!src || src.action || src.id === 'folder' || src.id === 'file') { syncRow.hidden = true; syncRow.innerHTML = ''; return; }
+      const can = !!src.sync;
+      const on = can && autoSyncOn(src.id);
+      syncRow.hidden = false;
+      syncRow.classList.toggle('is-off', !can);
+      syncRow.innerHTML = `
+        <span class="imp3-sync-text">
+          <b>Keep ${esc(src.label)} in sync</b>
+          <span>${esc(can ? 'New games you install there are added on their own.' : src.syncNote || 'This source can only be imported by hand.')}</span>
+        </span>
+        ${stSwitch('data-sync-toggle', on, { disabled: !can, label: `Keep ${src.label} in sync` })}`;
+      const box = syncRow.querySelector('[data-sync-toggle]');
+      if (box && can) box.onchange = async () => {
+        await setAutoSync(src.id, box.checked);
+        toast(box.checked ? `${src.label} will stay in sync` : `${src.label} auto sync is off`, 'ok', null, { quiet: true });
+      };
+    };
 
     let sources = [];
     let activeId = null;
@@ -4309,46 +4528,12 @@
     // Duplicate detection. Paths compare with normalized separators, and
     // case-insensitively on Windows; Steam entries also match by AppID (so a
     // wishlist entry for a game you already have is not offered again).
-    const IS_WIN = /Windows/i.test(navigator.userAgent);
-    const normPath = (p) => {
-      let s = String(p || '').trim().replace(/[\\/]+/g, '/').replace(/\/$/, '');
-      if (IS_WIN) s = s.toLowerCase();
-      return s;
-    };
-    const appIdOf = (x) => {
-      const n = Number(x && x.steamAppId);
-      if (Number.isFinite(n) && n > 0) return n;
-      const m = /^steam(?:-owned|-wishlist)?:(\d+)$/.exec(String((x && x.sourceId) || ''));
-      return m ? Number(m[1]) : 0;
-    };
-    const nameKey = (x) => String((x && x.name) || '').trim().toLowerCase();
+    const appIdOf = importAppId;
     // Lookup maps over the library, built once per review paint instead of
     // scanning state.games for every candidate on every checkbox change.
     let libIndex = null;
-    const buildLibIndex = () => {
-      const bySource = new Map(), byPath = new Map(), byApp = new Map(), byName = new Map();
-      for (const g of state.games) {
-        if (g.sourceId) bySource.set(String(g.sourceId), g);
-        const p = normPath(g.exePath);
-        if (p && !byPath.has(p)) byPath.set(p, g);
-        const app = appIdOf(g);
-        if (app && !byApp.has(app)) byApp.set(app, g);
-        // name only identifies entries that have neither a sourceId nor a path
-        if (!g.sourceId && !p && nameKey(g) && !byName.has(nameKey(g))) byName.set(nameKey(g), g);
-      }
-      libIndex = { bySource, byPath, byApp, byName, size: state.games.length };
-      return libIndex;
-    };
-    const existingFor = (c) => {
-      const ix = libIndex && libIndex.size === state.games.length ? libIndex : buildLibIndex();
-      if (c.sourceId && ix.bySource.has(String(c.sourceId))) return ix.bySource.get(String(c.sourceId));
-      const p = normPath(c.exePath);
-      if (p && ix.byPath.has(p)) return ix.byPath.get(p);
-      const app = appIdOf(c);
-      if (app && ix.byApp.has(app)) return ix.byApp.get(app);
-      if (!c.sourceId && !p) return ix.byName.get(nameKey(c)) || null;
-      return null;
-    };
+    const buildLibIndex = () => { libIndex = importIndex(); return libIndex; };
+    const existingFor = (c) => importFind(libIndex && libIndex.size === state.games.length ? libIndex : buildLibIndex(), c);
     const isNew = (c) => !existingFor(c);
     const picked = () => candidates.filter((c) => c._checked && isNew(c));
     const labelOf = (id) => (sources.find((s) => s.id === id) || {}).label || id;
@@ -4576,6 +4761,7 @@
       optionsStep.hidden = true;
       reviewStep.hidden = false;
       reviewTitle.textContent = labelOf(id);
+      paintSyncRow();
       paintReview();
       paintSummary();
       try {
@@ -4625,23 +4811,9 @@
       for (let i = 0; i < total; i++) {
         primaryBtn.textContent = `Importing ${i + 1}/${total}…`;
         const c = list[i];
-        state.games.unshift({
-          id: crypto.randomUUID(),
-          name: c.name,
-          source: c.source || labelOf(activeId),
-          sourceId: c.sourceId || null,
-          exePath: c.exePath || '',
-          installDir: c.installDir || '',
-          steamAppId: c.steamAppId || null,
-          launcherPath: '',
-          hours: Number(c.hours) || 0,
-          sessions: [],
-          status: 'Playing',
-          wishlisted: !!c.wishlisted,
-          notes: '',
-          added: Date.now(),
-          iconUrl: c.iconPath ? fileUrl(c.iconPath) : null,
-        });
+        state.games.unshift(gameFromCandidate(c, labelOf(activeId)));
+        // importing it by hand means you want it: auto sync may add it again later
+        if (c.sourceId && Array.isArray(state.config.importIgnored) && state.config.importIgnored.includes(String(c.sourceId))) importIgnore(c.sourceId, false);
       }
       saveGamesSoon();
       closeModal();
@@ -5590,7 +5762,9 @@
                <button type="button" class="btn btn-ghost" data-steam-save>Save</button>
                <button type="button" class="btn btn-ghost" data-steam-test>Test</button></div>`, { wide: true, descId: 'st-steam-desc' })) +
           stCard('Import',
-            stRow('Import games', 'Steam, Epic, GOG, Xbox, Hydra, a folder, or your whole PC.', '<button type="button" class="btn btn-ghost" data-open-import>Open import</button>')),
+            stRow('Import games', 'Steam, Epic, GOG, Xbox, Heroic, Lutris, itch and more, a folder, or your whole PC.', '<button type="button" class="btn btn-ghost" data-open-import>Open import</button>') +
+            stRow('Sync now', 'Checks the launchers below for games you installed since the last look.', '<button type="button" class="btn btn-ghost" data-sync-now>Sync now</button>')) +
+          stCard('Auto sync', '<div class="st-sync-list" data-autosync-list><div class="st-row"><div class="st-row-text"><span class="st-row-desc">Looking for launchers…</span></div></div></div>'),
         wire(panel) {
           const sgdbDescEl = panel.querySelector('#st-sgdb-desc');
           panel.querySelector('[data-sgdb-save]').onclick = async () => {
@@ -5633,6 +5807,28 @@
             else toast((res && res.error && res.error.message) || 'Steam unreachable', 'error');
           };
           panel.querySelector('[data-open-import]').onclick = () => { closeSettings({ restoreFocus: false }); $('#btn-import')?.click(); };
+          const syncNow = panel.querySelector('[data-sync-now]');
+          if (syncNow) syncNow.onclick = async () => {
+            if (!Object.values(state.config.autoSync || {}).some(Boolean)) { toast('Turn on a launcher below first', 'error'); return; }
+            syncNow.disabled = true;
+            await runAutoSync({ quiet: false });
+            syncNow.disabled = false;
+          };
+          const syncList = panel.querySelector('[data-autosync-list]');
+          if (syncList && api.importSources) api.importSources().catch(() => []).then((sources) => {
+            if (!syncList.isConnected) return;
+            const rows = (sources || []).filter((x) => !x.action && x.id !== 'folder' && x.id !== 'file' && x.id !== 'pc' && x.id !== 'steam-owned' && (x.found || autoSyncOn(x.id)));
+            syncList.innerHTML = rows.length
+              ? rows.map((x) => stRow(x.label, x.sync ? 'New games you install there are added on their own.' : x.syncNote,
+                  stSwitch(`data-autosync="${esc(x.id)}"`, x.sync && autoSyncOn(x.id), { disabled: !x.sync, label: `Keep ${x.label} in sync` }))).join('')
+              : stRow('No launchers found', 'Install Steam, Epic, GOG, Heroic, Lutris or another launcher and it shows up here.', '');
+            for (const box of syncList.querySelectorAll('[data-autosync]')) {
+              box.onchange = async () => {
+                await setAutoSync(box.dataset.autosync, box.checked);
+                if (box.checked) runAutoSync({ only: box.dataset.autosync });
+              };
+            }
+          });
         },
       };
     },
@@ -6169,6 +6365,9 @@
       strip.classList.remove('is-dragging');
 
       if (!shelfDragMoved) return;
+      // the click that ends this drag is ignored (it fires before any timer);
+      // anything after it is a real press again
+      setTimeout(() => { shelfDragMoved = false; }, 0);
       const now = performance.now();
       const recent = samples.filter((s) => now - s.t < 140);
       if (recent.length < 2) return;
@@ -6448,6 +6647,40 @@
   // Boot
   // ---------------------------------------------------------------------------
 
+  // Errors go to the console and to renderer-errors.log next to the library,
+  // so a "nothing works" report comes with the reason.
+  function reportError(where, err) {
+    const text = err && (err.stack || err.message) ? String(err.stack || err.message) : String(err);
+    console.error(where, err);
+    try { if (api.logError) api.logError({ where, text: text.slice(0, 4000) }); } catch (_) {}
+  }
+  window.addEventListener('error', (e) => reportError('error', e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => reportError('promise', e.reason));
+
+  // The window can only be "dead" in a few ways: the app left inert, an empty
+  // dialog or the search backdrop still on top, or the Big Picture menu's
+  // lock left behind. Every press checks for those and clears them, so a
+  // missed clean-up heals on the next click instead of needing a restart.
+  function initUnstick() {
+    const heal = () => {
+      const app = $('#app');
+      const modal = $('#modal');
+      const fixed = [];
+      const modalOpen = modal && !modal.hidden && !modal.classList.contains('is-closing') && modal.firstElementChild;
+      if (modal && !modal.hidden && !modal.firstElementChild) { modal.hidden = true; modal.classList.remove('is-closing'); fixed.push('empty dialog'); }
+      const menu = $('#bp-menu');
+      const menuOpen = bp.menuOpen && menu && !menu.hidden;
+      if (bp.menuOpen && !menuOpen) { bp.menuOpen = false; fixed.push('menu flag'); }
+      if (!menuOpen && document.documentElement.classList.contains('bp-menu-open')) { document.documentElement.classList.remove('bp-menu-open'); fixed.push('menu lock'); }
+      if (app && app.inert && !modalOpen && !menuOpen) { app.inert = false; fixed.push('inert app'); }
+      const scrim = $('#scrim');
+      if (scrim && scrim.classList.contains('open') && !spotHooks.isOpen()) { scrim.classList.remove('open'); fixed.push('search backdrop'); }
+      if (fixed.length) reportError('unstick', new Error(`cleared: ${fixed.join(', ')}`));
+    };
+    window.addEventListener('pointerdown', heal, true);
+    window.addEventListener('keydown', heal, true);
+  }
+
   async function boot() {
     state.tier = lsGet('gv.tier') || 'standard';
     state.palette = lsGet('gv.palette') || 'midnight';
@@ -6518,30 +6751,37 @@
       console.warn('status migration failed', e);
     }
 
-    applyPalette(state.palette);
-    applyTier(state.tier);
-    applyView();
-    wire();
-    applySfxConfig();
-    initGameActions();
-    initUiSounds();
-    initController();
-    initBigPicture();
+    // Each step runs on its own: one that throws is logged and the rest
+    // still wire up, so a single bug can't leave every button dead.
+    const step = (name, fn) => { try { fn(); } catch (e) { reportError(`boot:${name}`, e); } };
+    step('palette', () => applyPalette(state.palette));
+    step('tier', () => applyTier(state.tier));
+    step('view', () => applyView());
+    step('wire', () => wire());
+    step('sfx', () => applySfxConfig());
+    step('actions', () => initGameActions());
+    step('sounds', () => initUiSounds());
+    step('controller', () => initController());
+    step('bigpicture', () => initBigPicture());
+    step('unstick', () => initUnstick());
+    step('autosync', () => initAutoSync());
 
-    updateSortUi();
-    syncPerfRecorder();
-    const storedFilter = lsGet('gv.filter');
-    if (storedFilter && storedFilter !== 'All' && FILTER_LABELS[storedFilter]) {
-      state.filter = storedFilter;
-      for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === storedFilter);
-      const ft = $('#filter-title');
-      if (ft) ft.textContent = filterLabel(storedFilter);
-      syncSidePill();
-    }
-    renderLibrary();
-    refreshCounts();
-    prepareThumbs();
-    enrichArt();
+    step('sort', () => updateSortUi());
+    step('perf', () => syncPerfRecorder());
+    step('filter', () => {
+      const storedFilter = lsGet('gv.filter');
+      if (storedFilter && storedFilter !== 'All' && FILTER_LABELS[storedFilter]) {
+        state.filter = storedFilter;
+        for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === storedFilter);
+        const ft = $('#filter-title');
+        if (ft) ft.textContent = filterLabel(storedFilter);
+        syncSidePill();
+      }
+    });
+    step('library', () => renderLibrary());
+    step('counts', () => refreshCounts());
+    step('thumbs', () => prepareThumbs());
+    step('art', () => enrichArt());
 
     // Deep-link dev state (used by --shot-state)
     const hashState = location.hash.replace('#', '');
@@ -7590,6 +7830,27 @@
     xbox: { a: 'A', b: 'B', x: 'X', y: 'Y', lb: 'LB', rb: 'RB', lt: 'LT', rt: 'RT', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS', guide: '⌂' },
     ps: { a: '✕', b: '○', x: '□', y: '△', lb: 'L1', rb: 'R1', lt: 'L2', rt: 'R2', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS', guide: '⌂' },
   };
+  // Face buttons and symbols are drawn, not typed: a font's ✕ □ △ (and even
+  // its A B X Y) never sit in the optical centre of a round button.
+  const PAD_GLYPH_SVG = {
+    xbox: {
+      a: '<path d="M6.6 18.8 12 5.2l5.4 13.6M8.7 13.9h6.6"/>',
+      b: '<path d="M8.2 5.2v13.6M8.2 5.2h4.3a3.3 3.3 0 0 1 0 6.6H8.2M8.2 11.8h5a3.5 3.5 0 0 1 0 7h-5"/>',
+      x: '<path d="m6.8 5.4 10.4 13.2M17.2 5.4 6.8 18.6"/>',
+      y: '<path d="m6.6 5.2 5.4 7.4 5.4-7.4M12 12.6v6.2"/>',
+    },
+    ps: {
+      a: '<path d="m6.4 6.4 11.2 11.2M17.6 6.4 6.4 17.6"/>',
+      b: '<circle cx="12" cy="12" r="6.9"/>',
+      x: '<rect x="5.6" y="5.6" width="12.8" height="12.8" rx="1.2"/>',
+      y: '<path d="M12 5.6 19 17.9H5z"/>',
+    },
+    any: {
+      menu: '<path d="M6 7.6h12M6 12h12M6 16.4h12"/>',
+      view: '<rect x="4.6" y="9" width="10" height="10" rx="1.6"/><path d="M9.6 9V6.4a1.4 1.4 0 0 1 1.4-1.4h7a1.4 1.4 0 0 1 1.4 1.4v7a1.4 1.4 0 0 1-1.4 1.4h-3.4"/>',
+      guide: '<path d="m4.8 11.6 7.2-6.4 7.2 6.4"/><path d="M7.2 10.4V19h9.6v-8.6"/>',
+    },
+  };
   const pad = { reader: null, raf: 0, on: false, glyphs: 'xbox', away: true, mx: -1, my: -1, lastT: 0, ensure: 0 };
 
   function padEnabled() { return !state.config || state.config.padEnabled !== false; }
@@ -8152,7 +8413,10 @@
   // ---- button hints
 
   function padGlyph(btn, set = padGlyphSet()) {
-    const t = (PAD_GLYPH_TEXT[set] || PAD_GLYPH_TEXT.xbox)[btn] || btn.toUpperCase();
+    const draw = (PAD_GLYPH_SVG[set] || PAD_GLYPH_SVG.xbox)[btn] || PAD_GLYPH_SVG.any[btn];
+    const t = draw
+      ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${draw}</svg>`
+      : `<b>${(PAD_GLYPH_TEXT[set] || PAD_GLYPH_TEXT.xbox)[btn] || btn.toUpperCase()}</b>`;
     return `<i class="pad-btn" data-glyph="${set}" data-btn="${btn}">${t}</i>`;
   }
 

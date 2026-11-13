@@ -32,7 +32,7 @@ const XBOX_SYSTEM_APPS = new Set([
 ]);
 
 const XBOX_LIST_COMMAND =
-  'Get-AppxPackage | Select-Object Name,PackageFamilyName,InstallLocation | ConvertTo-Json';
+  'Get-AppxPackage | Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } | Select-Object Name,PackageFamilyName,InstallLocation | ConvertTo-Json';
 
 // Battle.net, EA and Ubisoft do not expose a clean library file we can read,
 // so they are matched against the regular Uninstall registry keys.
@@ -46,7 +46,14 @@ const REGISTRY_SOURCES = {
   origin: { source: 'EA', pattern: /electronic arts|\bEA\b|\bOrigin\b/i },
   ubisoft: { source: 'Ubisoft', pattern: /ubisoft|uplay/i },
   uplay: { source: 'Ubisoft', pattern: /ubisoft|uplay/i },
+  rockstar: { source: 'Rockstar', pattern: /rockstar games/i },
+  riot: { source: 'Riot', pattern: /riot games/i },
+  riotgames: { source: 'Riot', pattern: /riot games/i },
 };
+
+// The launchers themselves (and their helpers) sit in the same registry keys
+// as the games they install. They are never games.
+const LAUNCHER_SELF = /^(battle\.net|blizzard battle\.net|ea app|ea desktop|ea download manager|origin|ubisoft connect|ubisoft game launcher|uplay|rockstar games launcher|rockstar games social club|social club|riot client|riot vanguard|vanguard)$/i;
 
 // ---------------------------------------------------------------------------
 // Candidates and small value helpers
@@ -238,10 +245,25 @@ function parseUninstallKey(obj, sourceName = 'Windows') {
 // Xbox / Microsoft Store
 // ---------------------------------------------------------------------------
 
-// "Microsoft.ForzaHorizon5" -> "Forza Horizon 5"
+// A game's MicrosoftGame.config (every Xbox / Game Pass PC game ships one)
+// -> { name, appId }. The name is '' when it is only a resource reference.
+function parseMicrosoftGameConfig(xml) {
+  const raw = String(xml || '');
+  if (!/<Game[\s>]/i.test(raw)) return null;
+  const exe = raw.match(/<Executable\b[^>]*>/i);
+  const id = exe && exe[0].match(/\bId\s*=\s*"([^"]+)"/i);
+  const shell = raw.match(/<ShellVisuals\b[^>]*>/i);
+  const display = shell && shell[0].match(/\bDefaultDisplayName\s*=\s*"([^"]*)"/i);
+  let name = display ? display[1].trim() : '';
+  if (/^ms-resource:/i.test(name)) name = '';
+  name = name.replace(/&amp;/g, '&').replace(/&apos;/g, "'").replace(/&quot;/g, '"');
+  return { name, appId: id ? id[1].trim() : 'Game' };
+}
+
+// "Microsoft.ForzaHorizon5" -> "Forza Horizon 5", "BethesdaSoftworks.Starfield" -> "Starfield"
 function xboxDisplayName(packageName) {
   return text(packageName)
-    .replace(/^Microsoft\./i, '')
+    .replace(/^[A-Za-z0-9-]+\.(?=.)/, '')
     .replace(/[._-]+/g, ' ')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
@@ -253,7 +275,12 @@ function xboxDisplayName(packageName) {
 
 // Get-AppxPackage JSON -> Candidate[]. A single package is emitted as an
 // object by ConvertTo-Json, so accept both shapes.
-function parseXboxApps(json) {
+//
+// With `readConfig(installLocation)` (returns the text of the package's
+// MicrosoftGame.config, or '' when it has none) only real games are kept,
+// from any publisher, named and launched the way the game declares. Without
+// it this is the older, looser list of Microsoft.* packages.
+function parseXboxApps(json, { readConfig = null } = {}) {
   const list = Array.isArray(json) ? json : (json && typeof json === 'object' ? [json] : []);
   const out = [];
 
@@ -261,17 +288,26 @@ function parseXboxApps(json) {
     if (!app || typeof app !== 'object') continue;
 
     const packageName = text(app.Name);
-    if (!/^Microsoft\./.test(packageName)) continue;
+    const family = text(app.PackageFamilyName);
+    if (!packageName || !family) continue;
     if (XBOX_SYSTEM_APPS.has(packageName.toLowerCase())) continue;
 
-    const family = text(app.PackageFamilyName);
-    if (!family) continue;
+    let name = '';
+    let appId = 'App';
+    if (readConfig) {
+      const cfg = parseMicrosoftGameConfig(readConfig(text(app.InstallLocation)));
+      if (!cfg) continue;
+      name = cfg.name;
+      appId = cfg.appId;
+    } else if (!/^Microsoft\./.test(packageName)) {
+      continue;
+    }
 
     out.push(candidate({
-      name: xboxDisplayName(packageName),
+      name: name || xboxDisplayName(packageName),
       source: 'Xbox',
       sourceId: `xbox:${family}`,
-      exePath: `shell:AppsFolder\\${family}!App`,
+      exePath: `shell:AppsFolder\\${family}!${appId}`,
       installDir: text(app.InstallLocation),
     }));
   }
@@ -297,6 +333,8 @@ function execText(command, args, options) {
       encoding: 'utf8',
       timeout: 20000,
       windowsHide: true,
+      // a missing registry key is normal: keep reg.exe's complaint off the console
+      stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 16 * 1024 * 1024,
       ...options,
     }) || '';
@@ -396,9 +434,19 @@ function scanUninstall(sourceName, pattern) {
       const values = block.values;
       const haystack = `${text(values.DisplayName)} ${text(values.Publisher)}`;
       if (!pattern.test(haystack)) continue;
+      if (LAUNCHER_SELF.test(text(values.DisplayName))) continue;
+      // a publisher's game bought on Steam belongs to the Steam import
+      if (/\\Steam App \d+$/i.test(block.key)) continue;
 
       const found = parseUninstallKey(values, sourceName);
-      if (found) out.push(found);
+      if (!found) continue;
+      // the registry's icon is often an .ico: look in the install folder for the game
+      if (!/\.exe$/i.test(found.exePath)) {
+        let exe = '';
+        try { exe = found.installDir ? require('../scanner.js').findMainExe(found.installDir) : ''; } catch (_) {}
+        found.exePath = exe || '';
+      }
+      if (found.exePath) out.push(found);
     }
   }
 
@@ -412,7 +460,35 @@ function scanXbox() {
     '-Command',
     XBOX_LIST_COMMAND,
   ], { timeout: 30000 });
-  return parseXboxApps(parseJsonText(raw));
+  const readConfig = (dir) => {
+    if (!dir) return '';
+    for (const file of [path.win32.join(dir, 'MicrosoftGame.config'), path.win32.join(dir, 'Content', 'MicrosoftGame.config')]) {
+      try { return fs.readFileSync(file, 'utf8'); } catch (_) { /* not a game, or not readable */ }
+    }
+    return '';
+  };
+  return parseXboxApps(parseJsonText(raw), { readConfig });
+}
+
+// Cheap "is this launcher here at all?" checks for the import list. Unknown
+// ids answer true (the scan itself decides).
+function detectWindowsSource(id, env = process.env) {
+  if (process.platform !== 'win32') return false;
+  const exists = (...parts) => { try { return parts.every(Boolean) && fs.existsSync(path.win32.join(...parts)); } catch (_) { return false; } };
+  const pd = env.ProgramData || 'C:\\ProgramData';
+  const pf86 = env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const pf = env.ProgramFiles || 'C:\\Program Files';
+  const local = env.LOCALAPPDATA || '';
+  switch (text(id).toLowerCase()) {
+    case 'epic': return exists(pd, EPIC_MANIFEST_DIR);
+    case 'gog': return exists(pd, 'GOG.com') || exists(pf86, 'GOG Galaxy') || queryRegistry(GOG_REG_KEY).trim() !== '';
+    case 'battlenet': return exists(pd, 'Battle.net') || exists(pf86, 'Battle.net');
+    case 'ea': return exists(pd, 'EA Desktop') || exists(pd, 'Electronic Arts') || exists(pf, 'Electronic Arts') || exists(pd, 'Origin');
+    case 'ubisoft': return exists(local, 'Ubisoft Game Launcher') || exists(pf86, 'Ubisoft', 'Ubisoft Game Launcher');
+    case 'rockstar': return exists(pf, 'Rockstar Games') || exists(pd, 'Rockstar Games');
+    case 'riot': return exists(pd, 'Riot Games') || exists('C:\\Riot Games');
+    default: return true;
+  }
 }
 
 function dedupe(list) {
@@ -452,6 +528,8 @@ function scanWindowsSource(id) {
 }
 
 module.exports = {
+  parseMicrosoftGameConfig,
+  detectWindowsSource,
   parseEpicManifest,
   parseGogInfo,
   parseUninstallKey,

@@ -343,3 +343,101 @@ test('migrateStatuses: running it twice is a no-op', () => {
   assert.deepEqual(second.games, first.games);
   assert.notEqual(second.games[0], first.games[0]);
 });
+
+// ---- days, runs, habits (stress cases) ------------------------------------
+const Sx = require('../src/lib/sessions.js');
+const dayAt = (y, m, d, h = 20, min = 0) => new Date(y, m - 1, d, h, min).getTime();
+const mk = (start, hours) => ({ start, end: start + hours * 3600000, duration: hours });
+
+test('dayGroups: many sessions in one day become one day, oldest session first', () => {
+  const list = [mk(dayAt(2026, 3, 5, 21), 1), mk(dayAt(2026, 3, 5, 9), 0.5), mk(dayAt(2026, 3, 4, 23, 30), 2)];
+  const days = Sx.dayGroups(list);
+  assert.equal(days.length, 2);
+  assert.equal(days[0].count, 2);
+  assert.equal(days[0].hours, 1.5);
+  assert.equal(days[0].items[0].start, dayAt(2026, 3, 5, 9));
+  // a session that runs past midnight counts on the day it started
+  assert.equal(days[1].day, new Date(2026, 2, 4).getTime());
+});
+
+test('dayGroups: junk rows are ignored, input is left alone', () => {
+  const list = [null, {}, { start: 'x', duration: 1 }, { start: dayAt(2026, 1, 1), duration: 0 }, { start: dayAt(2026, 1, 1), duration: -3 }, mk(dayAt(2026, 1, 2), 1)];
+  const copy = JSON.stringify(list);
+  assert.equal(Sx.dayGroups(list).length, 1);
+  assert.equal(JSON.stringify(list), copy);
+  assert.deepEqual(Sx.dayGroups(null), []);
+});
+
+test('ledger: the same game every day is one row per day, grouped by month', () => {
+  const list = [];
+  for (let d = 1; d <= 30; d++) list.push(mk(dayAt(2026, 4, d), 1.5));
+  for (let d = 20; d <= 31; d++) list.push(mk(dayAt(2026, 3, d), 1));
+  const out = Sx.ledger(list);
+  assert.equal(out.days, 42);
+  assert.deepEqual(out.months.map((m) => [m.label, m.days, m.hours]), [['April 2026', 30, 45], ['March 2026', 12, 12]]);
+  assert.ok(out.months[0].rows.every((r) => r.kind === 'day'));
+});
+
+test('ledger: days of one-minute launches fold into a single brief row', () => {
+  const list = [mk(dayAt(2026, 5, 10), 2)];
+  for (let d = 11; d <= 16; d++) for (let i = 0; i < 5; i++) list.push(mk(dayAt(2026, 5, d, 10 + i), 0.2 / 60));
+  list.push(mk(dayAt(2026, 5, 17), 1));
+  const rows = Sx.ledger(list).months[0].rows;
+  assert.deepEqual(rows.map((r) => r.kind), ['day', 'brief', 'day']);
+  assert.equal(rows[1].days, 6);
+  assert.equal(rows[1].count, 30);
+  assert.equal(rows[1].from, new Date(2026, 4, 11).getTime());
+  assert.equal(rows[1].to, new Date(2026, 4, 16).getTime());
+});
+
+test('ledger: many one-minute sessions in one day add up to a real day', () => {
+  const list = [];
+  for (let i = 0; i < 40; i++) list.push(mk(dayAt(2026, 5, 2, 8, i * 3), 1 / 60));
+  const rows = Sx.ledger(list).months[0].rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'day');
+  assert.equal(rows[0].count, 40);
+});
+
+test('recentRuns: a game played daily is one run, not a row per day', () => {
+  const a = { id: 'a', sessions: [] };
+  for (let d = 1; d <= 9; d++) a.sessions.push(mk(dayAt(2026, 6, d), 2));
+  const b = { id: 'b', sessions: [mk(dayAt(2026, 6, 9, 22), 1), mk(dayAt(2026, 6, 5), 1)] };
+  const runs = Sx.recentRuns([a, b, { id: 'c' }, null], 10);
+  assert.deepEqual(runs.map((r) => [r.gameId, r.days, r.hours]), [['b', 1, 1], ['a', 9, 18], ['b', 1, 1]]);
+  assert.deepEqual(runs[1].perDay.length, 9);
+  assert.equal(runs[1].from, new Date(2026, 5, 1).getTime());
+});
+
+test('recentRuns: a gap breaks the run; limit is honoured', () => {
+  const a = { id: 'a', sessions: [mk(dayAt(2026, 6, 1), 1), mk(dayAt(2026, 6, 2), 1), mk(dayAt(2026, 6, 4), 1)] };
+  assert.deepEqual(Sx.recentRuns([a]).map((r) => r.days), [1, 2]);
+  assert.equal(Sx.recentRuns([a], 1).length, 1);
+});
+
+test('habits: says nothing until there is enough play, then finds the evening', () => {
+  assert.equal(Sx.habits([mk(dayAt(2026, 6, 1), 1)]), null);
+  const list = [];
+  for (let d = 1; d <= 20; d++) list.push(mk(dayAt(2026, 6, d, 19, 30), 2));
+  const h = Sx.habits(list);
+  assert.equal(h.part, 'evening');
+  // one-minute launches never count as a habit
+  const brief = [];
+  for (let d = 1; d <= 20; d++) brief.push(mk(dayAt(2026, 6, d, 3), 0.5 / 60));
+  assert.equal(Sx.habits(brief), null);
+});
+
+test('stress: 20,000 sessions group in well under a second', () => {
+  const list = [];
+  const t0 = dayAt(2015, 1, 1, 0);
+  for (let i = 0; i < 20000; i++) list.push(mk(t0 + i * 3.7 * 3600000, (i % 7 === 0 ? 0.5 / 60 : 0.4 + (i % 5) * 0.6)));
+  const started = Date.now();
+  const out = Sx.ledger(list);
+  const runs = Sx.recentRuns([{ id: 'x', sessions: list }], 8);
+  Sx.habits(list);
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
+  assert.ok(out.days > 3000);
+  // played every single day: one long run
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].days, out.days);
+});

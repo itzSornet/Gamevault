@@ -5028,24 +5028,6 @@ html.is-pad .ga-item[data-danger]:focus { background: rgba(255, 80, 80, 0.16); }
 .gvx-ses-stat span { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-mute); font-weight: 600; }
 .gvx-ses-stat b { font-size: 18px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; line-height: 1.1; }
 
-.gvx-heat { min-width: 0; padding: 12px 14px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
-.gvx-heat-months { display: grid; grid-template-columns: repeat(var(--weeks), minmax(0, 1fr)); gap: 3px; margin-left: 30px; height: 12px; font-size: 9.5px; color: var(--text-mute); }
-.gvx-heat-months span { white-space: nowrap; }
-.gvx-heat-body { display: flex; gap: 6px; }
-.gvx-heat-body > .gvx-heat-grid { flex: 1; min-width: 0; }
-.gvx-heat-days { display: grid; grid-template-rows: repeat(7, var(--cell)); gap: 3px; width: 24px; font-size: 9px; line-height: var(--cell); color: var(--text-mute); }
-.gvx-heat-grid { display: grid; grid-template-columns: repeat(var(--weeks), minmax(0, 1fr)); gap: 3px; }
-.gvx-heat-col { display: grid; grid-template-rows: repeat(7, var(--cell)); gap: 3px; justify-items: center; }
-.gvx-heat { --cell: 13px; }
-.gvx-heat-col i { display: block; width: var(--cell); max-width: 100%; height: var(--cell); border-radius: 3px; }
-.gvx-heat .lv0 { background: rgba(var(--ink-rgb), 0.07); }
-.gvx-heat .lv1 { background: rgba(var(--accent-rgb), 0.3); }
-.gvx-heat .lv2 { background: rgba(var(--accent-rgb), 0.52); }
-.gvx-heat .lv3 { background: rgba(var(--accent-rgb), 0.76); }
-.gvx-heat .lv4 { background: var(--accent); }
-.gvx-heat-key { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin-top: 3px; font-size: 9.5px; color: var(--text-mute); }
-.gvx-heat-key i { display: block; width: 9px; height: 9px; border-radius: 2px; }
-
 .gvx-month { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 4px 6px; }
 .gvx-month span:last-child { letter-spacing: 0.02em; text-transform: none; font-weight: 400; font-size: 11px; }
 .gvx-row {
@@ -5470,57 +5452,8 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
 .peak-foil.is-lg { padding: 10px 22px 10px 16px; gap: 10px; font-size: 26px; letter-spacing: 0.2em; }
 .peak-foil.is-lg svg { width: 28px; height: 28px; }
 #grid .card-rating.peak-foil, .card-rating.peak-foil { padding: 4px 8px 4px 6px; font-size: 9.5px; color: #3a2500; }
-
-/* the medal over the logo on a PEAK game's page */
-.peak-medal {
-  display: inline-flex; align-items: center; gap: 12px;
-  align-self: flex-start;
-  padding: 6px 18px 6px 6px;
-  margin-bottom: 4px;
-  border-radius: 999px;
-  background: rgba(24, 16, 2, 0.55);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-  backdrop-filter: blur(10px) saturate(140%);
-  border: 1px solid rgba(255, 212, 110, 0.45);
-  box-shadow: 0 0 36px rgba(245, 184, 46, 0.22), 0 10px 30px rgba(0, 0, 0, 0.35);
-  animation: peak-medal-in 700ms cubic-bezier(0.22, 1.2, 0.36, 1) backwards;
-}
-.peak-medal-disc {
-  --foil: linear-gradient(135deg, #9a6400 0%, #f3c94f 22%, #fff3bd 38%, #f0bf45 52%, #a56f05 72%, #f6d46a 100%);
-  position: relative; overflow: hidden;
-  width: 40px; height: 40px; flex: none;
-  display: grid; place-items: center;
-  border-radius: 50%;
-  background: var(--foil);
-  color: #3a2500;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), inset 0 -2px 0 rgba(90, 55, 0, 0.35), 0 0 0 3px rgba(255, 210, 100, 0.18);
-}
-.peak-medal-disc svg { width: 22px; height: 22px; }
-.peak-medal-disc::after {
-  content: ''; position: absolute; inset: -4px;
-  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.85) 50%, transparent 62%);
-  transform: translateX(-130%);
-  animation: peak-sweep 4.2s cubic-bezier(0.5, 0, 0.3, 1) infinite;
-}
-.peak-medal-text { display: flex; flex-direction: column; gap: 3px; }
-.peak-medal-text b {
-  font: 800 16px/1 var(--font-display);
-  letter-spacing: 0.28em;
-  background: linear-gradient(115deg, #f3c94f, #fff3bd 40%, #f0bf45 60%, #f6d46a);
-  -webkit-background-clip: text; background-clip: text;
-  color: transparent;
-}
-.peak-medal-text small { font-size: 11px; color: rgba(255, 232, 170, 0.78); letter-spacing: 0.02em; }
-@keyframes peak-medal-in { from { opacity: 0; transform: translateY(6px) scale(0.92); } to { opacity: 1; transform: none; } }
-:root[data-palette='paper'] .peak-medal { background: rgba(255, 249, 230, 0.85); }
-:root[data-palette='paper'] .peak-medal-text small { color: #8a6100; }
-html.is-bigpicture .peak-medal-disc { width: 52px; height: 52px; }
-html.is-bigpicture .peak-medal-disc svg { width: 28px; height: 28px; }
-html.is-bigpicture .peak-medal-text b { font-size: 20px; }
-html.is-bigpicture .peak-medal-text small { font-size: 13px; }
 @media (prefers-reduced-motion: reduce) {
-  .peak-foil::after, .peak-medal-disc::after { animation: none; display: none; }
-  .peak-medal { animation: none; }
+  .peak-foil::after { animation: none; display: none; }
 }
 
 /* plain ratings as a chip (shelf meta, shelf tiles) */
@@ -5556,9 +5489,6 @@ html.is-bigpicture .shelf-meta .rate-chip, html.is-bigpicture .shelf-meta .peak-
 .shelf-logo[hidden], .shelf-title[hidden] { display: none !important; }
 .shelf-logo .gvx-logo { max-width: min(400px, 100%); max-height: 104px; object-position: left bottom; }
 html.is-bigpicture .shelf-logo .gvx-logo { max-width: 460px; max-height: 108px; }
-/* the medal sits like a seal in the banner's bottom-right corner */
-.gvx-hero-inner > .peak-medal { position: absolute; right: 32px; bottom: 24px; margin: 0; }
-html.is-bigpicture .gvx-hero-inner > .peak-medal { right: var(--bp-safe-x); bottom: 26px; }
 
 /* ---- PEAK, take two: the word is hand-lettered (Yellowtail), the pill tilts
    toward the pointer with a light that follows it, and clicking it opens the
@@ -5611,15 +5541,6 @@ html.is-bigpicture .gvx-hero-inner > .peak-medal { right: var(--bp-safe-x); bott
 html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
 .shelf-meta .peak-foil.is-sm { padding: 4px 12px 5px 9px; font-size: 11px; }
 .peak-foil.is-lg .peak-word { font-size: 1.7em; }
-.peak-medal {
-  cursor: pointer;
-  transform: perspective(500px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
-  transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.25, 1), box-shadow 0.3s;
-}
-.peak-medal.is-lit { box-shadow: 0 0 46px rgba(245, 184, 46, 0.4), 0 10px 30px rgba(0, 0, 0, 0.35); }
-.peak-medal.is-lit .peak-medal-disc::after { animation-duration: 1.6s; }
-.peak-medal-text b.peak-word { font: 400 30px/0.8 'Yellowtail', 'Brush Script MT', cursive; letter-spacing: 0.01em; padding: 2px 4px 4px 0; }
-.peak-medal:focus-visible { outline: 2px solid var(--rt-peak); outline-offset: 3px; }
 
 /* ---- the showcase */
 #modal .modal-card.peak-modal {
@@ -5773,14 +5694,14 @@ html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
 @media (prefers-reduced-motion: reduce) {
   .pk-plaque::after { display: none; }
   .pk-glaze { animation: none; }
-  .peak-foil, .peak-medal, .pk-plaque { transition: none; }
+  .peak-foil, .pk-plaque { transition: none; }
 }
 
 /* ---- PEAK, take three: real metal. A capsule is a cylinder lying down, so
    light bands run along it (top highlight, dark core, warm bounce at the
    bottom), with a faint brushed grain, bevelled edges and engraved lettering.
    The sweep moves a background, not a layer, so the rounded edge clips it. */
-.peak-foil, .peak-medal-disc, .pk-face {
+.peak-foil, .pk-face {
   --gold:
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0 1px, rgba(0, 0, 0, 0.035) 1px 2px, transparent 2px 4px),
     linear-gradient(180deg, #fbefc4 0%, #ecc870 13%, #c99734 36%, #91651a 50%, #b4802a 60%, #e0b95e 80%, #f7e3a6 100%);
@@ -5806,7 +5727,7 @@ html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
     0 8px 22px rgba(0, 0, 0, 0.35),
     0 0 18px rgba(240, 190, 80, 0.25);
 }
-.peak-foil::after, .peak-medal-disc::after, .pk-face::after {
+.peak-foil::after, .pk-face::after {
   content: '';
   position: absolute; inset: 0; z-index: 1;
   transform: none;
@@ -5817,7 +5738,7 @@ html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
   pointer-events: none;
 }
 @keyframes peak-sheen { 0%, 55% { background-position: 130% 0; } 90%, 100% { background-position: -30% 0; } }
-.peak-foil.is-lit::after, .peak-medal.is-lit .peak-medal-disc::after { animation-duration: 1.8s; }
+.peak-foil.is-lit::after { animation-duration: 1.8s; }
 /* the hover light: a soft specular band that slides with the pointer */
 .peak-foil::before {
   background: radial-gradient(ellipse 45% 160% at var(--mx, 50%) 40%, rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0) 70%);
@@ -5832,28 +5753,6 @@ html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
 .shelf-meta .peak-foil.is-sm { padding: 3px 12px 4px; }
 .peak-foil.is-lg { padding: 10px 28px 13px; }
 .gvx-chip.gvx-rate.peak-foil { padding: 0 16px; }
-
-/* the medal's coin: turned metal (conic rings) with an engraved 10 */
-.peak-medal-disc {
-  background:
-    radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) 58%, rgba(70, 45, 5, 0.35) 62%, rgba(0, 0, 0, 0) 66%),
-    conic-gradient(from 210deg, #f7e3a6, #c99734, #91651a, #e0b95e, #fbefc4, #b4802a, #ecc870, #f7e3a6);
-  box-shadow: inset 0 1px 0 rgba(255, 250, 225, 0.9), inset 0 -2px 3px rgba(70, 45, 5, 0.5), 0 0 0 1px rgba(120, 80, 10, 0.5), 0 3px 8px rgba(0, 0, 0, 0.4);
-}
-.peak-medal-disc b {
-  position: relative; z-index: 2;
-  font: 700 15px/1 var(--font-display);
-  color: #4b3108;
-  text-shadow: 0 1px 0 rgba(255, 238, 185, 0.65), 0 -1px 0 rgba(60, 35, 0, 0.35);
-}
-html.is-bigpicture .peak-medal-disc b { font-size: 19px; }
-.peak-medal { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); border-color: rgba(230, 190, 100, 0.4); }
-.peak-medal.is-lit { box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), 0 0 26px rgba(240, 190, 80, 0.2); }
-.peak-medal-text b.peak-word {
-  background: linear-gradient(180deg, #fbefc4 0%, #ecc870 30%, #c99734 60%, #f0d58e 100%);
-  -webkit-background-clip: text; background-clip: text;
-  color: transparent;
-}
 
 /* the showcase plaque: the outer element tilts and casts the shadow, the
    face inside is the metal and clips everything to the capsule */
@@ -5892,11 +5791,11 @@ html.is-bigpicture .peak-medal-disc b { font-size: 19px; }
 
 /* never selectable: a double click or drag on these must not paint a
    selection box over the metal */
-.peak-foil, .peak-medal, .card-rating, .tile-rating, .rate-chip, .rt-score, .rt-scale, .pk, .pk * {
+.peak-foil, .card-rating, .tile-rating, .rate-chip, .rt-score, .rt-scale, .pk, .pk * {
   -webkit-user-select: none;
   user-select: none;
 }
-.peak-foil::selection, .peak-medal ::selection, .pk ::selection { background: transparent; }
+.peak-foil::selection, .pk ::selection { background: transparent; }
 /* older tier rules must not repaint the metal */
 .gvx-rate.tier-peak.peak-foil, .card-rating[data-tier='peak'].peak-foil, #grid .card-rating[data-tier='peak'].peak-foil { background: var(--gold); color: #4b3108 !important; }
 
@@ -5923,3 +5822,155 @@ html.is-bigpicture .tile-rating { transform-origin: top center; }
   -webkit-mask-position: left bottom; mask-position: left bottom;
   -webkit-mask-size: contain; mask-size: contain;
 }
+
+/* controller button icons are drawn (svg), so they sit dead centre */
+.pad-btn { padding: 0; min-width: 21px; width: 21px; box-sizing: border-box; flex: none; }
+.pad-btn > svg { display: block; width: 100%; height: 100%; stroke-width: 2.3; }
+.pad-btn > b { font: inherit; font-weight: 700; line-height: 1; letter-spacing: 0; }
+.pad-btn[data-btn="lb"], .pad-btn[data-btn="rb"], .pad-btn[data-btn="lt"], .pad-btn[data-btn="rt"],
+.pad-btn[data-btn="rs"], .pad-btn[data-btn="ls"] { width: auto; min-width: 26px; padding: 0 5px; }
+.pad-btn[data-btn="menu"], .pad-btn[data-btn="view"], .pad-btn[data-btn="guide"] { width: 24px; min-width: 24px; border-radius: 6px; background: rgba(255, 255, 255, 0.16); color: #eef0f5; }
+.pad-btn[data-btn="menu"] > svg, .pad-btn[data-btn="view"] > svg, .pad-btn[data-btn="guide"] > svg { width: 21px; height: 21px; stroke-width: 2; }
+.pad-btn[data-glyph="ps"][data-btn="a"] > svg, .pad-btn[data-glyph="ps"][data-btn="b"] > svg,
+.pad-btn[data-glyph="ps"][data-btn="x"] > svg, .pad-btn[data-glyph="ps"][data-btn="y"] > svg { stroke-width: 2.1; }
+
+/* Big Picture: the hints are a small pill in the bottom-right corner, and
+   only take room while a controller is in use */
+html.is-bigpicture .pad-hints {
+  left: auto; right: var(--bp-safe-x); bottom: var(--bp-safe-y);
+  transform: translateY(14px);
+  gap: 16px; padding: 7px 14px 7px 9px;
+  font-size: 12.5px;
+}
+html.is-bigpicture.is-pad .pad-hints { transform: none; }
+html.is-bigpicture .pad-btn { min-width: 21px; width: 21px; height: 21px; font-size: 11px; }
+html.is-bigpicture .pad-btn[data-btn="lb"], html.is-bigpicture .pad-btn[data-btn="rb"],
+html.is-bigpicture .pad-btn[data-btn="lt"], html.is-bigpicture .pad-btn[data-btn="rt"] { width: auto; min-width: 26px; }
+html.is-bigpicture .pad-btn[data-btn="menu"], html.is-bigpicture .pad-btn[data-btn="view"],
+html.is-bigpicture .pad-btn[data-btn="guide"] { width: 24px; min-width: 24px; }
+/* no band of empty space under the shelf or the pages for a hint bar that is
+   now a small corner pill */
+html.is-bigpicture .shelf-strip { padding-bottom: calc(var(--bp-safe-y) + 4px); }
+html.is-bigpicture .library,
+html.is-bigpicture .settings-view,
+html.is-bigpicture .activity-view { padding-bottom: calc(var(--bp-safe-y) + 28px); }
+html.is-bigpicture .gvx-band { padding-bottom: calc(var(--bp-safe-y) + 28px); }
+
+/* ---- controller focus, pass two: the ring always takes the shape of the
+   thing you are on, never a stray rectangle inside or across it */
+/* text boxes inside a rounded field: the field carries the ring */
+html.is-pad #spot #q:focus,
+html.is-pad .wl-add input:focus { outline: none !important; box-shadow: none; }
+html.is-pad #spot:focus-within,
+html.is-pad .wl-add:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+/* wishlist: opening the top pick or a card rings the whole card, inside its
+   edge (the cards clip anything drawn outside them) */
+html.is-pad .wl-name:focus,
+html.is-pad .wl-card-art:focus { outline: none !important; box-shadow: none; }
+html.is-pad .wl-top:has(.wl-name:focus)::after,
+html.is-pad .wl-card:has(.wl-card-art:focus)::after {
+  box-shadow: inset 0 0 0 3px var(--accent), inset 0 0 0 7px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+/* library cards: the ring hugs the cover, like the shelf */
+html.is-pad #grid .card:focus { outline: none !important; box-shadow: none; }
+html.is-pad #grid .card:focus .card-media {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 20%, transparent), 0 14px 30px rgba(0, 0, 0, 0.4);
+}
+/* small round and icon buttons sitting side by side: a tight ring, no halo */
+html.is-pad .wl-card :is(button):not(.wl-card-art):focus,
+html.is-pad .win-controls button:focus,
+html.is-pad .sidebar .side-item:focus,
+html.is-pad .sidebar .side-toggle:focus {
+  outline-offset: 1px;
+  box-shadow: none;
+}
+/* the account button: the ring is the avatar's circle */
+html.is-pad .side-account:focus { outline: none !important; box-shadow: none; }
+/* sliders and plain text links get a rounded ring that hugs them */
+html.is-pad input[type="range"]:focus { border-radius: 99px; outline-offset: 5px; }
+.sv-link { width: fit-content; border-radius: 6px; }
+html.is-pad .sv-link:focus { outline-offset: 4px; }
+
+/* ---- sessions, told by the day: each row is a day, and the strip shows when
+   in that day the play happened (00 → 24). Playing every evening lines the
+   blocks up into a visible habit instead of a column of identical rows. */
+.gvx-row { grid-template-columns: 34px minmax(128px, auto) minmax(60px, 1fr) 66px; }
+/* the axis shares the rows' second column width: an invisible sample keeps it aligned */
+/* ran past midnight: the block runs off the end of the day */
+.gvx-row-when { white-space: nowrap; }
+/* days that were only quick launches: one quiet line */
+.gvx-row.is-brief { height: 30px; color: var(--text-mute); }
+.gvx-row.is-brief .gvx-row-date b { font-size: 14px; color: var(--text-mute); font-weight: 400; }
+.gvx-row.is-brief .gvx-row-when,
+.gvx-row.is-brief .gvx-row-dur { color: var(--text-mute); font-size: 11.5px; font-weight: 400; }
+.gvx-ses-habit { margin: 0 2px; font-size: 12.5px; color: var(--text-dim); }
+
+/* Activity → Recently played: a run of days gets a bar per day */
+.act-spark { flex: 0 1 auto; display: flex; align-items: flex-end; gap: 2px; height: 22px; padding: 0 2px; }
+.act-spark i { display: block; width: 4px; border-radius: 2px; background: rgba(var(--accent-rgb), 0.75); }
+.act-game:hover .act-spark i { background: var(--accent); }
+.act-game.is-brief .act-game-name,
+.act-game.is-brief .act-game-right { color: var(--text-mute); font-weight: 400; }
+.act-game.is-brief .act-thumb { opacity: 0.6; }
+
+/* the ledger reads as a punch card, not a table: tight rows, no rules, and
+   months that fold to one line */
+.gvx-row { grid-template-columns: 62px 150px minmax(60px, 1fr) 66px; }
+.gvx-main .gvx-row { height: 32px; border-bottom: 0; border-radius: 8px; }
+.gvx-main .gvx-row.is-live { height: 44px; }
+.gvx-row-date { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 6px; padding-left: 4px; }
+.gvx-row-date b { font-size: 13.5px; min-width: 18px; text-align: right; }
+.gvx-row-date > i { font-size: 9.5px; }
+.gvx-main .gvx-row-when { font-size: 12px; color: var(--text-mute); }
+.gvx-main .gvx-row:hover .gvx-row-when { color: var(--text-dim); }
+.gvx-main .gvx-row.is-brief { height: 26px; }
+button.gvx-month {
+  width: 100%; box-sizing: border-box;
+  display: grid; grid-template-columns: 210px minmax(60px, 1fr) 120px; align-items: center; gap: 14px;
+  margin: 0; border: 0; border-radius: 8px;
+  padding: 14px 6px 8px 2px;
+  background: var(--bg);
+  font-family: inherit; text-align: left; cursor: pointer;
+  position: static;
+}
+button.gvx-month:hover { color: var(--text-dim); }
+button.gvx-month:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gvx-month-name { display: inline-flex; align-items: center; gap: 6px; }
+.gvx-month-name svg { transition: transform 0.18s ease; opacity: 0.7; }
+.gvx-month.is-open .gvx-month-name svg { transform: rotate(90deg); }
+.gvx-month .gvx-month-sum { letter-spacing: 0.02em; text-transform: none; font-weight: 400; font-size: 11px; text-align: right; }
+button.gvx-month:not(.is-open) { padding-top: 10px; padding-bottom: 10px; }
+.gvx-month-spark { display: flex; align-items: flex-end; gap: 2px; height: 18px; min-width: 0; }
+.gvx-month-spark i { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: rgba(var(--accent-rgb), 0.6); }
+.gvx-month-spark i.is-off { height: 2px; background: rgba(var(--ink-rgb), 0.1); }
+button.gvx-month:hover .gvx-month-spark i:not(.is-off) { background: var(--accent); }
+html.is-pad button.gvx-month:focus { outline-offset: -3px; box-shadow: none; }
+
+/* sessions, kept simple: a day is a date, a bar and a time */
+.gvx-main .gvx-row { grid-template-columns: 62px minmax(60px, 1fr) 66px; height: 32px; }
+.gvx-main .gvx-row.is-brief,
+.gvx-main .gvx-row.is-live { grid-template-columns: 62px minmax(0, 1fr) 66px; }
+.gvx-row-bar { height: 8px; border-radius: 4px; background: none; }
+.gvx-row-bar i { border-radius: 4px; background: rgba(var(--accent-rgb), 0.85); min-width: 4px; }
+.gvx-row:hover .gvx-row-bar i { background: var(--accent); }
+.gvx-row-note { font-size: 12px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gvx-row.is-live .gvx-row-note { color: var(--accent); }
+.gvx-ses-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+button.gvx-month { grid-template-columns: 150px minmax(60px, 1fr) 120px; }
+
+/* a dialog that is fading out never blocks the app under it */
+#modal.is-closing, #modal.is-closing * { pointer-events: none !important; }
+
+/* import: the "keep in sync" choice for the launcher you are importing */
+.imp3-sync { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 18px 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.imp3-sync[hidden] { display: none; }
+.imp3-sync-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.imp3-sync-text b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.imp3-sync-text span { font-size: 11.5px; color: var(--text-mute); }
+.imp3-sync.is-off .imp3-sync-text b { color: var(--text-dim); }

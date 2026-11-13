@@ -18,8 +18,11 @@ const has = (target) => { try { return fs.existsSync(target); } catch (_) { retu
 // Helpers
 // ---------------------------------------------------------------------------
 
-function lutrisDb() { return p(HOME, '.local', 'share', 'lutris', 'pga.db'); }
-function lutrisYmlDir() { return p(HOME, '.local', 'share', 'lutris', 'games'); }
+const launchers = require('./sources/launchers.js');
+
+// Lutris installs: native, a custom XDG folder, Flatpak. Each has its own
+// database and per-game yml folders.
+function lutrisInstalls() { return launchers.lutrisRoots(); }
 
 function sqliteJson(db, sql) {
   try {
@@ -40,82 +43,111 @@ function readYmlFields(file) {
 }
 
 function countLutris() {
-  const db = lutrisDb();
-  const rows = has(db) ? sqliteJson(db, 'select count(*) as n from games') : null;
-  return rows && rows[0] ? Number(rows[0].n) || 0 : 0;
+  let n = 0;
+  for (const inst of lutrisInstalls()) {
+    const rows = has(inst.db) ? sqliteJson(inst.db, 'select count(*) as n from games where installed = 1') : null;
+    if (rows && rows[0]) n += Number(rows[0].n) || 0;
+    else for (const dir of inst.games) n += fs.readdirSync(dir).filter((f) => f.endsWith('.yml')).length;
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------------------
 // Sources
 // ---------------------------------------------------------------------------
 
+// Launchers whose game list is a clean file we can re-read on our own.
+// The rest need a person to pick what is a game, so they can't auto sync.
+const SYNC_NOTES = {
+  xbox: 'Reading Xbox games is slow, so they are imported when you ask.',
+  battlenet: 'Battle.net keeps no game list GameVault can read safely.',
+  ea: 'The EA app keeps no game list GameVault can read safely.',
+  ubisoft: 'Ubisoft Connect keeps no game list GameVault can read safely.',
+  rockstar: 'Rockstar keeps no game list GameVault can read safely.',
+  riot: 'Riot keeps no game list GameVault can read safely.',
+  playnite: 'Playnite import is not available yet.',
+  'steam-owned': 'Your Steam account is imported on request.',
+  pc: 'A whole-PC scan needs you to pick what is a game.',
+  folder: 'Folders are scanned when you ask.',
+  file: 'Files are added one at a time.',
+};
+const SYNCABLE = new Set(['steam', 'epic', 'gog', 'heroic', 'legendary', 'lutris', 'bottles', 'itch', 'hydra']);
+
 function listSources() {
   const sources = [];
   let cfg = {};
   try { cfg = require('./data.js').loadConfig() || {}; } catch (_) {}
+  const add = (src) => {
+    const sync = SYNCABLE.has(src.id);
+    sources.push({ ...src, sync, syncNote: sync ? '' : (SYNC_NOTES[src.id] || 'This source can only be imported by hand.') });
+  };
+  const some = (list) => Array.isArray(list) && list.length > 0;
 
-  // Same detection the Steam scanner uses (registry path on Windows, Flatpak on Linux).
+  // Same detection the Steam scanner uses (registry path on Windows; native,
+  // Flatpak and Snap on Linux).
   let steamFound = false;
   try { steamFound = require('./sources/steam.js').detect(); } catch (_) {}
-  sources.push({ id: 'steam', label: 'Steam', found: steamFound, hint: 'Installed Steam games' });
+  add({ id: 'steam', label: 'Steam', found: steamFound, hint: 'Installed Steam games' });
+
+  if (IS_WIN) {
+    const win = require('./sources/windows.js');
+    const winSources = [
+      ['epic', 'Epic Games', 'Installed Epic games'],
+      ['gog', 'GOG', 'Installed GOG games'],
+      ['xbox', 'Xbox', 'Xbox and Game Pass games'],
+      ['battlenet', 'Battle.net', 'Installed Blizzard games'],
+      ['ea', 'EA app', 'Installed EA games'],
+      ['ubisoft', 'Ubisoft Connect', 'Installed Ubisoft games'],
+      ['rockstar', 'Rockstar', 'Installed Rockstar games'],
+      ['riot', 'Riot', 'Installed Riot games'],
+    ];
+    for (const [id, label, hint] of winSources) {
+      let found = true;
+      try { found = win.detectWindowsSource(id); } catch (_) {}
+      add({ id, label, found, hint });
+    }
+  }
+
+  // On every OS: Heroic, Legendary/Rare and itch keep the same files.
+  add({ id: 'heroic', label: 'Heroic', found: some(launchers.heroicRoots()), hint: 'Epic, GOG and Amazon games' });
+  add({ id: 'legendary', label: 'Legendary / Rare', found: some(launchers.legendaryRoots()), hint: 'Epic games' });
+  add({ id: 'itch', label: 'itch.io', found: some(launchers.itchRoots()), hint: 'itch app library' });
 
   if (IS_LINUX) {
-    const lutrisFound = has(lutrisDb());
-    sources.push({
-      id: 'lutris',
-      label: 'Lutris',
-      found: lutrisFound,
-      count: lutrisFound ? countLutris() : 0,
-      hint: 'Your Lutris library',
-    });
-
-    const heroicFound = has(p(HOME, '.config', 'heroic')) || has(p(HOME, '.var', 'app', 'com.heroicgameslauncher.hgl'));
-    sources.push({ id: 'heroic', label: 'Heroic', found: heroicFound, hint: 'Epic, GOG and Amazon games' });
-
-    const bottlesFound = has(p(HOME, '.local', 'share', 'bottles'));
-    sources.push({ id: 'bottles', label: 'Bottles', found: bottlesFound, hint: 'Windows apps in Bottles' });
-
-    const itchFound = has(p(HOME, '.config', 'itch')) || has(p(HOME, '.local', 'share', 'itch'));
-    sources.push({ id: 'itch', label: 'itch.io', found: itchFound, hint: 'itch app library' });
+    const lutrisFound = some(lutrisInstalls());
+    add({ id: 'lutris', label: 'Lutris', found: lutrisFound, count: lutrisFound ? countLutris() : 0, hint: 'Your Lutris library' });
+    add({ id: 'bottles', label: 'Bottles', found: some(launchers.bottlesRoots()), hint: 'Programs in your bottles' });
+    add({ id: 'gog', label: 'GOG', found: some(launchers.gogLinuxDirs()), hint: 'GOG installers and Minigalaxy' });
   }
 
   if (IS_WIN) {
-    const winSources = [
-      ['epic', 'Epic Games', 'Manifest based'],
-      ['gog', 'GOG', 'Registry + goggame files'],
-      ['xbox', 'Xbox', 'Installed packages'],
-      ['battlenet', 'Battle.net', 'Registry entries'],
-      ['ea', 'EA app', 'Install manifests'],
-      ['ubisoft', 'Ubisoft Connect', 'Registry entries'],
-    ];
-    for (const [id, label, hint] of winSources) sources.push({ id, label, found: true, hint });
     try {
       const playnite = has(p(HOME, 'AppData', 'Roaming', 'Playnite', 'games.db'));
-      if (playnite) sources.push({ id: 'playnite', label: 'Playnite', found: true, hint: 'LiteDB library' });
+      if (playnite) add({ id: 'playnite', label: 'Playnite', found: false, hint: 'Not supported yet' });
     } catch (_) {}
   }
 
   try {
     const hydra = require('./sources/hydra.js');
-    sources.push({ id: 'hydra', label: 'Hydra', found: !!(hydra.detect && hydra.detect(HOME)), hint: 'Hydra library' });
+    add({ id: 'hydra', label: 'Hydra', found: !!(hydra.detect && hydra.detect(HOME)), hint: 'Hydra library' });
   } catch (_) {}
 
-  sources.push({
+  add({
     id: 'steam-owned',
     label: 'Steam account',
     found: !!cfg.steamKey,
     hint: cfg.steamKey ? 'Owned library' : 'Add a Steam API key in Settings',
   });
 
-  sources.push({
+  add({
     id: 'pc',
     label: 'This PC',
     found: true,
     hint: IS_WIN ? 'Registry, Start Menu, Xbox, Steam shortcuts' : 'Apps, AppImage, Wine, launchers',
   });
 
-  sources.push({ id: 'folder', label: 'Folder', action: true, found: true, hint: 'Scan a directory for games' });
-  sources.push({ id: 'file', label: 'File', action: true, found: true, hint: 'AppImage, ELF, .sh or .exe' });
+  add({ id: 'folder', label: 'Folder', action: true, found: true, hint: 'Scan a directory for games' });
+  add({ id: 'file', label: 'File', action: true, found: true, hint: 'AppImage, ELF, .sh or .exe' });
   return sources;
 }
 
@@ -123,48 +155,71 @@ function listSources() {
 // Scanners
 // ---------------------------------------------------------------------------
 
+function findLutrisYml(inst, configpath) {
+  for (const dir of inst.games) {
+    const file = p(dir, `${configpath}.yml`);
+    if (has(file)) return file;
+  }
+  return '';
+}
+
 function scanLutris() {
   const out = [];
+  const seen = new Set();
+  const add = (c) => { if (c.sourceId && seen.has(c.sourceId)) return; seen.add(c.sourceId); out.push(c); };
 
-  const rows = has(lutrisDb())
-    ? sqliteJson(lutrisDb(), 'select id,name,slug,runner,directory,configpath,playtime from games order by name')
-    : null;
+  for (const inst of lutrisInstalls()) {
+    // The database needs the sqlite3 command; without it the yml files below
+    // still give every game Lutris has a config for.
+    const rows = has(inst.db)
+      ? sqliteJson(inst.db, 'select id,name,slug,runner,directory,configpath,playtime,installed from games order by name')
+      : null;
 
-  if (rows && rows.length) {
-    for (const row of rows) {
-      const ymlPath = p(lutrisYmlDir(), `${row.configpath}.yml`);
-      const yml = has(ymlPath) ? readYmlFields(ymlPath) : {};
-      let exe = yml.exe || '';
-      if (exe && !path.isAbsolute(exe) && yml.prefix) exe = p(yml.prefix, exe);
-      out.push({
-        name: row.name,
-        source: 'Lutris',
-        sourceId: `lutris:${row.slug || row.id}`,
-        exePath: exe,
-        installDir: yml.working_dir || (exe ? path.dirname(exe) : row.directory || ''),
-        hours: Number(row.playtime) || 0,
-        runner: row.runner || '',
-        args: yml.args || '',
-      });
+    if (rows && rows.length) {
+      for (const row of rows) {
+        if (row.installed != null && Number(row.installed) === 0) continue;
+        // Steam games inside Lutris come in through the Steam import
+        if (String(row.runner || '').toLowerCase() === 'steam') continue;
+        const ymlPath = row.configpath ? findLutrisYml(inst, row.configpath) : '';
+        const yml = ymlPath ? readYmlFields(ymlPath) : {};
+        let exe = yml.exe || '';
+        if (exe && !path.isAbsolute(exe) && yml.prefix) exe = p(yml.prefix, exe);
+        add({
+          name: row.name,
+          source: 'Lutris',
+          sourceId: `lutris:${row.slug || row.id}`,
+          exePath: exe,
+          installDir: yml.working_dir || (exe ? path.dirname(exe) : row.directory || ''),
+          hours: Number(row.playtime) || 0,
+          runner: row.runner || '',
+          args: yml.args || '',
+          // Lutris knows the runner, prefix and environment: let it start the game
+          launchTarget: row.id != null ? `lutris:rungameid/${row.id}` : '',
+        });
+      }
+      continue;
     }
-    return out;
-  }
 
-  // Fallback for people whose Lutris still writes per-game yml files only.
-  const dir = lutrisYmlDir();
-  if (!has(dir)) return out;
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yml'))) {
-    const yml = readYmlFields(p(dir, file));
-    if (!yml.exe) continue;
-    const name = path.basename(file).replace(/-\d+\.yml$/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-    out.push({
-      name,
-      source: 'Lutris',
-      sourceId: `lutris:${path.basename(file, '.yml')}`,
-      exePath: yml.exe,
-      installDir: yml.working_dir || path.dirname(yml.exe),
-      hours: 0,
-    });
+    // No database (or no sqlite3 command): one yml per configured game.
+    for (const dir of inst.games) {
+      for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.yml'))) {
+        const yml = readYmlFields(p(dir, file));
+        if (!yml.exe) continue;
+        const slug = path.basename(file, '.yml').replace(/-\d+$/, '');
+        const name = slug.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+        let exe = yml.exe;
+        if (!path.isAbsolute(exe) && yml.prefix) exe = p(yml.prefix, exe);
+        add({
+          name,
+          source: 'Lutris',
+          sourceId: `lutris:${slug}`,
+          exePath: exe,
+          installDir: yml.working_dir || path.dirname(exe),
+          hours: 0,
+          launchTarget: `lutris:rungame/${slug}`,
+        });
+      }
+    }
   }
   return out;
 }
@@ -209,8 +264,13 @@ async function scanSource(id, arg) {
       return { error: (res && res.error && res.error.message) || 'Steam account not connected' };
     }
     if (id === 'lutris') return scanLutris();
+    if (id === 'heroic') return launchers.scanHeroic();
+    if (id === 'legendary') return launchers.scanLegendary();
+    if (id === 'bottles') return launchers.scanBottles();
+    if (id === 'itch') return launchers.scanItch({ findExe: (dir) => scanner().findMainExe(dir) }).filter((c) => c.exePath);
+    if (id === 'gog' && !IS_WIN) return launchers.scanGogLinux();
     if (id === 'epic' && IS_WIN) return require('./sources/windows.js').scanWindowsSource('epic');
-    if (IS_WIN && ['gog', 'xbox', 'battlenet', 'ea', 'ubisoft'].includes(id)) return require('./sources/windows.js').scanWindowsSource(id);
+    if (IS_WIN && ['gog', 'xbox', 'battlenet', 'ea', 'ubisoft', 'rockstar', 'riot'].includes(id)) return require('./sources/windows.js').scanWindowsSource(id);
     if (id === 'pc') {
       const mod = IS_WIN ? './sources/windows-inventory.js' : './sources/linux-desktop.js';
       const found = await require(mod)[IS_WIN ? 'scanWindowsInventory' : 'scanLinuxInventory']();
@@ -228,7 +288,6 @@ async function scanSource(id, arg) {
         }));
     }
     if (id === 'folder' && arg) return (scanner().scanFolder(arg) || []).map((g) => ({ ...g, sourceId: g.exePath ? `folder:${g.exePath}` : null }));
-    // heroic / bottles / itch / gog / xbox are detected but not scanned yet
     return [];
   } catch (err) {
     return { error: err.message };
@@ -336,4 +395,4 @@ function ingestFile(file) {
   };
 }
 
-module.exports = { listSources, scanSource, scanLutris, scanSteam, ingestFile, sniffBinary, resolveIcon };
+module.exports = { listSources, scanSource, scanLutris, scanSteam, ingestFile, sniffBinary, resolveIcon, SYNCABLE };
