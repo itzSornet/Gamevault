@@ -46,7 +46,13 @@ Anything that doesn't serve these four is cut from 2.0.
 
 ### Explicit non-goals for 2.0
 
-Cloud sync · social feed · store/checkout · overlay · controller-first UI · ROM management · multi-user profiles · plugin SDK.
+Social feed · store/checkout · ROM management · multi-user profiles · plugin SDK.
+
+### Moved into scope (from the non-goals)
+
+- **Controller-first UI:** gamepad support across the whole app, and Big Picture mode (fullscreen, TV-sized, no sidebar; button, Xbox / PS button or View + Menu, F11, "Start in Big Picture", `--bigpicture`).
+- **Overlay.**
+- **Cloud sync:** GameVault account, library sync, end-to-end encrypted save backup.
 
 ---
 

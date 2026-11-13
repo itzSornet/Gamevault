@@ -95,7 +95,11 @@ if (process.platform === 'linux') {
 app.on('second-instance', (_event, argv) => {
   const flags = platform.parseCliArgs(argv);
   if (flags.toggleOverlay) { toggleOverlay(); return; }
-  if (win && !win.isDestroyed()) { win.show(); win.focus(); }
+  if (win && !win.isDestroyed()) {
+    win.show(); win.focus();
+    // `GameVault --bigpicture` while it's already running: switch the open window
+    if (flags.bigPicture) win.webContents.send('app:bigpicture', true);
+  }
 });
 
 function commandExists(cmd) {
@@ -512,8 +516,52 @@ function registerOverlayShortcut(hotkey) {
 // not paint, so screenshots of it hang.)
 const backgroundMode = process.env.GV_BACKGROUND === '1';
 
+// Big Picture: fullscreen plus a page zoom sized to the screen (see
+// src/lib/bigpicture.js). The renderer owns the mode; main only does the window.
+const BigPicture = require('./src/lib/bigpicture.js');
+let bigPictureOn = false;
+
+function bigPictureZoom() {
+  const { screen } = require('electron');
+  const d = win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay();
+  return BigPicture.zoomFor(d.size.width, d.size.height);
+}
+
+function setBigPicture(on) {
+  if (!win || win.isDestroyed()) return { on: false, zoom: 1 };
+  bigPictureOn = !!on;
+  if (backgroundMode) {
+    // QA: never go fullscreen (that would put the window on the user's
+    // screen); stay off-screen at a TV-like 1080p size instead
+    if (bigPictureOn) { win.__preBp = win.getSize(); win.setSize(1920, 1080); }
+    else if (win.__preBp) win.setSize(win.__preBp[0], win.__preBp[1]);
+    win.setPosition(-12000, -12000);
+  } else {
+    if (bigPictureOn && win.isMinimized()) win.restore();
+    win.setFullScreen(bigPictureOn);
+  }
+  const zoom = bigPictureOn ? (backgroundMode ? BigPicture.zoomFor(1920, 1080) : bigPictureZoom()) : 1;
+  win.webContents.setZoomFactor(zoom);
+  return { on: bigPictureOn, zoom };
+}
+
+// A game session ended while Big Picture was up: bring GameVault back in
+// front of whatever is left on screen. Windows only lets a background app
+// take the foreground in a few cases, so pin it on top for a moment.
+function bringToFront() {
+  if (!win || win.isDestroyed() || backgroundMode) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.setAlwaysOnTop(true);
+  win.moveTop();
+  win.focus();
+  setTimeout(() => { if (win && !win.isDestroyed()) win.setAlwaysOnTop(false); }, 300);
+}
+
 function createWindow() {
+  const startBigPicture = !shotPath && BigPicture.startsIn({ flag: cliArgs.bigPicture, config: loadConfig() });
   win = new BrowserWindow({
+    ...(startBigPicture && !backgroundMode ? { fullscreen: true } : {}),
     ...(backgroundMode ? { x: -12000, y: -12000, focusable: false, skipTaskbar: true } : {}),
     width: Number(process.env.GV_W || 1200),
     height: Number(process.env.GV_H || 760),
@@ -542,7 +590,17 @@ function createWindow() {
   setTrackerWindow(win);
   initUpdater(win, () => { forceQuit = true; });
 
-  win.loadFile(path.join(__dirname, 'src', 'index.html'), { hash: shotState || '', query: process.argv.includes('--shot') ? { shot: '1' } : undefined });
+  const query = {};
+  if (process.argv.includes('--shot')) query.shot = '1';
+  if (startBigPicture) query.bp = '1';   // the renderer opens straight into Big Picture
+  win.loadFile(path.join(__dirname, 'src', 'index.html'), { hash: shotState || '', query: Object.keys(query).length ? query : undefined });
+  // Chromium remembers page zoom per origin: a reload must not stay zoomed
+  // unless Big Picture is (still) on
+  win.webContents.on('did-finish-load', () => {
+    if (!win || win.isDestroyed()) return;
+    if (bigPictureOn) win.webContents.send('app:bigpicture', true);   // a reload: pick it back up
+    else win.webContents.setZoomFactor(1);
+  });
 
   win.webContents.on('console-message', (_e, level, message) => {
     if (level >= 2) console.log('[renderer]', message);
@@ -748,6 +806,8 @@ function createWindow() {
   });
 
   ipcMain.handle('win:is-maximized', () => win ? win.isMaximized() : false);
+  ipcMain.handle('win:bigpicture', (_e, on) => setBigPicture(on));
+  ipcMain.on('win:bring-front', () => bringToFront());
   // a still of the window, so the renderer can crossfade a palette change
   // instead of re-colouring every element on every frame
   ipcMain.handle('win:snapshot', async () => {

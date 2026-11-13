@@ -684,6 +684,7 @@ function parseCliArgs(argv) {
     toggleOverlay: args.includes('--toggle-overlay'),
     show: args.includes('--show'),
     hidden: args.includes('--hidden'),
+    bigPicture: args.includes('--bigpicture'),
   };
 }
 

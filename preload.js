@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('api', {
   getPlatformInfo: () => ipcRenderer.invoke('app:platform-info'),
   thumb: (src, width, kind) => ipcRenderer.invoke('img:thumb', { src, width, kind }),
   onMaximizedChange: (cb) => ipcRenderer.on('win:maximized', (_, isMax) => cb(isMax)),
+  // Big Picture: fullscreen + page zoom (main), and requests to enter it
+  // from a second launch with --bigpicture
+  setBigPicture: (on) => ipcRenderer.invoke('win:bigpicture', !!on),
+  bringToFront: () => ipcRenderer.send('win:bring-front'),
+  onBigPicture: (cb) => ipcRenderer.on('app:bigpicture', (_, on) => cb(on)),
 
   // Games data
   loadGames:   () => ipcRenderer.invoke('games:load'),

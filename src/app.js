@@ -12,6 +12,9 @@
 
 (() => {
   const api = window.api;
+  // started with --bigpicture or "Start in Big Picture": main already made the
+  // window fullscreen; take the TV layout before the first paint
+  try { if (new URLSearchParams(location.search).get('bp') === '1') document.documentElement.classList.add('is-bigpicture'); } catch (_) {}
   // Frameless window: custom caption buttons + a drag handle (see .win-controls in index.html).
   document.getElementById('win-min').onclick = () => api.minimize();
   document.getElementById('win-max').onclick = () => api.maximize();
@@ -419,7 +422,11 @@
   }
 
   const FILTER_LABELS = { All: 'Library', Playing: 'Playing', Finished: 'Finished', Want: 'Wishlist' };
-  function filterLabel(filter) { return FILTER_LABELS[filter] || 'Library'; }
+  function filterLabel(filter) {
+    // Big Picture names its sections itself (Home and Library are both "All")
+    if (bp.on && window.BigPicture && BigPicture.section(bp.section).filter === filter) return BigPicture.section(bp.section).label;
+    return FILTER_LABELS[filter] || 'Library';
+  }
 
   // ---------------------------------------------------------------------------
   // Library rendering: shelf (default) or grid
@@ -4747,11 +4754,11 @@
         html:
           stCard('Startup',
             stRow('Start GameVault when I log in', 'Opens quietly in the tray.', stSwitch('data-autostart', startupOn, { label: 'Start on login' })) +
-            stRow('Start in Big Picture', 'Open straight into the controller-friendly fullscreen mode.', stSwitch('data-bp-start', false, { disabled: true, label: 'Start in Big Picture' }), { disabled: true })) +
+            stRow('Start in Big Picture', 'Open straight into the fullscreen, controller-friendly mode.', stSwitch('data-bp-start', state.config.startBigPicture === true, { label: 'Start in Big Picture' }))) +
           stCard('Window',
             stRow('Closing the window', toTray ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.',
               stPills('data-close-mode', [['tray', 'Hide to tray'], ['quit', 'Quit']], toTray ? 'tray' : 'quit'), { descId: 'st-close-desc' }) +
-            stRow('Default layout', 'How the library opens.', stPills('data-layout', [['shelf', 'Shelf'], ['poster', 'Cards']], state.view))) +
+            stRow('Default layout', 'How the library opens.', stPills('data-layout', [['shelf', 'Shelf'], ['poster', 'Cards']], bp.on ? bp.saved.view : state.view))) +
           stCard('Sound',
             stRow('Sound effects', 'Small sounds when you click, move around, open things and launch games. Never plays over a game.',
               stSwitch('data-sfx-on', state.config.sfx !== false, { label: 'Sound effects' })) +
@@ -4774,7 +4781,12 @@
             const d = panel.querySelector('#st-close-desc');
             if (d) d.textContent = v === 'tray' ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.';
           });
-          wirePills(panel, '[data-layout]', (v) => { if (v !== state.view) cycleView(); });
+          wirePills(panel, '[data-layout]', (v) => {
+            // Big Picture has its own layouts: save the choice for when it closes
+            if (bp.on) { bp.saved.view = v; lsSet('gv.view', v); return; }
+            if (v !== state.view) cycleView();
+          });
+          wireBpSettings(panel);
           const sfxOn = panel.querySelector('[data-sfx-on]');
           const sfxVol = panel.querySelector('[data-sfx-vol]');
           if (sfxOn) sfxOn.onchange = () => {
@@ -4930,9 +4942,12 @@
             stRow('Button style', 'Which button icons to show.', stPills('data-glyphs', [['auto', 'Automatic'], ['xbox', 'Xbox'], ['ps', 'PlayStation']], glyph)) +
             stRow('Buttons', padLegendHtml(), '', { wide: true })) +
           stCard('Big Picture',
-            stRow('Big Picture mode', 'A fullscreen, TV-sized GameVault. Open it from the app, with the controller’s Home button (or View + Menu), or on startup.', '', { disabled: true }),
-          { soon: true }),
+            stRow('Big Picture mode', 'A fullscreen, TV-sized GameVault. Open it here, with the button in the top bar, with the controller’s Xbox / PS button (or View + Menu), or with F11.',
+              `<button type="button" class="btn${bp.on ? '' : ' btn-primary'}" data-bp-toggle>${bp.on ? 'Exit Big Picture' : 'Open Big Picture'}</button>`) +
+            stRow('Start in Big Picture', 'Open straight into Big Picture when GameVault starts. Launching it with --bigpicture does the same once.',
+              stSwitch('data-bp-start', state.config.startBigPicture === true, { label: 'Start in Big Picture' }))),
         wire(panel) {
+          wireBpSettings(panel);
           const sw = panel.querySelector('[data-pad-on]');
           if (sw) sw.onchange = () => { saveConfigPatch({ padEnabled: sw.checked }); if (!sw.checked) setPadMode(false); };
           wirePills(panel, '[data-glyphs]', (v) => {
@@ -5493,12 +5508,18 @@
     document.addEventListener('keydown', (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       const modalOpen = !$('#modal').hidden;
+      if (e.key === 'F11' && !e.repeat) {
+        e.preventDefault();
+        if (bp.on) exitBigPicture(); else enterBigPicture();
+        return;
+      }
       if (e.key === 'Escape') {
         if (e.defaultPrevented) return;
         if (spotHooks.isOpen()) spotHooks.close();
         else if (modalOpen) closeModal();
         else if (state.selectedId) closeDetail();
         else if (state.settingsOpen) closeSettings();
+        else if (bp.on) bpBack();
         return;
       }
       // a dialog owns the keyboard: nothing below may act on the page under it
@@ -5583,6 +5604,7 @@
     });
 
     if (api.onTrackingSessionEnd) api.onTrackingSessionEnd(({ gameId, sessionHours, sessionStart, sessionEnd, discarded }) => {
+      if (bp.on && api.bringToFront) api.bringToFront();
       const id = String(gameId);
       clearLaunchWatchdog(id);
       delete state.live[id];
@@ -5737,6 +5759,7 @@
     initGameActions();
     initUiSounds();
     initController();
+    initBigPicture();
 
     updateSortUi();
     syncPerfRecorder();
@@ -6511,6 +6534,7 @@
       plus: '<path d="M12 5v14M5 12h14"/>',
       down: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
       sliders: '<path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.2"/><circle cx="8" cy="17" r="2.2"/>',
+      tv: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/>',
       star: '<path d="m12 4 2.4 5 5.4.7-4 3.8 1 5.4-4.8-2.7-4.8 2.7 1-5.4-4-3.8 5.4-.7z"/>'
     };
     const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -6544,7 +6568,10 @@
       { icon: 'plus', title: 'Add game', run: () => $('#btn-add')?.click() },
       { icon: 'down', title: 'Import games', run: () => $('#btn-import')?.click() },
       { icon: 'star', title: 'Open wishlist', run: () => setFilter('Want') },
-      { icon: 'sliders', title: 'Open settings', run: () => $('#btn-settings')?.click() },
+      { icon: 'sliders', title: 'Open settings', run: () => (bp.on ? bpGo('settings') : $('#btn-settings')?.click()) },
+      bp.on
+        ? { icon: 'tv', title: 'Exit Big Picture', run: () => exitBigPicture() }
+        : { icon: 'tv', title: 'Big Picture', run: () => enterBigPicture() },
     ];
 
     const MAX_RESULTS = 50;   // rows rendered per section; the count says how many matched
@@ -6779,8 +6806,8 @@
   const PAD_NATIVE = 'button, a[href], input:not([type="hidden"]), select, textarea, summary';
   const PAD_KEYS = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' };
   const PAD_GLYPH_TEXT = {
-    xbox: { a: 'A', b: 'B', x: 'X', y: 'Y', lb: 'LB', rb: 'RB', lt: 'LT', rt: 'RT', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS' },
-    ps: { a: '✕', b: '○', x: '□', y: '△', lb: 'L1', rb: 'R1', lt: 'L2', rt: 'R2', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS' },
+    xbox: { a: 'A', b: 'B', x: 'X', y: 'Y', lb: 'LB', rb: 'RB', lt: 'LT', rt: 'RT', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS', guide: '⌂' },
+    ps: { a: '✕', b: '○', x: '□', y: '△', lb: 'L1', rb: 'R1', lt: 'L2', rt: 'R2', menu: '≡', view: '⧉', rs: 'RS', ls: 'LS', guide: '⌂' },
   };
   const pad = { reader: null, raf: 0, on: false, glyphs: 'xbox', away: true, mx: -1, my: -1, lastT: 0, ensure: 0 };
 
@@ -7110,6 +7137,11 @@
   }
 
   function padAction(a) {
+    // the Big Picture menu is open: move, pick, or close it; nothing else
+    if (bp.menuOpen) {
+      if (a === 'guide' || a === 'menu') { sfx('back'); return bpCloseMenu(); }
+      if (!(a in PAD_KEYS) && a !== 'confirm' && a !== 'back') return;
+    }
     if (a in PAD_KEYS) return padMove(a);
     if (a === 'confirm') { sfx('select', null, document.activeElement); padConfirm(); return padEnsureFocus(); }
     if (a === 'back') { sfx('back'); padBack(); return padEnsureFocus(); }
@@ -7129,6 +7161,7 @@
       // on a game: its options (edit, finished, folder…); anywhere else: Settings
       const g = padMenuGame();
       if (g) { openGameActions(g); return padEnsureFocus(); }
+      if (bp.on) return bpOpenMenu();
       if (state.settingsOpen) closeSettings(); else openSettings();
       return padEnsureFocus(true);
     }
@@ -7140,12 +7173,12 @@
         if (g) openGameModal(g);
         return padEnsureFocus();
       }
-      if (state.filter === 'Want') return;
+      if (state.filter === 'Want' || bp.on) return;
       cycleView();
       return padEnsureFocus(true);
     }
     if (a === 'sidebar') {
-      if (!$('#modal').hidden || spotHooks.isOpen()) return;
+      if (!$('#modal').hidden || spotHooks.isOpen() || bp.on) return;
       const t = $('#side-toggle');
       if (t) { sfx('tab'); t.click(); }
       return;
@@ -7156,7 +7189,13 @@
       s.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
       return;
     }
-    if (a === 'guide') toast('Big Picture mode is coming soon', 'ok');
+    if (a === 'guide') {
+      // the Xbox / PS button (or View + Menu): opens Big Picture; inside it, the menu
+      if (!$('#modal').hidden) return;
+      if (spotHooks.isOpen()) spotHooks.close();
+      if (bp.on) return bpOpenMenu();
+      enterBigPicture();
+    }
   }
 
   function padMove(dir) {
@@ -7193,10 +7232,32 @@
     const region = (el) => { const r = el.closest('[data-pad-region]'); return r ? r.dataset.padRegion : 'main'; };
     const here = region(active);
     const vertical = dir === 'up' || dir === 'down';
-    const cands = padCandidates(scope)
-      .filter((el) => el !== active && (!vertical || region(el) === here))
+    // The top bar is reached by going up, not sideways: from the Settings menu
+    // its buttons sit nearer than the switches at the far right of the panel,
+    // so Right used to land on Sort instead of the setting next to you.
+    const topbar = $('#topbar');
+    const inTop = (el) => !!topbar && topbar.contains(el);
+    const fromTop = inTop(active);
+    const from = active.getBoundingClientRect();
+    const all = padCandidates(scope)
+      .filter((el) => el !== active)
       .map((el) => ({ el, rect: el.getBoundingClientRect() }));
-    const next = window.PadInput.pickNext(active.getBoundingClientRect(), cands, dir);
+    // down out of the top bar goes into whatever is below (Settings, a game page)
+    const cands = all.filter((c) => !vertical || region(c.el) === here || (fromTop && dir === 'down'));
+    const sameRow = (r) => Math.min(from.bottom, r.bottom) - Math.max(from.top, r.top) > 0;
+    let next;
+    if (!vertical && !fromTop) {
+      next = window.PadInput.pickNext(from, cands.filter((c) => !inTop(c.el)), dir);
+      // the top bar only wins sideways when it's on the very same row
+      if (!next || !sameRow(next.rect)) {
+        const top = window.PadInput.pickNext(from, cands.filter((c) => inTop(c.el) && sameRow(c.rect)), dir);
+        if (top) next = top;
+      }
+    } else {
+      next = window.PadInput.pickNext(from, cands, dir);
+      // at the top of a column (Settings menu or panel): up reaches the top bar
+      if (!next && dir === 'up' && !fromTop) next = window.PadInput.pickNext(from, all.filter((c) => inTop(c.el)), dir);
+    }
     if (next) {
       // coming into a list from outside (sidebar, settings menu, cover strip):
       // land on its selected item, not whichever happens to be nearest
@@ -7273,6 +7334,7 @@
       if (next) { next.click(); padFocus(next); }
       return;
     }
+    if (bp.on) { bpGo(window.BigPicture.stepSection(bp.section, d)); return; }
     if (state.selectedId) closeDetail();
     const i = Math.max(0, PAD_FILTERS.indexOf(state.filter));
     setFilter(PAD_FILTERS[(i + d + PAD_FILTERS.length) % PAD_FILTERS.length]);
@@ -7309,7 +7371,8 @@
     const items = [];
     const add = (btns, label) => items.push(`<span class="pad-hint">${btns.map((b) => padGlyph(b)).join('')}<span>${esc(label)}</span></span>`);
     const modalOpen = !$('#modal').hidden;
-    if (spotHooks.isOpen()) { add(['a'], 'Open'); add(['b'], 'Close'); }
+    if (bp.menuOpen) { add(['a'], 'Select'); add(['b'], 'Close'); }
+    else if (spotHooks.isOpen()) { add(['a'], 'Open'); add(['b'], 'Close'); }
     else if (modalOpen) { add(['a'], 'Select'); add(['b'], 'Close'); }
     else if (state.settingsOpen) { add(['a'], 'Select'); add(['lb', 'rb'], 'Section'); add(['b'], 'Back'); }
     else {
@@ -7319,9 +7382,13 @@
       const g = padGame();
       if (g && !gvIsWishlisted(g)) add(['x'], typeof state.live[String(g.id)] === 'number' ? 'Stop' : 'Play');
       if (state.selectedId) { add(['view'], 'Edit'); add(['b'], 'Back'); }
-      else add(['lb', 'rb'], 'Switch');
+      else add(['lb', 'rb'], bp.on ? 'Section' : 'Switch');
       add(['y'], 'Search');
-      add(['menu'], padMenuGame() ? 'Options' : 'Settings');
+      if (bp.on) {
+        if (padMenuGame()) add(['menu'], 'Options');
+        add(['guide'], 'Menu');
+        if (!state.selectedId) add(['b'], bp.section === 'home' ? 'Exit' : 'Home');
+      } else add(['menu'], padMenuGame() ? 'Options' : 'Settings');
     }
     const html = items.join('');
     if (el._html !== html) { el._html = html; el.innerHTML = html; }
@@ -7334,8 +7401,245 @@
       [['lb', 'rb'], 'Switch library list or settings section'], [['lt', 'rt'], 'Page up / down'],
       [['rs'], 'Right stick scrolls; click it to jump to the top'], [['ls'], 'Click the left stick to fold the sidebar'],
       [['menu'], 'Options for the selected game (Settings when there is none)'], [['view'], 'Switch layout; on a game page, edit the game'],
+      [['guide'], 'Xbox / PS button, or View + Menu together: Big Picture (its menu once you’re in)'],
     ];
     return `<div class="pad-legend" data-pad-legend>${rows.map(([b, t]) => `<div class="pad-legend-row"><span class="pad-legend-btns">${b.map((x) => padGlyph(x)).join('')}</span><span>${esc(t)}</span></div>`).join('')}</div>`;
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // Big Picture: fullscreen, TV-sized, no sidebar. The same shelf, grid, game
+  // page and Settings, zoomed by main (src/lib/bigpicture.js picks the zoom)
+  // and restyled under html.is-bigpicture. A slide-out menu replaces the
+  // sidebar. Works with a pad, the mouse and the keyboard.
+  // ---------------------------------------------------------------------------
+
+  const BP_ICONS = {
+    home: '<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10v9h11v-9"/>',
+    library: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+    playing: '<path d="M7 4.5v15l12-7.5z"/>',
+    finished: '<path d="m4.5 12.5 5 5L19.5 7"/>',
+    wishlist: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/>',
+    settings: '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
+    exit: '<path d="M9 14 4.5 9.5 9 5"/><path d="M4.5 9.5H15a4.5 4.5 0 0 1 0 9h-3"/>',
+  };
+  const bp = { on: false, section: 'home', menuOpen: false, saved: { view: 'shelf', sort: 'lastPlayed', filter: 'All' }, clock: 0, menuReturn: null, busy: false };
+
+  function bpIcon(name) {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${BP_ICONS[name] || ''}</svg>`;
+  }
+
+  function initBigPicture() {
+    if (!window.BigPicture) return;
+    const menu = document.createElement('div');
+    menu.id = 'bp-menu';
+    menu.className = 'bp-menu';
+    menu.hidden = true;
+    menu.innerHTML = `
+      <div class="bp-menu-scrim" data-bp-close></div>
+      <nav class="bp-menu-panel" role="menu" aria-label="Big Picture">
+        <div class="bp-menu-brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><span>GameVault</span></div>
+        ${BigPicture.SECTIONS.map((s) => `<button type="button" class="bp-menu-item" role="menuitem" data-bp-go="${s.id}">${bpIcon(s.id)}<span>${esc(s.label)}</span>${s.filter && s.id !== 'home' ? `<b data-bp-count="${s.filter}"></b>` : ''}</button>`).join('')}
+        <div class="bp-menu-sep" role="separator"></div>
+        <button type="button" class="bp-menu-item" role="menuitem" data-bp-exit>${bpIcon('exit')}<span>Exit Big Picture</span></button>
+      </nav>`;
+    $('#modal').before(menu);
+    menu.querySelector('[data-bp-close]').onclick = () => bpCloseMenu();
+    for (const b of menu.querySelectorAll('[data-bp-go]')) b.onclick = () => bpGo(b.dataset.bpGo);
+    menu.querySelector('[data-bp-exit]').onclick = () => exitBigPicture();
+    const panel = menu.querySelector('.bp-menu-panel');
+    panel.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); sfx('back'); bpCloseMenu(); return; }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+      const items = Array.from(panel.querySelectorAll('.bp-menu-item'));
+      const i = items.indexOf(document.activeElement);
+      e.preventDefault();
+      let n = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : i + (e.key === 'ArrowDown' ? 1 : -1);
+      n = Math.max(0, Math.min(items.length - 1, n));
+      if (n === i) { sfx('bump'); return; }
+      items[n].focus();
+      paintPadHints();
+    });
+    // Tab stays inside the open menu
+    panel.addEventListener('focusout', (e) => {
+      if (bp.menuOpen && !menu.contains(e.relatedTarget)) {
+        requestAnimationFrame(() => { if (bp.menuOpen && !menu.contains(document.activeElement)) bpFocusMenu(); });
+      }
+    });
+
+    const enter = $('#btn-bigpicture');
+    if (enter) enter.onclick = () => enterBigPicture();
+    const menuBtn = $('#bp-menu-btn');
+    if (menuBtn) menuBtn.onclick = () => (bp.menuOpen ? bpCloseMenu() : bpOpenMenu());
+    if (api.onBigPicture) api.onBigPicture((on) => (on ? enterBigPicture() : exitBigPicture()));
+
+    let startBp = false;
+    try { startBp = new URLSearchParams(location.search).get('bp') === '1'; } catch (_) {}
+    if (startBp) requestAnimationFrame(() => enterBigPicture({ instant: true }));
+  }
+
+  async function enterBigPicture({ instant = false } = {}) {
+    if (bp.on || bp.busy || !window.BigPicture) return;
+    bp.busy = true;
+    try {
+      bp.saved = { view: state.view, sort: state.sort, filter: state.filter };
+      bp.on = true;
+      document.documentElement.classList.add('is-bigpicture');
+      if (!instant) sfx('open');
+      if (spotHooks.isOpen()) spotHooks.close();
+      if (!$('#modal').hidden) closeModal();
+      if (api.setBigPicture) await api.setBigPicture(true).catch(() => null);
+      bpStartClock();
+      await bpGo('home');
+    } finally { bp.busy = false; }
+    paintPadHints();
+  }
+
+  async function exitBigPicture() {
+    if (!bp.on || bp.busy) return;
+    bp.busy = true;
+    try {
+      bpCloseMenu({ refocus: false });
+      sfx('close');
+      if (spotHooks.isOpen()) spotHooks.close();
+      if (!$('#modal').hidden) closeModal();
+      if (state.selectedId) closeDetail();
+      if (state.settingsOpen) closeSettings({ restoreFocus: false });
+      bp.on = false;
+      document.documentElement.classList.remove('is-bigpicture');
+      // a started-in-Big-Picture page must not come back into it on a reload
+      try { if (location.search) history.replaceState(null, '', location.pathname + location.hash); } catch (_) {}
+      bpStopClock();
+      if (api.setBigPicture) await api.setBigPicture(false).catch(() => null);
+      // the user's own layout, sort and list come back (Big Picture never saves its own)
+      const { view, sort, filter } = bp.saved;
+      state.view = VIEWS.includes(view) ? view : 'shelf';
+      state.sort = Object.prototype.hasOwnProperty.call(SORT_LABELS, sort) ? sort : 'lastPlayed';
+      state._shelfKey = '';
+      updateSortUi();
+      applyView();
+      await setFilter(filter || 'All');
+    } finally { bp.busy = false; }
+    paintPadHints();
+    padEnsureFocus(true);
+  }
+
+  /** Show one Big Picture section (Home, Library, Playing, …, Settings). */
+  async function bpGo(id) {
+    if (!bp.on) return;
+    const s = BigPicture.section(id);
+    bpCloseMenu({ refocus: false });
+    if (s.settings) {
+      if (!state.settingsOpen) await openSettings();
+      bpSyncMenu();
+      padEnsureFocus(true);
+      return;
+    }
+    bp.section = s.id;
+    if (state.view !== s.view || state.sort !== s.sort) {
+      state.view = s.view;
+      state.sort = s.sort;
+      state._shelfKey = '';
+      updateSortUi();
+      applyView();
+    }
+    await setFilter(s.filter);   // closes a game page or Settings, re-renders
+    if (!bp.on) return;
+    const title = $('#filter-title');
+    if (title) title.textContent = s.label;
+    bpSyncMenu();
+    paintPadHints();
+    padEnsureFocus(true);
+  }
+
+  /** B / Esc with nothing else open: back to Home, and from Home out of Big Picture. */
+  function bpBack() {
+    const act = BigPicture.backAction({
+      menuOpen: bp.menuOpen, modalOpen: !$('#modal').hidden, spotOpen: spotHooks.isOpen(),
+      detail: !!state.selectedId, settings: !!state.settingsOpen, section: bp.section,
+    });
+    if (act === 'close-menu') bpCloseMenu();
+    else if (act === 'home') bpGo('home');
+    else if (act === 'exit') exitBigPicture();
+  }
+
+  function bpSyncMenu() {
+    const menu = $('#bp-menu');
+    if (!menu) return;
+    const current = state.settingsOpen ? 'settings' : bp.section;
+    for (const b of menu.querySelectorAll('[data-bp-go]')) {
+      const on = b.dataset.bpGo === current;
+      b.classList.toggle('is-active', on);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    }
+    for (const c of menu.querySelectorAll('[data-bp-count]')) {
+      const n = state.counts ? state.counts[c.dataset.bpCount] : null;
+      c.textContent = Number.isFinite(n) ? String(n) : '';
+    }
+  }
+
+  function bpFocusMenu() {
+    const menu = $('#bp-menu');
+    const el = menu && (menu.querySelector('.bp-menu-item.is-active') || menu.querySelector('.bp-menu-item'));
+    if (el) el.focus({ preventScroll: true });
+  }
+
+  function bpOpenMenu() {
+    if (!bp.on || bp.menuOpen) return;
+    const menu = $('#bp-menu');
+    if (!menu) return;
+    if (spotHooks.isOpen()) spotHooks.close();
+    if (!$('#modal').hidden) return;
+    bp.menuOpen = true;
+    const a = document.activeElement;
+    bp.menuReturn = a && a !== document.body ? a : null;
+    bpSyncMenu();
+    menu.hidden = false;
+    $('#app').inert = true;
+    document.documentElement.classList.add('bp-menu-open');
+    sfx('open');
+    const btn = $('#bp-menu-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    bpFocusMenu();
+    paintPadHints();
+  }
+
+  function bpCloseMenu({ refocus = true } = {}) {
+    if (!bp.menuOpen) return;
+    bp.menuOpen = false;
+    const menu = $('#bp-menu');
+    if (menu) menu.hidden = true;
+    $('#app').inert = false;
+    document.documentElement.classList.remove('bp-menu-open');
+    const btn = $('#bp-menu-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    const back = bp.menuReturn;
+    bp.menuReturn = null;
+    if (refocus) {
+      if (back && back.isConnected && padFocusable(back)) back.focus({ preventScroll: true });
+      else padEnsureFocus(true);
+    }
+    paintPadHints();
+  }
+
+  function bpStartClock() {
+    const el = $('#bp-clock');
+    const tick = () => {
+      if (el) el.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
+    tick();
+    clearInterval(bp.clock);
+    bp.clock = setInterval(tick, 10000);
+  }
+
+  function bpStopClock() { clearInterval(bp.clock); bp.clock = 0; }
+
+  /** The Big Picture rows in Settings (General and Controller & Big Picture). */
+  function wireBpSettings(panel) {
+    const sw = panel.querySelector('[data-bp-start]');
+    if (sw) sw.onchange = () => saveConfigPatch({ startBigPicture: sw.checked });
+    const btn = panel.querySelector('[data-bp-toggle]');
+    if (btn) btn.onclick = () => (bp.on ? exitBigPicture() : enterBigPicture());
   }
 
 
