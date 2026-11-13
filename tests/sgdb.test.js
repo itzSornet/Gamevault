@@ -30,12 +30,12 @@ test('unsafe artwork is filtered out', () => {
   assert.deepEqual(ranked.map((a) => a.id), [4]);
 });
 
-test('official artwork outranks alternate at equal fit', () => {
-  const ranked = client.rank('grids', [
-    asset({ id: 1, style: 'alternate' }),
-    asset({ id: 2, style: 'official' }),
+test('SteamGridDB order is kept at equal fit (style does not reorder)', () => {
+  const ranked = client.rank('logos', [
+    asset({ id: 1, style: 'custom', width: 300, height: 100 }),
+    asset({ id: 2, style: 'official', width: 800, height: 300 }),
   ]);
-  assert.equal(ranked[0].id, 2);
+  assert.deepEqual(ranked.map((a) => a.id), [1, 2]);
 });
 
 test('portrait grids rank above square ones for covers', () => {
@@ -54,18 +54,18 @@ test('banners require a wide aspect ratio', () => {
   assert.equal(ranked[0].id, 2);
 });
 
-test('icons prefer square assets at least 256px', () => {
+test('icons must be square', () => {
   const ranked = client.rank('icons', [
-    asset({ id: 1, width: 128, height: 128 }),
-    asset({ id: 2, width: 256, height: 256 }),
+    asset({ id: 1, width: 256, height: 128 }),
+    asset({ id: 2, width: 128, height: 128 }),
   ]);
   assert.equal(ranked[0].id, 2);
 });
 
-test('higher score wins inside the same style and fit', () => {
+test('342x482 covers count as portrait', () => {
   const ranked = client.rank('grids', [
-    asset({ id: 1, score: 1 }),
-    asset({ id: 2, score: 99 }),
+    asset({ id: 1, width: 342, height: 482 }),
+    asset({ id: 2, width: 600, height: 900 }),
   ]);
-  assert.equal(ranked[0].id, 2);
+  assert.deepEqual(ranked.map((a) => a.id), [1, 2]);
 });

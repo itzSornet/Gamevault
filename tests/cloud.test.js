@@ -48,6 +48,17 @@ const T = 1_800_000_000_000;
   assert.strictEqual(m.status, 'Finished', 'remote-only field change kept');
   assert.strictEqual(m.exePath, 'C:\\alpha.exe');
 
+  // playtime set by hand: the newer manual edit wins even when it is lower
+  {
+    const lo = { id: 'h', name: 'Hand', hours: 2, hoursSetAt: T + 10, sessions: [] };
+    const hi = { id: 'h', name: 'Hand', hours: 40, sessions: [] };
+    let rr = mergeLibrary({ local: [lo], remote: { games: [hi], tombstones: {} }, base: {}, now: T + 11 });
+    assert.strictEqual(rr.games[0].hours, 2);
+    rr = mergeLibrary({ local: [hi], remote: { games: [lo], tombstones: {} }, base: {}, now: T + 11 });
+    assert.strictEqual(rr.games[0].hours, 2, 'remote manual edit reaches this PC');
+    assert.strictEqual(rr.games[0].hoursSetAt, T + 10);
+  }
+
   // remote-only edit wins when local is unchanged since the last sync
   const synced = r.games;
   const baseS = r.base;

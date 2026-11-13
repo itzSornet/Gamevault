@@ -14,6 +14,7 @@ import {
   type Game,
   type IndexRow,
   rank,
+  ASSETS_SCHEMA,
   type RateVerdict,
   type StoredGame,
   type StoredPage,
@@ -390,12 +391,10 @@ Deno.test("transient SGDB failure is not cached and frees the claim", async () =
   assertEquals(db.inflight.size, 0);
 });
 
-Deno.test("rank() port: covers prefer 2:3 >= 600 wide, then style, then score (desktop parity)", () => {
+Deno.test("rank() port: SteamGridDB order kept, only wrong-shape art moves back (desktop parity)", () => {
   const a = (id: number, w: number, h: number, style = "alternate", score = 0) => ({ id, url: `u${id}`, width: w, height: h, style, score });
   const out = rank("grids", [a(1, 342, 482, "official"), a(2, 600, 900, "blurred"), a(3, 600, 900, "official", 1), a(4, 920, 430, "official", 99)]);
-  // 342x482 is ratio 0.71: outside the desktop's +-0.04 band around 2:3, so it
-  // scores 40+20 and lands below the wide 920x430 (40+0). Parity with sgdb.js.
-  assertEquals(out.map((x) => x.id), [3, 2, 4, 1]);
+  assertEquals(out.map((x) => x.id), [1, 2, 3, 4]);
 });
 
 Deno.test("picker paging: page miss fetched once and cached, SGDB order kept, unsafe removed", async () => {
@@ -445,7 +444,7 @@ Deno.test("rows stored under an older ASSETS_SCHEMA are refreshed", async () => 
   const r = await call({ steamAppId: 730 });
   assertEquals(r.body.data.source, "sgdb");
   assert(sgdb.calls.slice(before).includes("/games/id/7"), "refreshed by id");
-  assertEquals(db.games.get(7)!.assets.v, 2);
+  assertEquals(db.games.get(7)!.assets.v, ASSETS_SCHEMA);
 });
 
 // ------------------------------------------------------------ title search

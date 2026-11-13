@@ -186,7 +186,7 @@ function createArtCache(opts = {}) {
     if (!configured()) return fail('NO_CLOUD', 'Cloud artwork is not configured');
     const hit = readJson(file);
     const age = hit ? now() - hit.savedAt : Infinity;
-    if (hit && hit.miss && age < MISS_TTL) return fail('NOT_FOUND', 'Nothing found on SteamGridDB');
+    if (hit && hit.miss && age < Math.min(MISS_TTL, ttl)) return fail('NOT_FOUND', 'Nothing found on SteamGridDB');
     if (hit && hit.data && age < ttl) return { ok: true, data: { ...hit.data, source: 'local', stale: false } };
 
     const res = await callServer(body);
@@ -219,7 +219,9 @@ function createArtCache(opts = {}) {
     if (input.sgdbId) body.sgdbId = Number(input.sgdbId);
     if (input.steamAppId) body.steamAppId = Number(input.steamAppId);
     if (input.term) body.term = String(input.term);
-    return once(`lookup:${key}`, () => cached(P.lookup(key), LOOKUP_TTL, body, (data) => {
+    // fresh: skip this PC's copy and ask the server again (Refresh artwork)
+    const ttl = input.fresh ? 0 : LOOKUP_TTL;
+    return once(`lookup:${key}${input.fresh ? ':fresh' : ''}`, () => cached(P.lookup(key), ttl, body, (data) => {
       // Later { sgdbId } lookups (e.g. from the picker) are then local too.
       if (data && data.game && data.game.id && !key.startsWith('sgdb-')) {
         writeJson(P.lookup(`sgdb-${data.game.id}`), { savedAt: now(), data });
@@ -273,24 +275,56 @@ function createArtCache(opts = {}) {
    * Steam's own library art for a Steam game: { cover, hero, logo } URLs, null
    * where Steam has none (use the art server's top pick there instead).
    */
+  /**
+   * Newer Steam apps keep their library art under a hash folder
+   * (apps/<id>/<hash>/library_capsule.jpg), so the plain paths 404. The Steam
+   * client caches the same files locally in appcache/librarycache/<id>/<hash>/,
+   * which tells us the hashes. Returns { cover: [urls], hero: [urls], logo: [urls] }.
+   */
+  function hashedSteamUrls(id) {
+    const out = { cover: [], hero: [], logo: [] };
+    const dirs = typeof opts.steamLibraryCaches === 'function' ? (opts.steamLibraryCaches() || []) : [];
+    for (const base of dirs) {
+      let subs = [];
+      try { subs = fs.readdirSync(path.join(base, String(id)), { withFileTypes: true }).filter((d) => d.isDirectory()); } catch (_) { continue; }
+      for (const d of subs) {
+        if (!/^[0-9a-f]{20,64}$/i.test(d.name)) continue;
+        let files = [];
+        try { files = fs.readdirSync(path.join(base, String(id), d.name)); } catch (_) { continue; }
+        const at = (f) => `${STEAM_CDN}/${id}/${d.name}/${f}`;
+        if (files.includes('library_600x900.jpg')) out.cover.push(at('library_600x900_2x.jpg'), at('library_600x900.jpg'));
+        if (files.includes('library_capsule.jpg')) out.cover.push(at('library_capsule_2x.jpg'), at('library_capsule.jpg'));
+        if (files.includes('library_hero.jpg')) out.hero.push(at('library_hero.jpg'));
+        if (files.includes('logo.png')) out.logo.push(at('logo.png'));
+      }
+    }
+    return out;
+  }
+
   function steamArt(appId) {
     const id = Number(appId);
     if (!Number.isSafeInteger(id) || id <= 0) return Promise.resolve(fail('BAD_REQUEST', 'Bad Steam app id'));
     return once(`steam:${id}`, async () => {
       const hit = readJson(P.steam(id));
-      if (hit && now() - hit.savedAt < STEAM_TTL) return { ok: true, data: hit.data };
-      const urls = {
-        cover: `${STEAM_CDN}/${id}/library_600x900_2x.jpg`,
-        hero: `${STEAM_CDN}/${id}/library_hero.jpg`,
-        logo: `${STEAM_CDN}/${id}/logo.png`,
+      const hashed = hashedSteamUrls(id);
+      const hashSig = [...hashed.cover, ...hashed.hero, ...hashed.logo].join('|');
+      // a cached answer is good unless Steam's local cache now knows hashes it didn't
+      if (hit && now() - hit.savedAt < STEAM_TTL && (hit.hashSig || '') === hashSig) return { ok: true, data: hit.data };
+      const tries = {
+        cover: [`${STEAM_CDN}/${id}/library_600x900_2x.jpg`, ...hashed.cover],
+        hero: [`${STEAM_CDN}/${id}/library_hero.jpg`, ...hashed.hero],
+        logo: [`${STEAM_CDN}/${id}/logo.png`, ...hashed.logo],
       };
-      const checks = await Promise.all(Object.values(urls).map(exists));
-      if (checks.includes(null)) {
-        return hit ? { ok: true, data: hit.data } : fail('NETWORK', 'Could not reach Steam');
-      }
       const data = {};
-      Object.keys(urls).forEach((slot, i) => { data[slot] = checks[i] ? urls[slot] : null; });
-      writeJson(P.steam(id), { savedAt: now(), data });
+      for (const [slot, urls] of Object.entries(tries)) {
+        data[slot] = null;
+        for (const url of urls) {
+          const ok = await exists(url);
+          if (ok === null) return hit ? { ok: true, data: hit.data } : fail('NETWORK', 'Could not reach Steam');
+          if (ok) { data[slot] = url; break; }
+        }
+      }
+      writeJson(P.steam(id), { savedAt: now(), data, hashSig });
       return { ok: true, data };
     });
   }

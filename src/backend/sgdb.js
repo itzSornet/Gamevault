@@ -121,43 +121,25 @@ function createSgdb(apiKey) {
     };
   }
 
-  const STYLE_RANK = {
-    official: 0,
-    alternate: 1,
-    no_logo: 1,
-    nologo: 1,
-    white_logo: 2,
-    material: 2,
-    blurred: 3,
-  };
-
+  // Auto-picks follow SteamGridDB's own order (its most popular first, the
+  // same order the picker shows). Only art of the wrong shape for its slot
+  // drops to the back; style, size and the (unpopulated) score fields are
+  // not used to reorder, so the pick matches what people voted up.
   function rank(kind, list) {
     const safe = (list || [])
       .filter((item) => !item.nsfw && !item.humor && !item.epilepsy)
       .map(normalizeAsset);
 
-    const fit = (a) => {
-      const ratio = a.height ? a.width / a.height : 1;
-      if (kind === 'grids') {
-        const close = Math.abs(ratio - 2 / 3) < 0.04;
-        return (close ? 0 : 40) + (a.width >= 600 ? 0 : 20);
-      }
-      if (kind === 'heroes') return ratio >= 1.45 ? 0 : 100;
-      if (kind === 'icons') return Math.abs(ratio - 1) < 0.05 ? (a.width >= 256 ? 0 : 10) : 100;
-      if (kind === 'logos') return a.width >= 400 ? 0 : 20;
+    const misfit = (a) => {
+      if (!a.width || !a.height) return 0;
+      const ratio = a.width / a.height;
+      if (kind === 'grids') return ratio >= 0.6 && ratio <= 0.76 ? 0 : 1;
+      if (kind === 'heroes') return ratio >= 1.45 ? 0 : 1;
+      if (kind === 'icons') return Math.abs(ratio - 1) < 0.05 ? 0 : 1;
       return 0;
     };
 
-    return safe.slice().sort((a, b) => {
-      const fitA = fit(a);
-      const fitB = fit(b);
-      if (fitA !== fitB) return fitA - fitB;
-      const styleA = STYLE_RANK[a.style] ?? 2;
-      const styleB = STYLE_RANK[b.style] ?? 2;
-      if (styleA !== styleB) return styleA - styleB;
-      if (b.score !== a.score) return b.score - a.score;
-      return b.upvotes - a.upvotes;
-    });
+    return safe.slice().sort((a, b) => misfit(a) - misfit(b));
   }
 
   return {

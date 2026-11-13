@@ -774,6 +774,38 @@ function createWindow() {
     if (loadConfig().closeToTray === false) { forceQuit = true; app.quit(); return; }
     win.hide();
   });
+  // Crop an image to the box of its visible (alpha > 12) pixels, with a hair
+  // of padding so glows are not cut. Returns the image unchanged when there
+  // is nothing worth trimming.
+  function trimTransparent(img) {
+    try {
+      const { width: w, height: h } = img.getSize();
+      const px = img.toBitmap(); // BGRA
+      if (px.length < w * h * 4) return img;
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) {
+        const row = y * w * 4;
+        for (let x = 0; x < w; x++) {
+          if (px[row + x * 4 + 3] > 12) {
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+          }
+        }
+      }
+      if (x1 < 0) return img;
+      const pad = 2;
+      x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+      x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+      const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+      if (cw >= w - 2 && ch >= h - 2) return img;
+      return img.crop({ x: x0, y: y0, width: cw, height: ch });
+    } catch (_) {
+      return img;
+    }
+  }
+
   ipcMain.handle('img:thumb', async (_e, { src, width, kind }) => {
     try {
       if (!src) return null;
@@ -785,15 +817,19 @@ function createWindow() {
       const crypto = require('crypto');
       const stat = fs.statSync(file);
       const isLogo = kind === 'logo';
-      const key = crypto.createHash('md5').update(`${file}:${stat.mtimeMs}:${width}${isLogo ? ':logo' : ''}`).digest('hex');
+      const key = crypto.createHash('md5').update(`${file}:${stat.mtimeMs}:${width}${isLogo ? ':logo-trim' : ''}`).digest('hex');
       const dir = path.join(app.getPath('userData'), 'thumbs');
       fs.mkdirSync(dir, { recursive: true });
       // logos keep their transparency
       const out = path.join(dir, `${key}.${isLogo ? 'png' : 'jpg'}`);
       if (fs.existsSync(out)) return require('url').pathToFileURL(out).href;
 
-      const img = nativeImage.createFromPath(file);
+      let img = nativeImage.createFromPath(file);
       if (img.isEmpty()) return null;
+      // Logos often sit in a wide transparent canvas (Steam's logo.png puts
+      // the art at the right): crop to what is actually drawn so the logo
+      // lines up with the text around it.
+      if (isLogo) img = trimTransparent(img);
       const size = img.getSize();
       // A portrait cover blown up to a banner looks like a smeared render bug.
       if (kind === 'hero' && size.width / size.height < 1.45) return '__reject__';
@@ -1259,6 +1295,10 @@ function createWindow() {
         dir: path.join(app.getPath('userData'), 'art-cache'), cloudUrl: url, anonKey,
         // Signed in: art lookups count against the user's account, not an anonymous one.
         userToken: (o) => account().token(o).catch(() => null),
+        // Steam's own art cache, which knows the hashed paths of newer apps' art
+        steamLibraryCaches: () => {
+          try { return require('./src/backend/sources/steam.js').steamRoots().map((r) => path.join(r, 'appcache', 'librarycache')); } catch (_) { return []; }
+        },
       });
     }
     return artCacheInstance;
@@ -1354,14 +1394,36 @@ function createWindow() {
     return res;
   }
   /** Cloud lookup for a game: by SGDB id, Steam app id, or name (fuzzy-checked). */
-  async function cloudLookup({ id, name, steamAppId }) {
-    if (id) return artCache().lookup({ sgdbId: id });
+  async function cloudLookup({ id, name, steamAppId, fresh }) {
+    if (id) return artCache().lookup({ sgdbId: id, fresh });
     if (steamAppId) {
-      const r = await artCache().lookup({ steamAppId });
-      if (r.ok || !name) return r;
+      const r = await artCache().lookup({ steamAppId, fresh });
+      if (!r.ok) { if (!name) return r; }
+      else {
+        // SteamGridDB sometimes links a Steam id to a thin duplicate entry (a
+        // new app id, a localized name) while the entry everyone uploads to
+        // has no Steam link. When the Steam one is thin, a confident name
+        // match with more art wins.
+        if (!name || !artThin(r.data)) return r;
+        const n = await byName(name, fresh).catch(() => null);
+        const same = n && n.ok && n.data.game && r.data.game && n.data.game.id === r.data.game.id;
+        const sameName = n && n.ok && n.data.game && plainName(n.data.game.name) === plainName(name);
+        const confident = sameName || (n && n.ok && (n.data.matchScore || 0) >= 650);
+        if (n && n.ok && !same && confident && artCount(n.data) > artCount(r.data)) return n;
+        return r;
+      }
     }
     if (!name || !String(name).trim()) return { ok: false, error: { code: 'NOT_FOUND', message: 'No name' } };
-    const r = await artCache().lookup({ term: String(name) });
+    return byName(name, fresh);
+  }
+
+  const plainName = (v) => String(v || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const artTotal = (d, k) => (d && d.assets && d.assets[k] && Number(d.assets[k].total)) || 0;
+  const artCount = (d) => artTotal(d, 'grids') + artTotal(d, 'heroes') + artTotal(d, 'logos');
+  const artThin = (d) => artTotal(d, 'grids') < 10 || artTotal(d, 'logos') < 3 || artTotal(d, 'heroes') < 3;
+
+  async function byName(name, fresh) {
+    const r = await artCache().lookup({ term: String(name), fresh });
     if (!r.ok) return r;
     // The server picked the top search hit; re-ask by id if fuzzy matching disagrees.
     const cands = r.data.candidates || [];
@@ -1369,7 +1431,7 @@ function createWindow() {
     r.data.matchScore = best && best.item ? best.score : null;
     r.data.alternatives = best ? best.alternatives : [];
     if (best && best.item && r.data.game && best.item.id !== r.data.game.id) {
-      const again = await artCache().lookup({ sgdbId: best.item.id });
+      const again = await artCache().lookup({ sgdbId: best.item.id, fresh });
       if (again.ok) return { ok: true, data: { ...again.data, candidates: cands, matchScore: best.score, alternatives: best.alternatives } };
     }
     return r;
@@ -1529,7 +1591,7 @@ function createWindow() {
 
   // slots: only fetch these (bulk enrichment skips what a game already has).
   // bulk: no picker-thumbnail warmup (that's 100+ downloads per game).
-  ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name, steamAppId, slots, bulk } = {}) => {
+  ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name, steamAppId, slots, bulk, fresh } = {}) => {
     const want = Array.isArray(slots) && slots.length ? new Set(slots) : null;
     const keep = (slot) => !want || want.has(slot);
     // A Steam game whose own art covers every slot asked for never touches
@@ -1538,7 +1600,7 @@ function createWindow() {
       const steam = await steamPicks(steamAppId, keep);
       if ([...want].every((s) => steam[s])) return { match: null, assets: await cacheAssets(steam) };
     }
-    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId }), () => autofillWithKey({ id, name, steamAppId, keep }));
+    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId, fresh }), () => autofillWithKey({ id, name, steamAppId, keep }));
     if (cloud.viaKey) return cloud.data;
     if (!cloud.ok && cloud.error.code === 'NOT_FOUND') return { match: null, assets: {} };
     const data = unwrap(cloud);

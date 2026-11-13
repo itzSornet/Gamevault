@@ -130,6 +130,7 @@ module.exports = {
   id: 'steam',
   label: 'Steam',
   os: ['linux', 'win32'],
+  steamRoots,
   detect: () => steamRoots().length > 0,
   scanInstalled,
   scanOwned: fetchOwned,
