@@ -424,7 +424,7 @@ function isSharedSystemDir(dir) {
 // ---------------------------------------------------------------------------
 
 // Launcher URIs (steam://, com.epicgames.launcher://, uplay://, origin2://,
-// battlenet://, heroic://, lutris:rungameid/...). Never file:, javascript:,
+// battlenet://, heroic://, lutris:rungameid/..., bottles:run/...). Never file:, javascript:,
 // data: or a Windows drive letter.
 function isLaunchUri(value) {
   const s = String(value || '').trim();
@@ -433,7 +433,7 @@ function isLaunchUri(value) {
   const scheme = m[1].toLowerCase();
   if (scheme === 'file' || scheme === 'javascript' || scheme === 'data' || scheme === 'vbscript' || scheme === 'shell') return false;
   if (s.slice(m[0].length).startsWith('//')) return true;
-  return scheme === 'lutris' || scheme === 'steam';
+  return scheme === 'lutris' || scheme === 'steam' || scheme === 'bottles';
 }
 
 // Xbox / AppX entries: shell:AppsFolder\<PackageFamily>!App. Never on disk.

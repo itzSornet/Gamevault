@@ -16,8 +16,10 @@ function steamRoots() {
     try { for (const r of require('../scanner.js').getSteamRoots()) if (has(r) && !roots.includes(r)) roots.push(r); } catch (_) {}
     for (const c of ['C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam']) if (has(c) && !roots.includes(c)) roots.push(c);
   } else {
+    // every Linux install method: native, Flatpak (two layouts), Snap, Debian
+    try { for (const r of require('../scanner.js').getSteamRoots()) if (has(r) && !roots.includes(r)) roots.push(r); } catch (_) {}
     for (const c of [p(HOME, '.steam', 'steam'), p(HOME, '.local', 'share', 'Steam'), p(HOME, '.var', 'app', 'com.valvesoftware.Steam', '.steam', 'steam')]) {
-      if (has(c)) roots.push(c);
+      if (has(c) && !roots.includes(c)) roots.push(c);
     }
   }
   return roots;

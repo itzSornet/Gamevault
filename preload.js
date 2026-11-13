@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld('api', {
   sgdbResolve: (payload) => ipcRenderer.invoke('sgdb:resolve', payload),
   sgdbAssets: (payload) => ipcRenderer.invoke('sgdb:assets', payload),
   sgdbAutofill: (payload) => ipcRenderer.invoke('sgdb:autofill', payload),
+  logError: (entry) => ipcRenderer.send('log:renderer-error', entry),
   sgdbCache: (payload) => ipcRenderer.invoke('sgdb:cache', payload),
   sgdbKeyGet: () => ipcRenderer.invoke('sgdb:key:get'),
   sgdbKeySet: (key) => ipcRenderer.invoke('sgdb:key:set', key),

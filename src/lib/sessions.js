@@ -335,7 +335,142 @@
     return false;
   }
 
+  // ---- days, runs and habits: the same sessions, told the way a person
+  // would tell them ("six days in a row, mostly evenings") instead of one
+  // row per database record.
+
+  // Under two minutes in a day is a launch, not play.
+  const BRIEF_HOURS = 2 / 60;
+
+  // One entry per local day a game was played, newest first. A session
+  // counts on the day it started. `items` are that day's sessions, oldest first.
+  function dayGroups(sessions) {
+    const byDay = new Map();
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (!isValidSession(s)) continue;
+      const d = new Date(s.start);
+      const n = localDayNumber(d);
+      let g = byDay.get(n);
+      if (!g) {
+        g = { dayNumber: n, day: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), hours: 0, count: 0, first: s.start, last: s.start, longest: 0, items: [] };
+        byDay.set(n, g);
+      }
+      const end = isFiniteNumber(s.end) && s.end > s.start ? s.end : s.start + s.duration * 3600000;
+      g.hours += s.duration;
+      g.count += 1;
+      if (s.start < g.first) g.first = s.start;
+      if (end > g.last) g.last = end;
+      if (s.duration > g.longest) g.longest = s.duration;
+      g.items.push({ start: s.start, end, duration: s.duration });
+    }
+    const out = Array.from(byDay.values()).sort((a, b) => b.dayNumber - a.dayNumber);
+    for (const g of out) {
+      g.hours = round2(g.hours);
+      g.brief = g.hours < BRIEF_HOURS;
+      g.items.sort((a, b) => a.start - b.start);
+    }
+    return out;
+  }
+
+  // The session ledger of one game: months (newest first) of day rows.
+  // Neighbouring days that were only brief launches fold into one `brief` row.
+  function ledger(sessions) {
+    const days = dayGroups(sessions);
+    const months = [];
+    let month = null;
+    for (const d of days) {
+      const date = new Date(d.day);
+      const key = date.getFullYear() + '-' + pad2(date.getMonth() + 1);
+      if (!month || month.key !== key) {
+        month = { key, label: MONTHS[date.getMonth()] + ' ' + date.getFullYear(), hours: 0, count: 0, days: 0, rows: [] };
+        months.push(month);
+      }
+      month.hours += d.hours;
+      month.count += d.count;
+      month.days += 1;
+      const prev = month.rows[month.rows.length - 1];
+      if (d.brief && prev && prev.kind === 'brief') {
+        prev.from = d.day;
+        prev.days += 1;
+        prev.count += d.count;
+        prev.hours = round2(prev.hours + d.hours);
+      } else if (d.brief) {
+        month.rows.push({ kind: 'brief', from: d.day, to: d.day, days: 1, count: d.count, hours: d.hours });
+      } else {
+        month.rows.push({ kind: 'day', day: d.day, hours: d.hours, count: d.count, first: d.first, last: d.last, longest: d.longest, items: d.items });
+      }
+    }
+    for (const m of months) m.hours = round2(m.hours);
+    return { months, days: days.length };
+  }
+
+  // What every game has been up to lately: per game, runs of days played in
+  // a row, newest first across games. Playing one game daily gives one
+  // "6 days in a row" entry, not six identical rows.
+  function recentRuns(games, limit) {
+    const runs = [];
+    for (const g of Array.isArray(games) ? games : []) {
+      if (!g || !Array.isArray(g.sessions) || !g.sessions.length) continue;
+      const days = dayGroups(g.sessions);
+      let run = null;
+      for (const d of days) {
+        if (run && run.fromNumber - d.dayNumber === 1) {
+          run.fromNumber = d.dayNumber;
+          run.from = d.day;
+          run.days += 1;
+          run.hours += d.hours;
+          run.count += d.count;
+          run.perDay.unshift(d.hours);
+        } else {
+          run = { gameId: g.id, from: d.day, to: d.day, fromNumber: d.dayNumber, toNumber: d.dayNumber, days: 1, hours: d.hours, count: d.count, lastStart: d.items[d.items.length - 1].start, firstStart: d.first, perDay: [d.hours] };
+          runs.push(run);
+        }
+      }
+    }
+    for (const r of runs) { r.hours = round2(r.hours); r.brief = r.hours < BRIEF_HOURS; }
+    runs.sort((a, b) => b.toNumber - a.toNumber || b.lastStart - a.lastStart);
+    return isFiniteNumber(limit) ? runs.slice(0, limit) : runs;
+  }
+
+  // When a game usually gets played: the part of the day and the weekday
+  // that hold the most time. null until there is enough to say anything.
+  const DAY_PARTS = [['night', 0, 5], ['morning', 5, 12], ['afternoon', 12, 17], ['evening', 17, 22], ['night', 22, 24]];
+  function habits(sessions) {
+    const parts = { morning: 0, afternoon: 0, evening: 0, night: 0 };
+    const weekdays = [0, 0, 0, 0, 0, 0, 0];
+    let total = 0;
+    let n = 0;
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (!isValidSession(s) || s.duration < BRIEF_HOURS) continue;
+      const d = new Date(s.start);
+      // credit the hour the middle of the session falls in
+      const mid = new Date(s.start + (s.duration * 3600000) / 2);
+      const h = mid.getHours();
+      const part = DAY_PARTS.find((p) => h >= p[1] && h < p[2]);
+      parts[part ? part[0] : 'night'] += s.duration;
+      weekdays[d.getDay()] += s.duration;
+      total += s.duration;
+      n += 1;
+    }
+    if (n < 5 || total <= 0) return null;
+    const topPart = Object.keys(parts).sort((a, b) => parts[b] - parts[a])[0];
+    let topDay = 0;
+    for (let i = 1; i < 7; i++) if (weekdays[i] > weekdays[topDay]) topDay = i;
+    return {
+      part: parts[topPart] / total >= 0.45 ? topPart : null,
+      partShare: parts[topPart] / total,
+      weekday: weekdays[topDay] / total >= 0.28 ? topDay : null,
+      weekdayShare: weekdays[topDay] / total,
+      sessions: n,
+    };
+  }
+
   return {
+    BRIEF_HOURS,
+    dayGroups,
+    ledger,
+    recentRuns,
+    habits,
     formatDuration,
     formatClock,
     sessionStats,

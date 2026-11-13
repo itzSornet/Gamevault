@@ -51,7 +51,14 @@ function steamRootCandidates() {
     path.join(home, '.steam', 'steam'),
     path.join(home, '.steam', 'root'),
     path.join(home, '.var', 'app', 'com.valvesoftware.Steam', 'data', 'Steam'),
+    path.join(home, '.var', 'app', 'com.valvesoftware.Steam', '.local', 'share', 'Steam'),
     path.join(home, '.var', 'app', 'com.valvesoftware.Steam', '.steam', 'steam'),
+    // Snap (Ubuntu): the home inside the snap, current revision and "common"
+    path.join(home, 'snap', 'steam', 'common', '.local', 'share', 'Steam'),
+    path.join(home, 'snap', 'steam', 'common', '.steam', 'steam'),
+    path.join(home, 'snap', 'steam', 'current', '.local', 'share', 'Steam'),
+    // Debian's old layout
+    path.join(home, '.steam', 'debian-installation'),
   ];
 
   if (process.platform === 'win32') {
