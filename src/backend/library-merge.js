@@ -6,7 +6,8 @@
  *
  * Three-way merge per game against `base` (the hash of each game as of this
  * PC's last sync): whichever side changed wins; if both changed, this PC wins
- * field by field. Playtime and last-played always take the larger value and
+ * field by field. Playtime and last-played take the larger value (unless the
+ * playtime was set by hand: the newest manual edit wins) and
  * sessions are unioned, so play on two PCs never gets lost.
  * Deletions travel as tombstones; a game deleted on one PC disappears on the
  * others unless it was edited there since.
@@ -80,7 +81,17 @@ function mergeGame(local, remote, baseHash) {
   if (!localChanged) synced = { ...remote };
   else if (!remoteChanged) synced = mine;
   else synced = { ...remote, ...mine };
-  synced.hours = Math.max(Number(local.hours) || 0, Number(remote.hours) || 0);
+  // A playtime typed in by hand (hoursSetAt) beats the larger-value rule: the
+  // newer manual edit wins, so lowering it on one PC sticks everywhere.
+  const ls = Number(local.hoursSetAt) || 0;
+  const rs = Number(remote.hoursSetAt) || 0;
+  if (ls !== rs) {
+    const src = ls > rs ? local : remote;
+    synced.hours = Number(src.hours) || 0;
+    synced.hoursSetAt = Math.max(ls, rs);
+  } else {
+    synced.hours = Math.max(Number(local.hours) || 0, Number(remote.hours) || 0);
+  }
   const lp = [local.lastPlayed, remote.lastPlayed].filter(Boolean).sort((x, y) => time(y) - time(x))[0];
   if (lp) synced.lastPlayed = lp;
   synced.sessions = sessionsUnion(local.sessions, remote.sessions);

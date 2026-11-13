@@ -158,8 +158,8 @@
     window.Sfx.setNav(c.sfxNav !== false);
   }
 
-  function toast(message, kind, actions) {
-    sfx(kind === 'error' ? 'error' : 'notify');
+  function toast(message, kind, actions, { quiet = false } = {}) {
+    if (!quiet) sfx(kind === 'error' ? 'error' : 'notify');
     const wrap = $('#toasts');
     const cls = 'toast' + (kind === 'error' ? ' is-error' : kind === 'ok' ? ' is-ok' : '');
     const live = () => [...wrap.children].filter((t) => !t.classList.contains('is-leaving'));
@@ -375,6 +375,7 @@
       }
       if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
       if (sort === 'hours') return (Number(b.hours) || 0) - (Number(a.hours) || 0);
+      if (sort === 'rating') return (Rating.value(b) - Rating.value(a)) || String(a.name || '').localeCompare(String(b.name || ''));
       if (sort === 'status') {
         const d = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
         return d !== 0 ? d : String(a.name || '').localeCompare(String(b.name || ''));
@@ -663,6 +664,60 @@
     renderLibrary();
     if (focus && state.view === 'shelf') revealShelfTile(String(g.id));
     fadeIn(currentPane());
+  }
+
+  // Refresh artwork: throw away this game's picks and fetch the top ones
+  // again, exactly like a fresh import (Steam's own art first, then
+  // SteamGridDB's top picks), skipping this PC's lookup cache.
+  const refetching = new Set();
+  async function refetchArtwork(g) {
+    if (!g || !api.sgdbAutofill) return;
+    const id = String(g.id);
+    if (refetching.has(id)) return;
+    refetching.add(id);
+    toast('Finding the best artwork…', 'ok', null, { quiet: true });
+    try {
+      // no saved SteamGridDB id: match again from the name / Steam id, like a new import
+      const res = await api.sgdbAutofill({
+        name: String(g.name || ''),
+        steamAppId: g.steamAppId || undefined,
+        // all four: the icon needs a SteamGridDB lookup, which also re-matches
+        // the game (Steam's own art still wins for cover, banner and logo)
+        slots: ['cover', 'hero', 'logo', 'icon'],
+        fresh: true,
+      }).catch(() => null);
+      if (!res || !res.ok) {
+        const code = res && res.error && res.error.code;
+        toast(code === 'NOT_FOUND' ? 'No artwork found for this game'
+          : code === 'RATE_LIMIT' ? 'Artwork limit reached, try again later'
+            : 'Couldn’t reach the artwork server', 'error');
+        return;
+      }
+      const data = res.data || {};
+      const a = data.assets || {};
+      if (data.match && data.match.id) g.sgdbId = data.match.id;
+      let n = 0;
+      const put = (slot, field, local) => {
+        if (!a[slot] || !a[slot].url) return;
+        g[field] = a[slot].url;
+        delete g[local];
+        n++;
+      };
+      put('cover', 'coverUrl', '_cover');
+      put('hero', 'heroUrl', '_hero');
+      put('logo', 'logoUrl', '_logo');
+      put('icon', 'iconUrl', '_icon');
+      if (!n) { toast('No artwork found for this game', 'error'); return; }
+      g._noHero = false;
+      g.heroTried = true;
+      g.artVersion = 3;
+      persistGames();
+      state._stageVisual = '';
+      await refreshArt(g, { focus: false });
+      toast('Artwork refreshed', 'ok');
+    } finally {
+      refetching.delete(id);
+    }
   }
 
   // 25: covers that arrive after their tile is on screen fade in instead of
@@ -1616,11 +1671,13 @@
   function paintShelfTile(tile, g) {
     const src = g._cover || g.coverUrl || '';
     const name = String(g.name || '');
-    if (tile._src === src && tile._name === name) return;
+    const r = gvIsWishlisted(g) ? 0 : Rating.value(g);
+    if (tile._src === src && tile._name === name && tile._r === r) return;
     tile._src = src;
     tile._name = name;
+    tile._r = r;
     tile.title = name;
-    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>`;
+    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>${r ? `<span class="tile-rating${r >= Rating.PEAK ? ' is-peak' : ''}">${ratingChipHtml(r, String(g.id))}</span>` : ''}`;
     const img = tile.querySelector('img');
     fadeInOnLoad(img);
     if (img) {
@@ -1878,6 +1935,7 @@
       <div class="shelf-content">
         <span class="shelf-kicker" data-kicker></span>
         <h2 class="shelf-title" data-title></h2>
+        <span class="gv-logo3d shelf-logo" data-logo3d data-shelf-logo hidden><img class="gvx-logo" alt="" /><i class="gv-logo-sheen" aria-hidden="true"><b></b></i></span>
         <div class="shelf-meta" data-meta></div>
         <div class="shelf-actions">
           <button class="btn btn-primary" data-play>
@@ -1885,15 +1943,22 @@
             <span data-play-label>Play</span>
           </button>
           <button class="btn" data-open>Details</button>
-          <button class="icon-btn banner-btn" data-banner title="Change banner">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
-          </button>
         </div>
       </div>`;
 
     shelfDom.arts = stage.querySelectorAll('.shelf-art');
     shelfDom.posters = stage.querySelectorAll('.shelf-poster');
     shelfDom.title = stage.querySelector('[data-title]');
+    shelfDom.logo = stage.querySelector('[data-shelf-logo]');
+    shelfDom.logoImg = shelfDom.logo.querySelector('img');
+    shelfDom.logoSheen = shelfDom.logo.querySelector('.gv-logo-sheen');
+    // a logo that fails to load falls back to the plain title
+    shelfDom.logoImg.addEventListener('error', () => {
+      shelfDom.logo.hidden = true;
+      shelfDom.title.hidden = false;
+      shelfDom.logoFailed = shelfDom.logoImg.getAttribute('src');
+    });
+    logoTilt(shelfDom.logo);
     shelfDom.kicker = stage.querySelector('[data-kicker]');
     shelfDom.meta = stage.querySelector('[data-meta]');
     shelfDom.playLabel = stage.querySelector('[data-play-label]');
@@ -1907,40 +1972,6 @@
     stage.querySelector('[data-open]').onclick = () => {
       if (state.shelfId) openDetail(state.shelfId);
     };
-    stage.querySelector('[data-banner]').onclick = () => {
-      const g = state.games.find((x) => String(x.id) === state.shelfId);
-      if (g) cycleBanner(g);
-    };
-  }
-
-  async function cycleBanner(g) {
-    if (!api.sgdbAssets) return;
-    if (!g._banners) {
-      toast('Finding banners…', 'ok');
-      let id = g.sgdbId;
-      if (!id) {
-        const resolved = await api.sgdbResolve({ name: String(g.name), steamAppId: g.steamAppId }).catch(() => null);
-        if (resolved && resolved.ok && resolved.data.match) id = resolved.data.match.id;
-      }
-      if (!id) { toast('No SteamGridDB match', 'error'); return; }
-      g._sgdbId = id;
-      const res = await api.sgdbAssets({ kind: 'heroes', id }).catch(() => null);
-      g._banners = res && res.ok ? res.data.items.map((item) => item.url) : [];
-      g._bannerIdx = -1;
-    }
-    if (!g._banners.length) { toast('No other banners found', 'error'); return; }
-
-    g._bannerIdx = ((g._bannerIdx || 0) + 1) % g._banners.length;
-    const remote = g._banners[g._bannerIdx];
-    const cached = await api.sgdbCache({ url: remote, kind: 'hero' }).catch(() => null);
-    g.heroUrl = cached && cached.ok ? cached.data : remote;
-    g._noHero = false;
-    const thumb = api.thumb ? await api.thumb(g.heroUrl, 1400, 'hero').catch(() => null) : g.heroUrl;
-    if (thumb && thumb !== '__reject__') g._hero = thumb;
-    else { g._hero = null; g._noHero = true; }
-    persistGames();
-    refreshStage(g);
-    toast('Banner changed', 'ok');
   }
 
   function renderShelfStage(g) {
@@ -1996,12 +2027,22 @@
       ? statusLabel(g)
       : `${running ? 'Now playing' : statusLabel(g)} · ${fmtHours(running ? base + live / 60 : base)}`;
     shelfDom.title.textContent = g.name || '';
+    const logoSrc = g._logo || g.logoUrl || '';
+    const logoUrl = logoSrc ? toFileUrl(logoSrc) : '';
+    const useLogo = !!logoUrl && shelfDom.logoFailed !== logoUrl;
+    if (useLogo && shelfDom.logoImg.getAttribute('src') !== logoUrl) {
+      shelfDom.logoImg.src = logoUrl;
+      shelfDom.logoImg.alt = g.name || '';
+      shelfDom.logoSheen.style.setProperty('--logo', cssUrl(logoSrc));
+    }
+    shelfDom.logo.hidden = !useLogo;
+    shelfDom.title.hidden = useLogo;
     const sessionCount = gvSessions(g).length;
     shelfDom.meta.innerHTML = [
       g.source ? `<span>${esc(g.source)}</span>` : '',
       wish ? '' : `<span>${sessionCount} session${sessionCount === 1 ? '' : 's'}</span>`,
       g.lastPlayed ? `<span>played ${esc(fmtDate(g.lastPlayed))}</span>` : '',
-    ].filter(Boolean).join('<span class="card-dot">•</span>');
+    ].filter(Boolean).join('<span class="card-dot">•</span>') + (wish ? '' : ratingChipHtml(Rating.value(g), String(g.id)));
 
     // wishlisted games are not in the library yet: nothing to play
     shelfDom.playBtn.hidden = wish;
@@ -2070,22 +2111,18 @@
 
     const status = document.createElement('span');
     status.className = 'card-status';
-    status.dataset.status = statusLabel(g);
-    status.textContent = statusLabel(g);
     media.appendChild(status);
 
-    if (g.rating > 0) {
-      const rating = document.createElement('span');
-      rating.className = 'card-rating';
-      rating.textContent = Number(g.rating).toFixed(1).replace(/\.0$/, '');
-      media.appendChild(rating);
-    }
+    const rating = document.createElement('span');
+    rating.className = 'card-rating';
+    rating.hidden = true;
+    media.appendChild(rating);
 
     const play = document.createElement('button');
     play.className = 'card-play';
     play.title = 'Launch';
     play.dataset.kind = 'play';
-    play.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    play.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg><span>Play</span>';
     media.appendChild(play);
 
     const body = document.createElement('div');
@@ -2109,7 +2146,7 @@
 
     el.append(media, body);
 
-    const refs = { el, media, img: null, src: null, eager: index < 12, hours, last, status, play, title };
+    const refs = { el, media, img: null, src: null, eager: index < 12, hours, last, status, play, title, rating };
     setCardImage(refs, g._cover || g.coverUrl || '');
 
     play.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(g.id); });
@@ -2238,8 +2275,27 @@
     ref.hours.textContent = wish ? 'Wishlist' : running ? `${fmtHours(total)} · playing now` : fmtHours(total);
     if (ref.last) ref.last.textContent = running || wish || !g.lastPlayed ? '' : relativeDay(g.lastPlayed);
 
-    ref.status.textContent = running ? 'Running' : statusLabel(g);
-    ref.status.dataset.status = running ? 'Playing' : statusLabel(g);
+    // the pill only says something worth saying: Running, Finished, Wishlist
+    const pill = running ? 'Running' : statusLabel(g) === 'Playing' ? '' : statusLabel(g);
+    ref.status.textContent = pill;
+    ref.status.dataset.status = pill;
+    ref.status.hidden = !pill;
+
+    if (ref.rating) {
+      const r = wish ? 0 : Rating.value(g);
+      ref.rating.hidden = !r;
+      if (r) {
+        const tier = Rating.tier(r);
+        if (ref.rating.dataset.tier !== tier || ref.rating.dataset.r !== String(r)) {
+          ref.rating.dataset.tier = tier;
+          ref.rating.classList.toggle('peak-foil', tier === 'peak');
+          ref.rating.dataset.r = String(r);
+          ref.rating.innerHTML = r >= Rating.PEAK ? `<span class="peak-word">Peak</span>` : `${STAR_ICON}<span>${Rating.label(r)}</span>`;
+          ref.rating.toggleAttribute('data-peak-open', tier === 'peak');
+          ref.rating.title = r >= Rating.PEAK ? 'Your rating: PEAK' : `Your rating: ${Rating.label(r)} / 10`;
+        }
+      }
+    }
 
     ref.play.hidden = wish && !running;
     ref.play.title = running ? 'Stop' : launching ? 'Launching… (click to cancel)' : live === 'stopping' ? 'Stopping…' : 'Launch';
@@ -2247,8 +2303,8 @@
     if (ref.play.dataset.kind !== playKind) {
       ref.play.dataset.kind = playKind;
       ref.play.innerHTML = running
-        ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
-        : '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+        ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span>Stop</span>'
+        : '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg><span>Play</span>';
     }
   }
 
@@ -2344,7 +2400,6 @@
     if (g.added) parts.push(`added ${fmtDate(g.added)}`);
     if (total > 0) parts.push(`${fmtHours(total)} played`);
     if (g.lastPlayed) parts.push(`last played ${fmtDate(g.lastPlayed)}`);
-    if (Number(g.rating) > 0) parts.push(`<span class="gvx-rating">★ ${Number(g.rating).toFixed(1).replace(/\.0$/, '')}</span>`);
     return parts.join('<span class="gvx-dot">·</span>');
   }
 
@@ -2377,7 +2432,7 @@
     const pulse = [];
     if (meta.metacritic && meta.metacritic.score) pulse.push([String(meta.metacritic.score), 'Metacritic']);
     if (Number(g.timeToBeat) > 0) pulse.push([`~${Math.round(Number(g.timeToBeat))}h`, 'To beat']);
-    if (Number(g.rating) > 0) pulse.push([Number(g.rating).toFixed(1).replace(/\.0$/, ''), 'Your rating']);
+    if (Rating.value(g) > 0) pulse.push([Rating.label(Rating.value(g)), 'Your rating']);
 
     const KEEP = ['OS', 'Processor', 'Memory', 'Graphics', 'Storage'];
     const specs = ((meta.recommended && meta.recommended.length)
@@ -2488,6 +2543,11 @@
             ${state.filter === 'Want' ? 'Wishlist' : state.filter === 'Activity' ? 'Activity' : 'Library'}
           </button>
           <div class="gvx-top-right">
+            ${wish ? '' : `${rateButtonHtml(g)}
+            <button class="gvx-chip gvx-fin${status === 'Finished' ? ' is-done' : ''}" data-finish aria-pressed="${status === 'Finished'}" title="${status === 'Finished' ? 'Finished — click to unmark' : 'Mark this game as finished'}">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>
+              <span>${status === 'Finished' ? 'Finished' : 'Mark as finished'}</span>
+            </button>`}
             <button class="gvx-chip gvx-icon${wish ? ' is-on' : ''}" data-wish aria-pressed="${wish}" title="Wishlist">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="${wish ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3.8 2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z"/></svg>
             </button>
@@ -2506,6 +2566,7 @@
           </div>
         </div>
 
+        ${!wish && Rating.value(g) >= Rating.PEAK ? peakMedalHtml(g) : ''}
         <div class="gvx-hero-body" tabindex="-1" aria-label="${esc(g.name)}">
           ${logo
             ? `<span class="gv-logo3d" data-logo3d><img class="gvx-logo" src="${esc(toFileUrl(logo))}" alt="${esc(g.name)}" /><i class="gv-logo-sheen" style="--logo:${esc(cssUrl(logo))}" aria-hidden="true"><b></b></i></span>`
@@ -2517,10 +2578,6 @@
               : `<button class="gvx-play${typeof state.live[String(g.id)] === 'number' ? ' is-live' : ''}" data-play>
                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">${typeof state.live[String(g.id)] === 'number' ? '<rect x="6" y="6" width="12" height="12" rx="2"/>' : '<path d="M8 5v14l11-7z"/>'}</svg>
                    <span data-play-label>${typeof state.live[String(g.id)] === 'number' ? 'Stop' : 'Play'}</span>
-                 </button>
-                 <button class="gvx-finish${status === 'Finished' ? ' is-done' : ''}" data-finish aria-pressed="${status === 'Finished'}" title="${status === 'Finished' ? 'Finished — click to unmark' : 'Mark this game as finished'}">
-                   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>
-                   <span>${status === 'Finished' ? 'Finished' : 'Mark as finished'}</span>
                  </button>
                  <div class="gvx-timer" data-timer role="timer" aria-live="off">${detailTimerHtml(g)}</div>`}
           </div>
@@ -2914,7 +2971,7 @@
         if (item.hasAttribute('data-folder')) api.showInFolder(g.exePath);
         else if (item.hasAttribute('data-copy')) navigator.clipboard.writeText(g.exePath || '').then(() => toast('Path copied', 'ok')).catch(() => {});
         else if (item.hasAttribute('data-edit')) openGameModal(g);
-        else if (item.hasAttribute('data-refresh')) { refreshArt(g, { focus: false }); toast('Artwork refreshed', 'ok'); }
+        else if (item.hasAttribute('data-refresh')) refetchArtwork(g);
         else if (item.hasAttribute('data-remove-game')) askRemoveGame(g);
       });
       view.onpointerdown = (e) => { if (!e.target.closest('.gvx-more-wrap')) closeMenu(); };
@@ -2937,6 +2994,255 @@
 
     const finishBtn = view.querySelector('[data-finish]');
     if (finishBtn) finishBtn.onclick = () => setFinished(g, !(g.status === 'Finished'));
+
+    const rateBtn = view.querySelector('[data-rate]');
+    if (rateBtn) rateBtn.onclick = () => openRater(g);
+  }
+
+  // ---- ratings: 1.3.1's scale (0.1-10, 10 = PEAK), stored on g.rating
+  const STAR_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="m12 3.2 2.7 5.5 6 .9-4.35 4.25 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.6l6-.9z"/></svg>';
+  // gold foil chip; the sweep is a pseudo-element so it costs nothing at rest
+  const peakChip = (extra = '', id = '') => `<span class="peak-foil${extra}"${id ? ` data-peak-open data-id="${esc(id)}" title="Your best game ever"` : ''}><span class="peak-word">Peak</span></span>`;
+  function ratingChipHtml(r, id = '') {
+    if (!r) return '';
+    return r >= Rating.PEAK ? peakChip(' is-sm', id) : `<span class="rate-chip tier-${Rating.tier(r)}">${STAR_ICON}<span>${Rating.label(r)}</span></span>`;
+  }
+
+  function rateButtonHtml(g) {
+    const r = Rating.value(g);
+    const tier = Rating.tier(r);
+    const inner = !r
+      ? `${STAR_ICON}<span>Rate</span>`
+      : r >= Rating.PEAK ? `<span class="peak-word">Peak</span>` : `${STAR_ICON}<span>${Rating.label(r)}</span><small>/10</small>`;
+    return `<button class="gvx-chip gvx-rate${tier ? ` tier-${tier}` : ''}${r >= Rating.PEAK ? ' peak-foil' : ''}" data-rate title="${r ? 'Your rating: click to change' : 'Rate this game'}">${inner}</button>`;
+  }
+
+  // the "best game ever" medal over the logo on a PEAK game's page
+  function peakMedalHtml(g) {
+    return `<div class="peak-medal" role="button" tabindex="0" data-peak-open data-id="${esc(String(g.id))}" title="Rated PEAK: your best game ever">
+      <span class="peak-medal-disc"><b>10</b></span>
+      <span class="peak-medal-text"><b class="peak-word">Peak</b><small>Your best game ever</small></span>
+    </div>`;
+  }
+
+  // ---- PEAK showcase: the pill grows into a big 3D plaque that catches the
+  // light, and the game gets the praise it has earned.
+  const PEAK_HYPE = [
+    'Some games are good. This one rewired your brain.',
+    'Ten out of ten is not a score here. It is a fact.',
+    'The bar every other game has to clear.',
+    'You don’t just play this one. You come back to it.',
+    'Every other game gets measured against this.',
+    'Hall of fame. First ballot. No debate.',
+    'If games had a summit, you are standing on it.',
+    'Nothing else on the shelf comes close, and they all know it.',
+  ];
+  function peakHype(g) {
+    let h = 0;
+    for (const ch of String(g.id) + String(g.name || '')) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+    return PEAK_HYPE[h % PEAK_HYPE.length];
+  }
+  function peakStory(g) {
+    const hours = Number(g.hours) || 0;
+    const sessions = gvSessions(g);
+    const st = Sessions.sessionStats(sessions);
+    const lines = [];
+    if (hours >= 1) lines.push(`${fmtHours(hours)} in, and you would still go back for more.`);
+    if (st.longestMinutes >= 30) lines.push(`Your longest run went ${Sessions.formatDuration(st.longestMinutes / 60)} without stopping.`);
+    if (g.status === 'Finished') lines.push('You saw it through to the credits, and it still holds the top spot.');
+    if (!lines.length) lines.push('It took the top spot before the clock even started. That says enough.');
+    return lines.slice(0, 2).join(' ');
+  }
+  function peakFacts(g) {
+    const sessions = gvSessions(g);
+    const st = Sessions.sessionStats(sessions);
+    const out = [];
+    const hours = Number(g.hours) || 0;
+    if (hours > 0) out.push([fmtHours(hours), 'played']);
+    if (st.count) out.push([String(st.count), st.count === 1 ? 'session' : 'sessions']);
+    if (st.longestMinutes > 0) out.push([Sessions.formatDuration(st.longestMinutes / 60), 'longest run']);
+    if (g.added) out.push([fmtDate(g.added), 'in your vault since']);
+    return out.slice(0, 4);
+  }
+
+  function openPeakShowcase(g, fromEl) {
+    if (!g) return;
+    const card = openModal(`
+      <div class="pk">
+        <div class="pk-stage">
+          <div class="pk-plaque" data-pk-plaque>
+            <div class="pk-face">
+            <div class="pk-glare" aria-hidden="true"></div>
+            <div class="pk-body">
+              <span class="pk-titles">
+                <span class="pk-word peak-word">Peak</span>
+                <span class="pk-game">${esc(g.name || 'Untitled')}</span>
+              </span>
+            </div>
+            </div>
+          </div>
+        </div>
+        <div class="pk-glaze">
+          <p class="pk-hype">${esc(peakHype(g))}</p>
+          <p class="pk-story">${esc(peakStory(g))}</p>
+          <div class="pk-facts">${peakFacts(g).map(([v, l]) => `<div class="pk-fact"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>
+          <button type="button" class="pk-close" data-autofocus data-pk-close>Back</button>
+        </div>
+      </div>`, { className: 'peak-modal' });
+    if (!card) return;
+    card.querySelector('[data-pk-close]').onclick = closeModal;
+    const plaque = card.querySelector('[data-pk-plaque]');
+    peakTilt(plaque, 16);
+    sfx('success');
+    if (prefersReducedMotion()) return;
+    // grow out of the pill that was clicked: start at its box, flipped a bit, then land
+    requestAnimationFrame(() => {
+      const to = plaque.getBoundingClientRect();
+      const from = fromEl && fromEl.isConnected ? fromEl.getBoundingClientRect() : null;
+      const start = from && from.width
+        ? `translate(${(from.left + from.width / 2) - (to.left + to.width / 2)}px, ${(from.top + from.height / 2) - (to.top + to.height / 2)}px) scale(${Math.max(0.05, from.width / to.width)}, ${Math.max(0.05, from.height / to.height)})`
+        : 'translateY(30px) scale(0.6)';
+      plaque.animate([
+        { transform: `${start} perspective(900px) rotateY(-40deg) rotateX(12deg)`, opacity: 0.4 },
+        { transform: 'perspective(900px) rotateY(8deg) rotateX(-3deg) scale(1.03)', opacity: 1, offset: 0.7 },
+        { transform: 'none', opacity: 1 },
+      ], { duration: 950, easing: 'cubic-bezier(0.2, 0.9, 0.25, 1)' });
+      plaque.classList.add('is-landing');
+      setTimeout(() => plaque.classList.remove('is-landing'), 1800);
+    });
+  }
+
+  // a foil surface that tilts toward the pointer, with the light following it
+  function peakTilt(el, deg = 14) {
+    if (!el || el._peakTilt || prefersReducedMotion()) return;
+    el._peakTilt = true;
+    el.addEventListener('pointermove', (e) => {
+      const r = el.getBoundingClientRect();
+      const px = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      const py = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+      el.style.setProperty('--mx', `${(px * 100).toFixed(1)}%`);
+      el.style.setProperty('--my', `${(py * 100).toFixed(1)}%`);
+      el.style.setProperty('--ry', `${((px - 0.5) * deg).toFixed(2)}deg`);
+      el.style.setProperty('--rx', `${((0.5 - py) * deg * 0.8).toFixed(2)}deg`);
+      el.classList.add('is-lit');
+    });
+    el.addEventListener('pointerleave', () => {
+      el.classList.remove('is-lit');
+      el.style.setProperty('--rx', '0deg');
+      el.style.setProperty('--ry', '0deg');
+    });
+  }
+  // every PEAK pill anywhere: shine on hover, open the showcase on click
+  document.addEventListener('pointerover', (e) => {
+    const pill = e.target.closest && e.target.closest('.peak-foil, .peak-medal');
+    if (pill) peakTilt(pill, pill.classList.contains('peak-medal') ? 10 : 22);
+  });
+  document.addEventListener('click', (e) => {
+    const pill = e.target.closest && e.target.closest('[data-peak-open]');
+    if (!pill) return;
+    const id = pill.dataset.id || (gameFromEl(pill) || {}).id;
+    const g = state.games.find((x) => String(x.id) === String(id));
+    if (!g) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openPeakShowcase(g, pill);
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.peak-medal[data-peak-open]')) {
+      e.preventDefault();
+      e.target.click();
+    }
+  });
+
+  function setRating(g, r) {
+    const next = Rating.parse(r);
+    const prevRating = Rating.value(g);
+    if (next === prevRating) return;
+    g.rating = next;
+    saveGamesSoon();
+    state._shelfKey = '';
+    const peakChanged = (next >= Rating.PEAK) !== (prevRating >= Rating.PEAK);
+    if (state.selectedId === String(g.id) && peakChanged) {
+      renderDetail();
+    } else if (state.selectedId === String(g.id)) {
+      const btn = $('#game-view [data-rate]');
+      if (btn) {
+        btn.outerHTML = rateButtonHtml(g);
+        const fresh = $('#game-view [data-rate]');
+        if (fresh) fresh.onclick = () => openRater(g);
+      }
+      const rail = $('#game-view .gvx-rail');
+      if (rail && !gvIsWishlisted(g)) rail.innerHTML = railHtml(g);
+    }
+    renderLibrary();
+    if (next >= Rating.PEAK) sfx('success');
+    toast(next >= Rating.PEAK ? `${g.name || 'Game'} rated PEAK` : next ? `Rated ${Rating.label(next)} / 10` : 'Rating cleared', 'ok', null, { quiet: next >= Rating.PEAK });
+  }
+
+  // The rating popup: ten steps (10 is PEAK), or type any value like 8.5.
+  // Clicking a step saves straight away; typing saves on Enter or Save.
+  function openRater(g) {
+    if (!g || gvIsWishlisted(g)) return;
+    const cur = Rating.value(g);
+    const steps = Array.from({ length: 10 }, (_, i) => i + 1);
+    const card = openModal(`
+      <div class="rt">
+        <div class="rt-head">
+          <div class="rt-cover"></div>
+          <div class="rt-text"><div class="rt-kicker">YOUR RATING</div><div class="rt-title">${esc(g.name || 'Untitled')}</div></div>
+        </div>
+        <div class="rt-score" data-rt-score aria-live="polite"></div>
+        <div class="rt-scale" role="radiogroup" aria-label="Rating out of 10">
+          ${steps.map((n) => `<button type="button" class="rt-step${n === 10 ? ' is-peak' : ''}" role="radio" data-rt="${n}" aria-checked="${Math.round(cur) === n}" aria-label="${n === 10 ? 'PEAK (10)' : n}">${n}</button>`).join('')}
+        </div>
+        <div class="rt-foot">
+          <input class="rt-input" data-rt-input type="text" inputmode="decimal" maxlength="6" spellcheck="false" placeholder="Type a rating, like 7.5" value="${cur ? esc(cur >= Rating.PEAK ? 'peak' : Rating.label(cur)) : ''}" aria-label="Type a rating" />
+          ${cur ? '<button type="button" class="btn" data-rt-clear>Clear</button>' : ''}
+          <button type="button" class="btn btn-primary" data-rt-save>Save</button>
+        </div>
+      </div>`, { className: 'rt-modal' });
+    if (!card) return;
+    const cover = card.querySelector('.rt-cover');
+    const src = g._cover || g.coverUrl;
+    if (cover && src) cover.style.backgroundImage = cssUrl(src);
+    const score = card.querySelector('[data-rt-score]');
+    const input = card.querySelector('[data-rt-input]');
+    const stepBtns = [...card.querySelectorAll('[data-rt]')];
+    const show = (r) => {
+      const tier = Rating.tier(r);
+      score.dataset.tier = tier;
+      score.innerHTML = !r ? '<span class="rt-none">Not rated</span>'
+        : r >= Rating.PEAK ? peakChip(' is-lg')
+          : `<b>${Rating.label(r)}</b><small>/ 10</small>`;
+      for (const b of stepBtns) b.classList.toggle('is-lit', Number(b.dataset.rt) <= Math.round(r) && r > 0);
+    };
+    show(cur);
+    const done = (r) => { closeModal(); setRating(g, r); };
+    for (const b of stepBtns) {
+      b.onclick = () => done(Number(b.dataset.rt));
+      b.onmouseenter = () => show(Number(b.dataset.rt));
+      b.onfocus = () => show(Number(b.dataset.rt));
+    }
+    const scale = card.querySelector('.rt-scale');
+    scale.onmouseleave = () => show(Rating.parse(input.value) || cur);
+    scale.addEventListener('keydown', (e) => {
+      const i = stepBtns.indexOf(document.activeElement);
+      if (i < 0) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        stepBtns[Math.max(0, Math.min(9, i + (e.key === 'ArrowRight' ? 1 : -1)))].focus();
+      } else if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        stepBtns[e.key === '0' ? 9 : Number(e.key) - 1].focus();
+      }
+    });
+    input.oninput = () => show(Rating.parse(input.value));
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value); } };
+    card.querySelector('[data-rt-save]').onclick = () => done(input.value);
+    const clear = card.querySelector('[data-rt-clear]');
+    if (clear) clear.onclick = () => done(0);
+    const start = stepBtns[Math.max(0, Math.round(cur || 8) - 1)];
+    requestAnimationFrame(() => start.focus({ preventScroll: true }));
   }
 
   // ---------------------------------------------------------------------------
@@ -3200,12 +3506,12 @@
               <div class="hint">Unlocks critic score and specs.</div>
             </div>
             <div class="field">
-              <label for="f-ttb">Time to beat</label>
+              <label for="f-hours">Playtime</label>
               <div class="ge-suffix">
-                <input class="input" id="f-ttb" type="number" min="0" step="0.5" value="${g.timeToBeat || ''}" placeholder="—" />
+                <input class="input" id="f-hours" type="number" min="0" step="0.1" value="${Number(g.hours) > 0 ? Math.round(Number(g.hours) * 10) / 10 : ''}" placeholder="0" />
                 <span>hours</span>
               </div>
-              <div class="hint">A full playthrough, for the progress bar.</div>
+              <div class="hint">Fix it by hand if tracking missed some.</div>
             </div>
           </div>
         </section>
@@ -3806,7 +4112,12 @@
       const iconUrl = card.querySelector('#f-icon') ? card.querySelector('#f-icon').value.trim() : '';
       const notes = card.querySelector('#f-notes').value;
       const steamAppId = Number(card.querySelector('#f-steam').value) || null;
-      const timeToBeat = Number(card.querySelector('#f-ttb').value) || null;
+      // Playtime only changes when the field was edited; the field shows a
+      // rounded value, so an untouched save must not round the real one.
+      const hoursEl = card.querySelector('#f-hours');
+      const typedHours = Math.max(0, Number(String(hoursEl.value).replace(',', '.')) || 0);
+      const shownHours = Number(g.hours) > 0 ? Math.round(Number(g.hours) * 10) / 10 : 0;
+      const hoursEdited = Number.isFinite(typedHours) && typedHours !== shownHours;
       const launchTarget = card.querySelector('#f-launch').value.trim();
       const trackExe = trackModeEl.value === 'exe' ? trackExeEl.value.trim() : '';
       // "This program…" with nothing picked falls back to automatic
@@ -3847,7 +4158,6 @@
           iconUrl: iconLocal,
           sgdbId: chosen ? chosen.id : null,
           steamAppId,
-          timeToBeat,
           launchTarget,
           trackMode,
           trackExe,
@@ -3855,7 +4165,8 @@
           notes,
           status: nextStatus,
           wishlisted: isWish,
-          hours: 0,
+          hours: typedHours,
+          ...(typedHours > 0 ? { hoursSetAt: Date.now() } : {}),
           sessions: [],
           added: Date.now(),
           source: 'Manual',
@@ -3865,11 +4176,11 @@
           name, exePath, coverUrl: coverLocal, heroUrl: heroLocal, logoUrl: logoLocal, iconUrl: iconLocal, notes, status: nextStatus, wishlisted: isWish,
           sgdbId: chosen ? chosen.id : (g.sgdbId || null),
           steamAppId,
-          timeToBeat,
           launchTarget,
           trackMode,
           trackExe,
           artVersion: 2,
+          ...(hoursEdited ? { hours: typedHours, hoursSetAt: Date.now() } : {}),
         });
       }
 
@@ -5557,7 +5868,8 @@
     applyView();
     renderLibrary();
     fadeIn(currentPane());
-    toast(`Layout: ${VIEW_NAMES[next] || next}`, 'ok');
+    // the button's own click is the feedback; no chime on top of it
+    toast(`Layout: ${VIEW_NAMES[next] || next}`, 'ok', null, { quiet: true });
   }
 
   const SORT_LABELS = {
@@ -5565,6 +5877,7 @@
     added: 'Recently added',
     name: 'Name',
     hours: 'Hours played',
+    rating: 'Your rating',
     status: 'Status',
   };
 
@@ -5656,6 +5969,7 @@
     if (state.settingsOpen) closeSettings({ restoreFocus: false });
     if (state.selectedId) closeDetail();
     state.filter = filter;
+    if (!bp.on) lsSet('gv.filter', filter);
     for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === filter);
     const title = $('#filter-title');
     if (title) title.textContent = filterLabel(filter);
@@ -6216,6 +6530,14 @@
 
     updateSortUi();
     syncPerfRecorder();
+    const storedFilter = lsGet('gv.filter');
+    if (storedFilter && storedFilter !== 'All' && FILTER_LABELS[storedFilter]) {
+      state.filter = storedFilter;
+      for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', btn.dataset.filter === storedFilter);
+      const ft = $('#filter-title');
+      if (ft) ft.textContent = filterLabel(storedFilter);
+      syncSidePill();
+    }
     renderLibrary();
     refreshCounts();
     prepareThumbs();
@@ -7293,6 +7615,7 @@
     folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
     art: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4.5v4h-4"/>',
     remove: '<path d="M4.5 7h15M10 4.5h4M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5"/>',
+    rate: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.8z"/><path d="M12 9v5" stroke-width="1.6"/>',
   };
 
   function openGameActions(g) {
@@ -7307,6 +7630,9 @@
     items.push(['edit', 'Edit game', 'edit']);
     if (!wish) {
       items.push(g.status === 'Finished' ? ['finish', 'Mark as playing', 'unfinish'] : ['finish', 'Mark as finished', 'finish']);
+      const r = Rating.value(g);
+      if (r >= Rating.PEAK) items.push(['peak', 'Why it’s your Peak', 'rate']);
+      items.push(['rate', r ? `Change rating (${Rating.label(r)})` : 'Rate game', 'rate']);
       items.push(['wish', 'Add to wishlist', 'wish']);
     }
     if (g.exePath) items.push(['folder', 'Show in folder', 'folder']);
@@ -7351,8 +7677,10 @@
           toast(done ? 'Marked as finished' : 'Marked as playing', 'ok');
         }
         else if (act === 'wish') toggleDetailWish(g);
+        else if (act === 'rate') setTimeout(() => openRater(g), 0);
+        else if (act === 'peak') setTimeout(() => openPeakShowcase(g, null), 0);
         else if (act === 'folder') api.showInFolder(g.exePath);
-        else if (act === 'art') { refreshArt(g, { focus: false }); toast('Artwork refreshed', 'ok'); }
+        else if (act === 'art') refetchArtwork(g);
         else if (act === 'remove') askRemoveGame(g);
       };
     }

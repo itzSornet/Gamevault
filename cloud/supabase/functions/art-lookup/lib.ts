@@ -2,7 +2,7 @@
  * against an in-memory DB and a mocked fetch. See index.ts for the response
  * shape.
  *
- * Ranking (STYLE_RANK, fit(), rank(), normalizeGame/normalizeAsset) is a port
+ * Ranking (rank(), normalizeGame/normalizeAsset) is a port
  * of src/backend/sgdb.js. Keep the two in step.
  */
 
@@ -26,7 +26,7 @@ export const CLAIM_TTL_S = 30;
 export const SEARCH_FRESH_MS = 7 * 24 * 60 * 60 * 1000; // title search results: re-ask after 7 days
 export const SEARCH_MAX = 10;
 /** Bump when stored asset shape or SGDB filters change: older rows count as stale. */
-export const ASSETS_SCHEMA = 2;
+export const ASSETS_SCHEMA = 3; // 3: top picks keep SteamGridDB order
 export const PAGE_SIZE = 50; // SteamGridDB's page size
 export const MAX_PAGE = 49;
 
@@ -246,43 +246,26 @@ export function normalizeAsset(asset: Raw): Asset {
   };
 }
 
-export const STYLE_RANK: Record<string, number> = {
-  official: 0,
-  alternate: 1,
-  no_logo: 1,
-  nologo: 1,
-  white_logo: 2,
-  material: 2,
-  blurred: 3,
-};
-
+/**
+ * Top picks follow SteamGridDB's own order (most popular first, the same order
+ * the picker pages show). Only art of the wrong shape for its slot drops to
+ * the back; style, size and score never reorder. Parity with desktop sgdb.js.
+ */
 export function rank(kind: AssetKind, list: Raw[] | null | undefined): Asset[] {
   const safe = (list || [])
     .filter((item: Raw) => !item.nsfw && !item.humor && !item.epilepsy)
     .map(normalizeAsset);
 
-  const fit = (a: Asset) => {
-    const ratio = a.height ? a.width / a.height : 1;
-    if (kind === "grids") {
-      const close = Math.abs(ratio - 2 / 3) < 0.04;
-      return (close ? 0 : 40) + (a.width >= 600 ? 0 : 20);
-    }
-    if (kind === "heroes") return ratio >= 1.45 ? 0 : 100;
-    if (kind === "icons") return Math.abs(ratio - 1) < 0.05 ? (a.width >= 256 ? 0 : 10) : 100;
-    if (kind === "logos") return a.width >= 400 ? 0 : 20;
+  const misfit = (a: Asset) => {
+    if (!a.width || !a.height) return 0;
+    const ratio = a.width / a.height;
+    if (kind === "grids") return ratio >= 0.6 && ratio <= 0.76 ? 0 : 1;
+    if (kind === "heroes") return ratio >= 1.45 ? 0 : 1;
+    if (kind === "icons") return Math.abs(ratio - 1) < 0.05 ? 0 : 1;
     return 0;
   };
 
-  return safe.slice().sort((a, b) => {
-    const fitA = fit(a);
-    const fitB = fit(b);
-    if (fitA !== fitB) return fitA - fitB;
-    const styleA = STYLE_RANK[a.style] ?? 2;
-    const styleB = STYLE_RANK[b.style] ?? 2;
-    if (styleA !== styleB) return styleA - styleB;
-    if (b.score !== a.score) return b.score - a.score;
-    return b.upvotes - a.upvotes;
-  });
+  return safe.slice().sort((a, b) => misfit(a) - misfit(b));
 }
 
 /** Ported classify(); AUTH becomes SERVER because the key is ours, not the user's. */
