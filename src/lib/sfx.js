@@ -46,7 +46,11 @@
   let out = null;
   let pm = 1;
 
-  const level = (v) => Math.pow(Math.max(0, Math.min(1, v)), 1.5) * 0.9;
+  // The voices are written quiet (peaks around 0.1), so the bus adds real
+  // gain: about +14 dB into a gentle compressor, +4 dB makeup after it, and
+  // a limiter last so the loudest stack never clips.
+  const DRIVE = 5;
+  const level = (v) => Math.pow(Math.max(0, Math.min(1, v)), 1.2) * DRIVE;
 
   // a small, dark room: decaying noise, smoothed so the tail isn't hissy
   function makeRoom(c, seconds, curve) {
@@ -69,14 +73,25 @@
     if (!ctx) {
       ctx = new AC({ latencyHint: 'interactive' });
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -16;
-      comp.ratio.value = 4;
+      comp.threshold.value = -10;
+      comp.knee.value = 6;
+      comp.ratio.value = 3;
       comp.attack.value = 0.003;
       comp.release.value = 0.12;
+      const makeup = ctx.createGain();
+      makeup.gain.value = 1.6;
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -1.5;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.001;
+      limiter.release.value = 0.08;
       master = ctx.createGain();
       master.gain.value = level(volume);
       master.connect(comp);
-      comp.connect(ctx.destination);
+      comp.connect(makeup);
+      makeup.connect(limiter);
+      limiter.connect(ctx.destination);
       // room: voices -> send -> pre-delay -> convolver -> master
       send = ctx.createGain();
       send.gain.value = WET[theme];

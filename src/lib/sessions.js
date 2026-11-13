@@ -221,11 +221,132 @@
     return { games: migrated, changed };
   }
 
+  // ---- activity: playtime per day / week across one game or many ----------
+
+  // Hours per local day, oldest first, ending today. A session counts on the
+  // day it started.
+  function dayBuckets(sessions, days, now) {
+    const n = Math.max(1, Math.floor(days) || 1);
+    const today = new Date(toTime(now));
+    const first = addDays(new Date(today.getFullYear(), today.getMonth(), today.getDate()), -(n - 1));
+    const firstDay = localDayNumber(first);
+    const out = [];
+    for (let i = 0; i < n; i++) out.push({ start: addDays(first, i).getTime(), hours: 0, count: 0 });
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (!isValidSession(s)) continue;
+      const i = localDayNumber(new Date(s.start)) - firstDay;
+      if (i < 0 || i >= n) continue;
+      out[i].hours += s.duration;
+      out[i].count += 1;
+    }
+    for (const b of out) b.hours = round2(b.hours);
+    return out;
+  }
+
+  // Hours per Monday-based week, oldest first, ending with this week.
+  function weekBuckets(sessions, weeks, now) {
+    const n = Math.max(1, Math.floor(weeks) || 1);
+    const thisWeek = startOfWeek(new Date(toTime(now)));
+    const first = addDays(thisWeek, -7 * (n - 1));
+    const firstDay = localDayNumber(first);
+    const out = [];
+    for (let i = 0; i < n; i++) out.push({ start: addDays(first, i * 7).getTime(), hours: 0, count: 0 });
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (!isValidSession(s)) continue;
+      const i = Math.floor((localDayNumber(new Date(s.start)) - firstDay) / 7);
+      if (i < 0 || i >= n) continue;
+      out[i].hours += s.duration;
+      out[i].count += 1;
+    }
+    for (const b of out) b.hours = round2(b.hours);
+    return out;
+  }
+
+  // Days in a row with play. The current streak is still alive when the
+  // last day played was today or yesterday.
+  function playStreak(sessions, now) {
+    const days = new Set();
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (isValidSession(s)) days.add(localDayNumber(new Date(s.start)));
+    }
+    if (!days.size) return { current: 0, best: 0 };
+    const sorted = Array.from(days).sort((a, b) => a - b);
+    let best = 1;
+    let run = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      run = sorted[i] === sorted[i - 1] + 1 ? run + 1 : 1;
+      if (run > best) best = run;
+    }
+    const today = localDayNumber(new Date(toTime(now)));
+    let current = 0;
+    let day = days.has(today) ? today : (days.has(today - 1) ? today - 1 : null);
+    while (day !== null && days.has(day)) { current += 1; day -= 1; }
+    return { current, best };
+  }
+
+  // Every session of every game, newest first, tagged with its game's id.
+  function allSessions(games) {
+    const out = [];
+    for (const g of Array.isArray(games) ? games : []) {
+      if (!g || !Array.isArray(g.sessions)) continue;
+      for (const s of g.sessions) {
+        if (isValidSession(s)) out.push(Object.assign({}, s, { gameId: g.id }));
+      }
+    }
+    out.sort((a, b) => b.start - a.start);
+    return out;
+  }
+
+  // Games ranked by hours played from `since` on (all of their recorded
+  // hours when `since` is null). Games with no time in the range drop out.
+  function topGames(games, since, limit) {
+    const rows = [];
+    for (const g of Array.isArray(games) ? games : []) {
+      if (!g) continue;
+      let hours = 0;
+      let count = 0;
+      if (since == null) {
+        hours = Number(g.hours) || 0;
+        count = Array.isArray(g.sessions) ? g.sessions.filter(isValidSession).length : 0;
+      } else {
+        for (const s of Array.isArray(g.sessions) ? g.sessions : []) {
+          if (isValidSession(s) && s.start >= since) { hours += s.duration; count += 1; }
+        }
+      }
+      if (hours > 0) rows.push({ id: g.id, hours: round2(hours), count });
+    }
+    rows.sort((a, b) => b.hours - a.hours || b.count - a.count);
+    return isFiniteNumber(limit) ? rows.slice(0, limit) : rows;
+  }
+
+  // "Active": opened in the last `days` days (default 7). Counts a launch
+  // (lastOpened), a finished session (lastPlayed) or any session start/end.
+  const ACTIVE_DAYS = 7;
+  function isActive(game, now, days) {
+    if (!game || typeof game !== 'object') return false;
+    const since = toTime(now) - (isFiniteNumber(days) ? days : ACTIVE_DAYS) * DAY_MS;
+    if (isFiniteNumber(game.lastOpened) && game.lastOpened >= since) return true;
+    if (isFiniteNumber(game.lastPlayed) && game.lastPlayed >= since) return true;
+    for (const s of Array.isArray(game.sessions) ? game.sessions : []) {
+      if (!isValidSession(s)) continue;
+      const end = isFiniteNumber(s.end) ? s.end : s.start;
+      if (end >= since) return true;
+    }
+    return false;
+  }
+
   return {
     formatDuration,
     formatClock,
     sessionStats,
     groupSessions,
     migrateStatuses,
+    isActive,
+    ACTIVE_DAYS,
+    dayBuckets,
+    weekBuckets,
+    playStreak,
+    allSessions,
+    topGames,
   };
 });
