@@ -4785,3 +4785,171 @@ html.is-pad .toasts { transform: translateY(-50px); transition: transform 200ms 
 .ga-item svg { width: 16px; height: 16px; flex: none; opacity: .85; }
 .ga-item:hover, .ga-item:focus-visible { background: var(--surface-2); outline: none; }
 html.is-pad .ga-item:focus { outline: none !important; box-shadow: none; background: var(--accent-dim, var(--surface-2)); }
+
+
+/* ============================================================================
+   Big Picture (html.is-bigpicture): fullscreen, TV-sized, no sidebar.
+   main zooms the page (src/lib/bigpicture.js) so the layout always has about
+   1280 x 720 to work with; the rules below are the 10-foot extras on top.
+   ========================================================================= */
+.bp-menu-btn, .bp-clock { display: none; }
+.pad-btn[data-btn="guide"] { border-radius: 99px; min-width: 21px; background: rgba(255, 255, 255, 0.16); color: #eef0f5; font-size: 13px; }
+
+html.is-bigpicture {
+  --bp-safe-x: clamp(24px, 3.2vw, 56px);
+  --bp-safe-y: clamp(14px, 2.2vh, 30px);
+}
+html.is-bigpicture .sidebar { display: none; }
+html.is-bigpicture .app { padding: 0; gap: 0; }
+html.is-bigpicture .main { border: none; border-radius: 0; box-shadow: none; animation: none; }
+html.is-bigpicture #btn-bigpicture,
+html.is-bigpicture #btn-view,
+html.is-bigpicture #btn-import,
+html.is-bigpicture #btn-settings,
+html.is-bigpicture #btn-add,
+html.is-bigpicture .sort-wrap,
+html.is-bigpicture .win-controls { display: none !important; }
+
+/* top row: menu button, section name, search, clock */
+html.is-bigpicture .topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 40;
+  display: flex; align-items: center;
+  height: 64px;
+  padding: var(--bp-safe-y) var(--bp-safe-x) 0;
+  box-sizing: content-box;
+  border-radius: 0;
+  border-bottom: none;
+  background: linear-gradient(to bottom, rgba(6, 7, 11, 0.82), rgba(6, 7, 11, 0));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  -webkit-app-region: no-drag;
+  box-shadow: none;
+  gap: 16px;
+}
+:root[data-palette='paper'].is-bigpicture .topbar { background: linear-gradient(to bottom, rgba(252, 250, 245, 0.92), rgba(252, 250, 245, 0)); }
+html.is-bigpicture .filter-title { font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-right: auto; }
+html.is-bigpicture .topbar .slot { flex: 0 1 380px; min-width: 0; }
+html.is-bigpicture .topbar .top-actions { margin-left: 8px; }
+html.is-bigpicture .bp-menu-btn {
+  display: inline-grid; place-items: center;
+  width: 46px; height: 46px; margin-right: 4px;
+  border-radius: 14px; border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.06); color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+html.is-bigpicture .bp-menu-btn:hover { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.22); }
+html.is-bigpicture .bp-menu-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+html.is-bigpicture .bp-clock { display: inline; font-size: 18px; font-weight: 500; color: var(--text-dim); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+
+/* shelf: bigger covers and a 10-foot hero */
+html.is-bigpicture .shelf {
+  --tile-h: clamp(170px, calc(100cqh - 440px), 250px);
+}
+html.is-bigpicture .shelf-content { left: var(--bp-safe-x); bottom: 34px; max-width: 760px; right: 320px; gap: 12px; }
+html.is-bigpicture .shelf-kicker { font-size: 13px; letter-spacing: 0.16em; }
+html.is-bigpicture .shelf-title { font-size: clamp(44px, 4.6vw, 64px); line-height: 1.04; }
+html.is-bigpicture .shelf-meta { font-size: 15px; gap: 10px; }
+html.is-bigpicture .shelf-actions { gap: 12px; margin-top: 8px; }
+html.is-bigpicture .shelf-actions .btn { height: 52px; padding: 0 26px; font-size: 17px; }
+html.is-bigpicture .shelf-actions .btn-primary { min-width: 150px; }
+html.is-bigpicture .shelf-actions .icon-btn { width: 52px; height: 52px; }
+html.is-bigpicture .shelf-poster { right: var(--bp-safe-x); top: calc(50% + 36px); width: 180px; height: 270px; border-radius: 14px; }
+html.is-bigpicture .shelf-strip { gap: 20px; padding: 14px var(--bp-safe-x) calc(var(--bp-safe-y) + 40px); scroll-padding-inline: var(--bp-safe-x); }
+html.is-bigpicture .shelf-tile { font-size: 15px; gap: 10px; }
+html.is-bigpicture .shelf-tile img { border-radius: 14px; }
+html.is-bigpicture .strip-nav { display: none; }
+
+/* grid (Library / Playing / Finished): big covers */
+html.is-bigpicture .library { padding: calc(64px + var(--bp-safe-y) + 8px) var(--bp-safe-x) calc(var(--bp-safe-y) + 72px); }
+html.is-bigpicture .lib-head { display: none; }
+html.is-bigpicture .grid { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 26px 22px; }
+html.is-bigpicture .card { border-radius: 16px; }
+html.is-bigpicture .card-media { border-radius: 15px 15px 0 0; }
+
+/* wishlist and settings: room for the top row and the safe area */
+html.is-bigpicture .wishlist-view,
+html.is-bigpicture .settings-view { padding: calc(64px + var(--bp-safe-y) + 8px) var(--bp-safe-x) calc(var(--bp-safe-y) + 72px); }
+
+/* game page: TV layout, big Play */
+html.is-bigpicture .gvx-hero { height: clamp(340px, 58vh, 520px); }
+html.is-bigpicture .gvx-hero-inner { padding: calc(64px + var(--bp-safe-y) + 6px) var(--bp-safe-x) 26px; }
+html.is-bigpicture .gvx-chip { height: 38px; font-size: 15px; padding: 0 14px; border-radius: 12px; }
+html.is-bigpicture .gvx-icon { width: 38px; padding: 0; }
+html.is-bigpicture .gvx-title { font-size: clamp(44px, 4.6vw, 64px); }
+html.is-bigpicture .gvx-logo { max-width: 420px; max-height: 110px; }
+html.is-bigpicture .gvx-meta { font-size: 15px; }
+html.is-bigpicture .gvx-play { height: 60px; min-width: 200px; padding: 0 30px; border-radius: 14px; font-size: 19px; gap: 12px; }
+html.is-bigpicture .gvx-play svg { width: 20px; height: 20px; }
+html.is-bigpicture .gvx-finish { height: 60px; font-size: 15px; border-radius: 14px; padding: 0 20px; }
+html.is-bigpicture .gvx-band { padding-left: var(--bp-safe-x); padding-right: var(--bp-safe-x); padding-bottom: calc(var(--bp-safe-y) + 72px); }
+
+/* focus: a bold ring that reads from the couch */
+html.is-bigpicture :focus-visible { outline-width: 3px; }
+
+/* hint bar: centred along the bottom, larger */
+html.is-bigpicture .pad-hints {
+  left: 50%; right: auto; bottom: var(--bp-safe-y);
+  transform: translate(-50%, 14px);
+  gap: 24px; padding: 10px 22px 10px 14px;
+  font-size: 15px;
+}
+html.is-bigpicture.is-pad .pad-hints { transform: translate(-50%, 0); }
+html.is-bigpicture .pad-btn { min-width: 26px; height: 26px; font-size: 13px; }
+html.is-bigpicture .pad-btn[data-btn="lb"], html.is-bigpicture .pad-btn[data-btn="rb"],
+html.is-bigpicture .pad-btn[data-btn="menu"], html.is-bigpicture .pad-btn[data-btn="view"] { min-width: 32px; }
+
+/* the menu: slides in from the left over a dimmed screen */
+.bp-menu { position: fixed; inset: 0; z-index: 80; }
+.bp-menu[hidden] { display: none; }
+.bp-menu-scrim { position: absolute; inset: 0; background: rgba(4, 5, 8, 0.6); animation: bp-fade 0.24s ease both; }
+.bp-menu-panel {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: min(380px, 80vw);
+  display: flex; flex-direction: column; gap: 6px;
+  padding: calc(var(--bp-safe-y, 20px) + 12px) 18px var(--bp-safe-y, 20px) var(--bp-safe-x, 24px);
+  box-sizing: border-box;
+  background: rgba(16, 18, 26, 0.94);
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(30px) saturate(160%);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 30px 0 80px rgba(0, 0, 0, 0.45);
+  animation: bp-slide 0.34s var(--ease-spring, cubic-bezier(0.32, 0.72, 0, 1)) both;
+}
+:root[data-palette='paper'] .bp-menu-panel { background: rgba(250, 248, 243, 0.96); border-right-color: rgba(0, 0, 0, 0.08); }
+.bp-menu-brand { display: flex; align-items: center; gap: 12px; padding: 4px 12px 22px; font-family: var(--font-display); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
+.bp-menu-brand svg { width: 26px; height: 26px; color: var(--accent); }
+.bp-menu-item {
+  display: flex; align-items: center; gap: 16px;
+  height: 56px; padding: 0 16px;
+  border: none; border-radius: 14px;
+  background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 19px; font-weight: 500; text-align: left;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+.bp-menu-item svg { width: 24px; height: 24px; flex: none; }
+.bp-menu-item span { flex: 1; }
+.bp-menu-item b { font-size: 14px; font-weight: 600; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.bp-menu-item:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.bp-menu-item.is-active { color: var(--text); background: rgba(var(--accent-rgb), 0.16); }
+.bp-menu-item.is-active svg { color: var(--accent); }
+.bp-menu-item:focus, html.is-bigpicture .bp-menu-item:focus-visible { outline: none; }
+.bp-menu-item:focus-visible, html.is-pad .bp-menu-item:focus { background: rgba(var(--accent-rgb), 0.28); color: var(--text); box-shadow: inset 0 0 0 2px var(--accent); }
+.bp-menu-sep { height: 1px; margin: 12px 12px; background: rgba(255, 255, 255, 0.08); }
+@keyframes bp-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bp-slide { from { transform: translateX(-100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .bp-menu-scrim, .bp-menu-panel { animation: none; }
+}
+
+/* Big Picture is zoomed (1.5x at 1080p, 2x+ on 4K), so every full-screen
+   backdrop blur costs 2-4x the pixels: opening search dropped to ~30 fps.
+   The main glass blur is invisible under its tint anyway; the search scrim
+   gets a darker tint instead of a blur, and the search box a lighter blur. */
+html.is-bigpicture #ambient.has-fluid ~ .app .main,
+html.is-bigpicture .main { -webkit-backdrop-filter: none; backdrop-filter: none; }
+html.is-bigpicture body > .scrim.open { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(4, 7, 16, 0.66); }
+:root[data-palette='paper'].is-bigpicture body > .scrim.open { background: rgba(60, 50, 35, 0.38); }
+html.is-bigpicture .spot.open { -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); background: rgba(12, 16, 26, 0.88); }
+:root[data-palette='paper'].is-bigpicture .spot.open { background: rgba(252, 250, 245, 0.94); }
