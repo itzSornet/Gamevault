@@ -1374,9 +1374,9 @@ function createWindow() {
     }
     return cloudInstance;
   }
-  ipcMain.handle('cloud:sync', (_, games) => accountReply(() => {
+  ipcMain.handle('cloud:sync', (_, games, look) => accountReply(() => {
     if (!Array.isArray(games)) throw Object.assign(new Error('Nothing to sync'), { code: 'BAD_INPUT' });
-    return cloud().syncLibrary(games);
+    return cloud().syncLibrary(games, { look });
   }));
   ipcMain.handle('cloud:last-sync', () => cloud().lastSync());
   ipcMain.handle('saves:find', (_, g) => accountReply(() => findSaveFolders({

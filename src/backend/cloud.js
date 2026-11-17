@@ -176,16 +176,35 @@ function createCloud(opts) {
 
   const syncFile = (uid) => path.join(dir, `sync-${uid}.json`);
 
-  async function syncLibrary(localGames) {
+  // The user's look (layout, colours, glass) rides in the same row as one
+  // small field, {prefs, palette, at}; the newest write wins. Media files never
+  // travel: uiprefs.syncable() strips paths before it gets here.
+  const MAX_LOOK = 16 * 1024;
+  function cleanLook(look) {
+    if (!look || typeof look !== 'object' || !look.prefs || typeof look.prefs !== 'object') return null;
+    const out = { prefs: look.prefs, palette: typeof look.palette === 'string' ? look.palette.slice(0, 40) : null, at: Number(look.at) || 0 };
+    return JSON.stringify(out).length <= MAX_LOOK ? out : null;
+  }
+  function newerLook(a, b) {
+    if (!a) return b || null;
+    if (!b) return a;
+    return b.at > a.at ? b : a;
+  }
+
+  async function syncLibrary(localGames, { look } = {}) {
+    const mine = cleanLook(look);
     const { access, uid } = await who();
     const state = readJson(syncFile(uid)) || {};
     for (let attempt = 0; attempt < 3; attempt++) {
       const rows = await call('GET', `/rest/v1/library_sync?select=data,version&user_id=eq.${uid}`, { access });
       const row = rows && rows[0];
       const merged = mergeLibrary({ local: localGames, remote: row ? row.data : null, base: state.base, now: now() });
-      const unchanged = row && hash(row.data) === hash(merged.upload);
+      const theirs = cleanLook(row && row.data && row.data.look);
+      const winner = newerLook(mine, theirs);
+      const data = winner ? { ...merged.upload, look: winner } : merged.upload;
+      const unchanged = row && hash(row.data) === hash(data);
       if (!unchanged) {
-        const payload = { data: merged.upload, device, updated_at: new Date(now()).toISOString() };
+        const payload = { data, device, updated_at: new Date(now()).toISOString() };
         let ok;
         if (row) {
           ok = await call('PATCH', `/rest/v1/library_sync?user_id=eq.${uid}&version=eq.${row.version}`, {
@@ -203,7 +222,7 @@ function createCloud(opts) {
       }
       const at = now();
       writeJson(syncFile(uid), { base: merged.base, at });
-      return { games: merged.games, stats: merged.stats, at, uploaded: !unchanged };
+      return { games: merged.games, stats: merged.stats, at, uploaded: !unchanged, look: winner };
     }
     throw err('BUSY', 'Another PC is syncing right now. Try again in a moment.');
   }
