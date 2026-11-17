@@ -39,7 +39,7 @@ contextBridge.exposeInMainWorld('api', {
   accountOAuth: (provider) => ipcRenderer.invoke('account:oauth', provider),
   accountCancel: () => ipcRenderer.invoke('account:cancel'),
   accountSignOut: () => ipcRenderer.invoke('account:signout'),
-  cloudSync: (games) => ipcRenderer.invoke('cloud:sync', games),
+  cloudSync: (games, look) => ipcRenderer.invoke('cloud:sync', games, look),
   cloudLastSync: () => ipcRenderer.invoke('cloud:last-sync'),
   savesFind: (game) => ipcRenderer.invoke('saves:find', game),
   savesPick: (current) => ipcRenderer.invoke('saves:pick', current),

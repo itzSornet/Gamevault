@@ -263,15 +263,201 @@
         still.src = url;
       });
       lsSet('gv.palette', p);
-      if (state.config.palette !== p) saveConfigPatch({ palette: p });
+      if (state.config.palette !== p) saveConfigPatch({ palette: p, uiAt: Date.now() });
       if (announce) toast(`Palette: ${p}`, 'ok');
       return;
     }
     state.palette = p;
     html.dataset.palette = p;
     lsSet('gv.palette', p);
-    if (persist && state.config.palette !== p) saveConfigPatch({ palette: p });
+    if (persist && state.config.palette !== p) saveConfigPatch({ palette: p, uiAt: Date.now() });
     if (announce) toast(`Palette: ${p}`, 'ok');
+    if (state.ui) applyUi(state.ui); // a custom accent is checked against the new surface
+  }
+
+  // ---------------------------------------------------------------------------
+  // Customizable UI (lib/uiprefs.js): layout, colours, glass. Applied as
+  // html[data-ui-*] attributes and CSS variables, so CSS does the work and
+  // nothing re-renders. Defaults equal the classic look.
+  // ---------------------------------------------------------------------------
+
+  const UI_ATTR = (k) => `ui${k[0].toUpperCase()}${k.slice(1)}`;
+  // set by the sidebar code further down: re-fits the nav after a layout change
+  const navHooks = { apply: () => {} };
+
+  function applyUi(ui) {
+    const n = UiPrefs.normalize(ui);
+    const prevNav = applyUi.navKey || '';
+    state.ui = n;
+    const html = document.documentElement;
+    for (const [k, v] of Object.entries(UiPrefs.attrs(n))) html.dataset[UI_ATTR(k)] = v;
+    const nextNav = `${n.nav}|${n.navSide}|${n.dockPos}|${n.dockStyle}|${n.dockAutoHide}`;
+    applyUi.navKey = nextNav;
+    if (n.search !== applyUi.search) {
+      applyUi.search = n.search;
+      requestAnimationFrame(() => spotHooks.resync());
+    }
+    if (nextNav !== prevNav) { try { navHooks.apply(n); } catch (e) { reportError('nav layout', e); } }
+    const surface = getComputedStyle(html).getPropertyValue('--surface').trim();
+    for (const [k, v] of Object.entries(UiPrefs.cssVars(n, { surface }))) {
+      if (v == null) html.style.removeProperty(k);
+      else html.style.setProperty(k, v);
+    }
+    return n;
+  }
+
+  /** Change some prefs, apply them now, save them (and stamp the change for sync). */
+  function setUi(patch, { persist = true } = {}) {
+    const next = UiPrefs.normalize({ ...(state.ui || state.config.ui), ...patch });
+    applyUi(next);
+    if (persist) {
+      saveConfigPatch({ ui: next, uiAt: Date.now() });
+      scheduleCloudSync(4000);
+    }
+    return next;
+  }
+
+  // The places the sidebar leads to, in order (Ctrl+1..6 and the Go-to menu).
+  const NAV_PLACES = [
+    { sel: '.side-item[data-filter="All"]', key: '1' },
+    { sel: '.side-item[data-filter="Active"]', key: '2' },
+    { sel: '.side-item[data-filter="Finished"]', key: '3' },
+    { sel: '.side-item[data-filter="Want"]', key: '4' },
+    { sel: '.side-item[data-filter="Activity"]', key: '5' },
+    { sel: '.side-item[data-rail-action="btn-import"]', key: '' },
+    { sel: '.side-item[data-rail-action="btn-settings"]', key: '6' },
+  ];
+
+  function goNavPlace(key) {
+    const place = NAV_PLACES.find((p) => p.key === key);
+    const btn = place && document.querySelector(`.sidebar ${place.sel}`);
+    if (!btn) return false;
+    btn.click();
+    return true;
+  }
+
+  // No-nav layout: the menu button in the top bar opens a list built from the
+  // (hidden) sidebar's own buttons, so it always matches what they do.
+  function closeNavMenu({ refocus = false } = {}) {
+    const menu = $('#nav-menu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    const btn = $('#nav-menu-btn');
+    if (btn) { btn.setAttribute('aria-expanded', 'false'); if (refocus) btn.focus({ preventScroll: true }); }
+  }
+
+  function openNavMenu() {
+    const btn = $('#nav-menu-btn');
+    if (!btn) return;
+    let menu = $('#nav-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'nav-menu';
+      menu.className = 'nav-menu';
+      menu.setAttribute('role', 'menu');
+      menu.setAttribute('aria-label', 'Go to');
+      menu.hidden = true;
+      document.body.appendChild(menu);
+      menu.addEventListener('keydown', (e) => {
+        const items = Array.from(menu.querySelectorAll('.nav-menu-item'));
+        const i = items.indexOf(document.activeElement);
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeNavMenu({ refocus: true }); return; }
+        if (e.key === 'Tab') { e.preventDefault(); closeNavMenu({ refocus: true }); return; }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        let n = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : i + (e.key === 'ArrowDown' ? 1 : -1);
+        n = Math.max(0, Math.min(items.length - 1, n));
+        if (n === i) { sfx('bump'); return; }
+        items[n].focus();
+      });
+      document.addEventListener('pointerdown', (e) => {
+        if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) closeNavMenu();
+      }, true);
+    }
+    const rows = [`<button type="button" class="nav-menu-item" role="menuitem" data-nav-search><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><span>Search</span><kbd>Ctrl F</kbd></button>`, 'sep'];
+    for (const place of NAV_PLACES) {
+      const src = document.querySelector(`.sidebar ${place.sel}`);
+      if (!src) continue;
+      if (place.sel.includes('data-rail-action') && rows.filter((r) => r === 'sep').length < 2) rows.push('sep');
+      const ico = src.querySelector('svg');
+      const label = (src.querySelector('span') || src).textContent.trim();
+      const count = src.querySelector('b');
+      rows.push(`<button type="button" class="nav-menu-item${src.classList.contains('is-active') ? ' is-active' : ''}" role="menuitem" data-nav-sel="${esc(place.sel)}">${ico ? ico.outerHTML : ''}<span>${esc(label)}</span>${count && count.textContent ? `<b>${esc(count.textContent)}</b>` : ''}${place.key ? `<kbd>Ctrl ${place.key}</kbd>` : ''}</button>`);
+    }
+    const acct = $('#side-account');
+    if (acct && !acct.hidden) rows.push('sep', `<button type="button" class="nav-menu-item" role="menuitem" data-nav-account>${esc(acct.getAttribute('aria-label') || 'Account')}</button>`);
+    menu.innerHTML = rows.map((r) => (r === 'sep' ? '<div class="nav-menu-sep" role="separator"></div>' : r)).join('');
+    for (const item of menu.querySelectorAll('[data-nav-sel]')) {
+      item.onclick = () => {
+        closeNavMenu();
+        const src = document.querySelector(`.sidebar ${item.dataset.navSel}`);
+        if (src) src.click();
+      };
+    }
+    const searchItem = menu.querySelector('[data-nav-search]');
+    if (searchItem) searchItem.onclick = () => { closeNavMenu(); requestAnimationFrame(() => spotHooks.open()); };
+    const acctItem = menu.querySelector('[data-nav-account]');
+    if (acctItem) acctItem.onclick = () => { closeNavMenu(); acct.click(); };
+    const r = btn.getBoundingClientRect();
+    menu.style.left = `${Math.round(r.left)}px`;
+    menu.style.top = `${Math.round(r.bottom + 8)}px`;
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    sfx('open');
+    (menu.querySelector('.nav-menu-item.is-active') || menu.querySelector('.nav-menu-item')).focus({ preventScroll: true });
+  }
+
+  function initNavLayouts() {
+    const btn = $('#nav-menu-btn');
+    if (btn) btn.onclick = () => ($('#nav-menu') && !$('#nav-menu').hidden ? closeNavMenu() : openNavMenu());
+
+    // Ctrl+1..6: Library, Active, Finished, Wishlist, Activity, Settings, in every layout
+    addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.repeat) return;
+      if (!/^[1-6]$/.test(e.key) || document.documentElement.classList.contains('is-bigpicture')) return;
+      if (!$('#modal').hidden) return;
+      if (spotHooks.isOpen()) spotHooks.close();
+      if (goNavPlace(e.key)) e.preventDefault();
+    });
+
+    // auto-hide dock: shows while the pointer is at its edge of the window
+    addEventListener('pointermove', (e) => {
+      const ui = state.ui;
+      if (!ui || ui.nav !== 'dock' || !ui.dockAutoHide) return;
+      const near = ui.dockPos === 'top' ? e.clientY <= 6 : e.clientY >= innerHeight - 6;
+      if (near) dockPeek(true);
+      else if (document.documentElement.classList.contains('dock-peek')) {
+        const side = document.querySelector('.sidebar');
+        const r = side && side.getBoundingClientRect();
+        const away = !r || (ui.dockPos === 'top' ? e.clientY > r.bottom + 40 : e.clientY < r.top - 40);
+        if (away) dockPeek(false);
+      }
+    }, { passive: true });
+  }
+
+  function dockPeek(on) {
+    document.documentElement.classList.toggle('dock-peek', !!on);
+  }
+
+  /** What this PC sends with a library sync: layout and colours, no file paths. */
+  function lookForSync() {
+    const at = Number(state.config.uiAt) || 0;
+    if (!at) return null; // never customized here: take the account's look, don't push defaults
+    return { prefs: UiPrefs.syncable(state.ui || state.config.ui), palette: state.palette, at };
+  }
+
+  /** A newer look came back from the account: take it. */
+  function adoptSyncedLook(look) {
+    if (!look || !look.prefs || !(Number(look.at) > (Number(state.config.uiAt) || 0))) return;
+    const next = UiPrefs.adopt(state.ui || state.config.ui, look.prefs);
+    applyUi(next);
+    const patch = { ui: next, uiAt: Number(look.at) };
+    if (PALETTES.includes(look.palette) && look.palette !== state.palette) {
+      applyPalette(look.palette);
+      patch.palette = look.palette;
+    }
+    saveConfigPatch(patch);
   }
 
   // Measures real frame pacing for ~2s and steps down once if we're too slow.
@@ -1787,7 +1973,10 @@
       }
     } else if (key !== state._shelfKey) {
       state._shelfKey = key;
+      stopSpring(strip);
+      if (strip._stopMomentum) strip._stopMomentum();
       strip.scrollLeft = 0;
+      if (strip._spring) strip._spring.x = 0;
       strip._max = null;
       // Reuse tiles by id instead of re-parsing the whole strip: switching
       // filters no longer re-decodes every cover or relayouts 43 nodes.
@@ -1878,10 +2067,14 @@
   // Critically-damped spring on scrollLeft. Retargetable, no fixed duration,
   // and it never fights the wheel because the wheel calls stopSpring first.
   function springTo(el, target) {
-    const max = Math.max(0, el.scrollWidth - el.clientWidth);
-    target = Math.max(0, Math.min(max, target));
+    const maxOf = () => Math.max(0, el.scrollWidth - el.clientWidth);
+    target = Math.max(0, Math.min(maxOf(), target));
     const st = el._spring || (el._spring = { x: el.scrollLeft, v: 0, raf: null, target });
     st.target = target;
+    // An idle spring starts from where the rail really is. Its old position is
+    // stale after a filter switch reset the rail, and starting from it rolled
+    // the rail across every game.
+    if (!st.raf) { st.x = el.scrollLeft; st.v = 0; }
     if (prefersReducedMotion()) {
       if (st.raf) cancelAnimationFrame(st.raf);
       st.raf = null;
@@ -1901,6 +2094,8 @@
       const a = -k * (st.x - st.target) - c * st.v;
       st.v += a * dt;
       st.x += st.v * dt;
+      const max = maxOf();
+      if (st.target > max) st.target = max;
       if (st.x < 0) { st.x = 0; st.v = 0; }
       if (st.x > max) { st.x = max; st.v = 0; }
       el.scrollLeft = st.x;
@@ -5309,7 +5504,7 @@
     renderCloudCard();
     cloudSyncJob = (async () => {
       const rev = state._gamesRev || 0;
-      const res = await api.cloudSync(cleanGames()).catch((e) => ({ ok: false, error: { message: e.message } }));
+      const res = await api.cloudSync(cleanGames(), lookForSync()).catch((e) => ({ ok: false, error: { message: e.message } }));
       state._syncing = false;
       if (!res || !res.ok) {
         state._syncError = (res && res.error && res.error.message) || 'Sync failed';
@@ -5319,6 +5514,7 @@
       }
       state._syncError = null;
       state._lastSync = res.data.at;
+      try { adoptSyncedLook(res.data.look); } catch (e) { reportError('look sync', e); }
       if ((state._gamesRev || 0) !== rev) { scheduleCloudSync(1500); renderCloudCard(); return res.data; } // edited meanwhile: go again
       const { added, removed, updated } = res.data.stats || {};
       if (added || removed || updated) {
@@ -5726,14 +5922,37 @@
 
     async appearance() {
       const reduced = prefersReducedMotion();
+      const ui = state.ui || UiPrefs.defaults();
       return {
-        html: stCard('Look',
+        html: stCard('Layout',
+          stRow('Navigation', 'Where the Library, Wishlist, Activity and Settings buttons live. With None, use the menu button in the top bar or Ctrl 1–6.',
+            stPills('data-ui-nav-group', [['sidebar', 'Sidebar'], ['rail', 'Rail'], ['dock', 'Dock'], ['top', 'Top tabs'], ['none', 'None']], ui.nav), { wide: true }) +
+          `<div data-ui-only="sidebar rail">${stRow('Side', 'Which edge of the window it sits on.', stPills('data-ui-side-group', [['left', 'Left'], ['right', 'Right']], ui.navSide))}</div>` +
+          `<div data-ui-only="dock">${
+            stRow('Dock position', '', stPills('data-ui-dockpos-group', [['bottom', 'Bottom'], ['top', 'Top']], ui.dockPos)) +
+            stRow('Dock style', 'Floating is a small pill; attached runs along the edge.', stPills('data-ui-dockstyle-group', [['floating', 'Floating'], ['attached', 'Attached']], ui.dockStyle)) +
+            stRow('Hide the dock', 'It slides away and comes back when the pointer touches the edge.', stSwitch('data-ui-dock-hide', ui.dockAutoHide, { label: 'Hide the dock' }))
+          }</div>` +
+          stRow('Search', 'Where the search box sits. It always opens with Ctrl F or /, and Y on a controller.',
+            stPills('data-ui-search-group', [['top-center', 'Top centre'], ['top-left', 'Top left'], ['in-nav', 'In the navigation'], ['floating', 'Corner button'], ['hidden', 'Hidden']], ui.search), { wide: true })) +
+          stCard('Look',
           stRow('Palette', 'Sets the accent and the colors of the moving background. Paper is the light one.', stPalettePicker(state.palette)) +
           stRow('Visual quality', 'Cinematic adds the animated background. Lite turns off blur and motion — best on older PCs.', stPills('data-tier-group', [['cinematic', 'Cinematic'], ['standard', 'Standard'], ['lite', 'Lite']], state.tier)) +
           stRow('Motion', `Follows your system’s “reduce motion” setting — currently <b>${reduced ? 'reduced' : 'full'}</b>.`, '')),
         wire(panel) {
           wirePalettePicker(panel, (v) => applyPalette(v, { announce: true, persist: true }));
           wirePills(panel, '[data-tier-group]', (v) => applyTier(v, { announce: true, persist: true }));
+          const showFor = () => {
+            for (const el of panel.querySelectorAll('[data-ui-only]')) el.hidden = !el.dataset.uiOnly.split(' ').includes(state.ui.nav);
+          };
+          showFor();
+          wirePills(panel, '[data-ui-nav-group]', (v) => { setUi({ nav: v }); showFor(); });
+          wirePills(panel, '[data-ui-side-group]', (v) => setUi({ navSide: v }));
+          wirePills(panel, '[data-ui-search-group]', (v) => setUi({ search: v }));
+          wirePills(panel, '[data-ui-dockpos-group]', (v) => setUi({ dockPos: v }));
+          wirePills(panel, '[data-ui-dockstyle-group]', (v) => setUi({ dockStyle: v }));
+          const hide = panel.querySelector('[data-ui-dock-hide]');
+          if (hide) hide.addEventListener('change', () => setUi({ dockAutoHide: hide.checked }));
         },
       };
     },
@@ -6310,6 +6529,7 @@
     let momentum = null;
 
     const stopMomentum = () => { if (momentum) cancelAnimationFrame(momentum); momentum = null; };
+    strip._stopMomentum = stopMomentum;
 
     const glide = (velocity) => {
       // reduced motion: the rail stops where the finger/mouse let go
@@ -6702,6 +6922,7 @@
       // is only kept in localStorage, so localStorage wins for the view
       if (TIERS.includes(state.config.tier)) state.tier = state.config.tier;
       if (PALETTES.includes(state.config.palette)) state.palette = state.config.palette;
+      state.ui = UiPrefs.normalize(state.config.ui);
       state.view = VIEWS.includes(storedView) ? storedView
         : storedView ? 'poster'
           : (VIEWS.includes(state.config.view) ? state.config.view : 'shelf');
@@ -6755,6 +6976,8 @@
     // still wire up, so a single bug can't leave every button dead.
     const step = (name, fn) => { try { fn(); } catch (e) { reportError(`boot:${name}`, e); } };
     step('palette', () => applyPalette(state.palette));
+    step('ui', () => applyUi(state.ui || state.config.ui));
+    step('nav', () => initNavLayouts());
     step('tier', () => applyTier(state.tier));
     step('view', () => applyView());
     step('wire', () => wire());
@@ -7353,11 +7576,11 @@
     if (!sideAnimEnd) return;
     const done = sideAnimEnd; sideAnimEnd = null; done();
   };
-  const applySidebar = (open, animate) => {
+  const applySidebar = (open, animate, remember = true) => {
     if (!sideEl) return;
     finishSideAnim();
     const label = open ? 'Collapse sidebar' : 'Expand sidebar';
-    try { localStorage.setItem('gv.sidebar', open ? 'open' : 'closed'); } catch (_) {}
+    if (remember) { try { localStorage.setItem('gv.sidebar', open ? 'open' : 'closed'); } catch (_) {} }
     if (sideToggle) {
       sideToggle.setAttribute('aria-label', label);
       sideToggle.setAttribute('aria-expanded', String(open));
@@ -7409,8 +7632,35 @@
     sideEl.addEventListener('transitionend', onEnd);
     timer = setTimeout(finishSideAnim, 400); // safety if transitionend never fires
   };
-  applySidebar((() => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } })(), false);
+  const storedSideOpen = () => { try { return localStorage.getItem('gv.sidebar') !== 'closed'; } catch (_) { return true; } };
+  applySidebar(storedSideOpen(), false);
+
+  // Every nav layout is this one sidebar restyled (style.css "Navigation
+  // layouts"). Only the classic sidebar folds on request: the rail is always
+  // folded, and the dock and top tabs lay their rows out flat.
+  if (sideEl) {
+    for (const b of sideEl.querySelectorAll('.side-item')) {
+      const label = b.querySelector('span');
+      if (!b.title && label) b.title = label.textContent.trim();
+    }
+  }
+  navHooks.apply = (ui) => {
+    const nav = ui.nav;
+    if (nav === 'rail') applySidebar(false, false, false);
+    else if (nav === 'sidebar') applySidebar(storedSideOpen(), false, false);
+    else applySidebar(true, false, false);
+    if (sideToggle) {
+      const folds = nav === 'sidebar';
+      sideToggle.tabIndex = folds ? 0 : -1;
+      if (!folds) { sideToggle.removeAttribute('aria-expanded'); sideToggle.setAttribute('aria-label', 'GameVault'); sideToggle.title = 'GameVault'; }
+    }
+    closeNavMenu();
+    dockPeek(false);
+    requestAnimationFrame(() => { syncSidePill(); spotHooks.resync(); });
+  };
+
   if (sideToggle) sideToggle.onclick = () => {
+    if (state.ui && state.ui.nav !== 'sidebar') return;
     window.__gvPerfMark && window.__gvPerfMark('sidebar');
     applySidebar(sideEl.classList.contains('is-collapsed'), true);
     const brandEl = sideEl.querySelector('.brand');
@@ -7695,8 +7945,49 @@
         height: BORDER + FIELD + listH() + FOOT,
       };
     }
-    const restRect = () => { const r = slot.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
-    const geom = (r) => { spot.style.left = r.left + 'px'; spot.style.top = r.top + 'px'; spot.style.width = r.width + 'px'; spot.style.height = r.height + 'px'; };
+    // Where the closed search rests (Settings → Appearance → Search):
+    // the top bar's slot (centre or left), a slot inside the navigation, a
+    // round button in the corner, or nowhere (it still opens with Ctrl F, /, Y).
+    // Big Picture always uses the top bar.
+    const sideSlot = $s('#side-search-slot');
+    const placement = () => {
+      const ui = state.ui;
+      if (!ui || document.documentElement.classList.contains('is-bigpicture')) return 'top';
+      // no nav, or a dock that slides away: the top bar keeps it
+      if (ui.search === 'in-nav') return ui.nav === 'none' || (ui.nav === 'dock' && ui.dockAutoHide) ? 'top' : 'nav';
+      if (ui.search === 'floating') return 'float';
+      if (ui.search === 'hidden') return 'ghost';
+      return 'top';
+    };
+    const rectOf = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; };
+    const restRect = () => {
+      const where = placement();
+      if (where === 'nav' && sideSlot && sideSlot.offsetParent) return rectOf(sideSlot);
+      if (where === 'float') {
+        const size = 48;
+        let bottom = innerHeight - 24;
+        const ui = state.ui;
+        const side = document.querySelector('.sidebar');
+        // stay clear of a dock that runs along the bottom edge
+        if (ui.nav === 'dock' && ui.dockPos === 'bottom' && !ui.dockAutoHide && side) {
+          const d = side.getBoundingClientRect();
+          if (d.right > innerWidth - 24 - size - 12) bottom = Math.min(bottom, d.top - 12);
+        }
+        return { left: innerWidth - 24 - size, top: bottom - size, width: size, height: size };
+      }
+      if (where === 'ghost') {
+        const o = openRect();
+        return { left: o.left + o.width / 2 - 60, top: o.top, width: 120, height: 34 };
+      }
+      return rectOf(slot);
+    };
+    const geom = (r) => {
+      spot.style.left = r.left + 'px'; spot.style.top = r.top + 'px'; spot.style.width = r.width + 'px'; spot.style.height = r.height + 'px';
+      // closed and small (a nav slot, the corner button): just the magnifier
+      spot.classList.toggle('is-compact', !isOpen && r.width < 120 && placement() !== 'ghost');
+      spot.classList.toggle('is-round', !isOpen && placement() === 'float');
+      spot.classList.toggle('is-ghost', !isOpen && placement() === 'ghost');
+    };
 
     let isOpen = false, sel = 0, flat = [];
 
@@ -7711,6 +8002,7 @@
       returnFocus = prev && prev !== input && prev !== document.body && !spot.contains(prev) ? prev : null;
       isOpen = true;
       sfx('open', 3);
+      spot.classList.remove('is-compact', 'is-round', 'is-ghost');
       spot.classList.add('open'); scrim.classList.add('open');
       spot.setAttribute('aria-expanded', 'true'); input.setAttribute('aria-expanded', 'true');
       if (!keepValue) input.value = '';
@@ -7795,7 +8087,7 @@
     // buttons after it change width (Sort hides on the Wishlist, the title
     // turns into "Settings"…) and the grid re-centres it. Watch those too.
     const slotRO = new ResizeObserver(() => { if (!isOpen) resync(); });
-    for (const el of [slot, $s('#topbar'), $s('#filter-title'), $s('#topbar .top-actions')]) if (el) slotRO.observe(el);
+    for (const el of [slot, sideSlot, $s('#topbar'), $s('#filter-title'), $s('#topbar .top-actions')]) if (el) slotRO.observe(el);
 
     window.__spotToggle = () => (isOpen ? closeSpot() : openSpot());
     window.__spotOpen = () => openSpot();
@@ -8295,10 +8587,21 @@
       .filter((el) => el !== active)
       .map((el) => ({ el, rect: el.getBoundingClientRect() }));
     // down out of the top bar goes into whatever is below (Settings, a game page)
-    const cands = all.filter((c) => !vertical || region(c.el) === here || (fromTop && dir === 'down'));
+    let cands = all.filter((c) => !vertical || region(c.el) === here || (fromTop && dir === 'down'));
+    // dock and top tabs lie flat: move along them sideways, step on and off
+    // them up and down
+    const flatNav = state.ui && (state.ui.nav === 'dock' || state.ui.nav === 'top');
+    if (flatNav) {
+      const inSide = (c) => region(c.el) === 'side';
+      if (here === 'side') cands = vertical ? all.filter((c) => !inSide(c)) : all.filter(inSide);
+      else if (vertical) cands = all.filter((c) => region(c.el) === here || inSide(c) || (fromTop && dir === 'down'));
+      else cands = cands.filter((c) => !inSide(c));
+    }
     const sameRow = (r) => Math.min(from.bottom, r.bottom) - Math.max(from.top, r.top) > 0;
     let next;
-    if (!vertical && !fromTop) {
+    if (flatNav && here === 'side') {
+      next = window.PadInput.pickNext(from, cands, dir);
+    } else if (!vertical && !fromTop) {
       next = window.PadInput.pickNext(from, cands.filter((c) => !inTop(c.el)), dir);
       // the top bar only wins sideways when it's on the very same row
       if (!next || !sameRow(next.rect)) {

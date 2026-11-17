@@ -166,6 +166,20 @@ const T = 1_800_000_000_000;
   assert.strictEqual(s2.uploaded, false, 'no-op sync uploads nothing');
   assert.ok(cloud.lastSync());
 
+  // the look rides along; newest wins; an older one doesn't overwrite it
+  const lookA = { prefs: { nav: 'dock' }, palette: 'ocean', at: 100 };
+  const s3 = await cloud.syncLibrary(s2.games, { look: lookA });
+  assert.strictEqual(s3.uploaded, true);
+  assert.deepStrictEqual(db.library.data.look, lookA);
+  const s4 = await cloud.syncLibrary(s2.games, { look: { prefs: { nav: 'top' }, at: 50 } });
+  assert.strictEqual(s4.uploaded, false, 'older look is not uploaded');
+  assert.deepStrictEqual(s4.look, lookA, 'newer cloud look comes back to this PC');
+  const s5 = await cloud.syncLibrary(s2.games);
+  assert.deepStrictEqual(s5.look, lookA, 'a PC with no look gets the cloud one');
+  assert.strictEqual(db.library.data.games.length, 1, 'games untouched by the look');
+  await cloud.syncLibrary(s2.games, { look: { prefs: { x: 'y'.repeat(20000) }, at: 999 } });
+  assert.deepStrictEqual(db.library.data.look, lookA, 'oversized look is refused');
+
   // backups: upload, skip unchanged, keep 3, restore with safety copy
   const b1 = await cloud.backupSaves({ gameId: 'a', gameName: 'Alpha', saveDir });
   assert.ok(b1.backup && db.objects.size === 1);

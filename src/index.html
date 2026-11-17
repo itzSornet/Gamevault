@@ -25,6 +25,7 @@
         </button>
         <span class="side-name">GameVault</span>
       </div>
+      <div id="side-search-slot" class="side-search-slot" aria-hidden="true"></div>
       <div class="side-sec">Library</div>
       <nav class="side-nav" aria-label="Filters">
         <button class="tab side-item is-active" data-filter="All"><svg class="side-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>All</span><b data-count="All">0</b></button>
@@ -43,6 +44,9 @@
       <header id="topbar" class="topbar">
         <button id="bp-menu-btn" class="bp-menu-btn" type="button" aria-label="Menu" title="Menu" aria-haspopup="menu" aria-expanded="false">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <button id="nav-menu-btn" class="icon-btn nav-menu-btn" type="button" aria-label="Go to" title="Go to (Ctrl 1-6)" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
         </button>
         <div class="filter-title" id="filter-title">Library</div>
         <div class="slot" id="slot"></div>
@@ -149,6 +153,7 @@
   <script src="lib/fuzzy.js"></script>
   <script src="lib/sessions.js"></script>
   <script src="lib/rating.js"></script>
+  <script src="lib/uiprefs.js"></script>
   <script src="lib/ambient.js"></script>
   <script src="lib/padinput.js"></script>
   <script src="lib/sfx.js"></script>

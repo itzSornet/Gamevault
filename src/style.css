@@ -2520,8 +2520,8 @@ body { font-size: 13.5px; }
    ========================================================================= */
 
 :root {
-  --glass-bg: rgba(20, 22, 32, 0.55);
-  --glass-bg-strong: rgba(18, 20, 28, 0.72);
+  --glass-bg: rgba(20, 22, 32, calc(0.55 * var(--glass-alpha-k, 1)));
+  --glass-bg-strong: rgba(18, 20, 28, calc(0.72 * var(--glass-alpha-k, 1)));
   --glass-border: rgba(255, 255, 255, 0.10);
   --glass-hi: rgba(255, 255, 255, 0.12);
   --glass-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
@@ -2529,8 +2529,8 @@ body { font-size: 13.5px; }
   --radius-glass: 24px;
 }
 :root[data-palette='paper'] {
-  --glass-bg: rgba(255, 255, 255, 0.62);
-  --glass-bg-strong: rgba(255, 255, 255, 0.78);
+  --glass-bg: rgba(255, 255, 255, calc(0.62 * var(--glass-alpha-k, 1)));
+  --glass-bg-strong: rgba(255, 255, 255, calc(0.78 * var(--glass-alpha-k, 1)));
   --glass-border: rgba(0, 0, 0, 0.08);
   --glass-hi: rgba(255, 255, 255, 0.9);
   --glass-shadow: 0 24px 60px rgba(30, 25, 15, 0.18);
@@ -2553,8 +2553,8 @@ body { font-size: 13.5px; }
   padding: 18px 12px 12px;
   border-radius: var(--radius-glass);
   background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
 }
@@ -2574,8 +2574,8 @@ body { font-size: 13.5px; }
   position: sticky; top: 0; z-index: 40;
   height: 56px;
   background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
   border-bottom: 1px solid var(--glass-border);
   border-radius: var(--radius-glass) var(--radius-glass) 0 0;
 }
@@ -2603,15 +2603,15 @@ body { font-size: 13.5px; }
 .modal-card {
   border-radius: 26px;
   background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(36px) saturate(180%);
-  backdrop-filter: blur(36px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(36px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(36px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 40px 120px rgba(0, 0, 0, 0.6);
 }
 .modal-head, .modal-foot { border-color: var(--glass-border); }
 .modal-foot { background: transparent; }
 
-.toast { background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); border: 1px solid var(--glass-border); border-radius: 16px; }
+.toast { background: var(--glass-bg-strong); -webkit-backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1))); border: 1px solid var(--glass-border); border-radius: 16px; }
 
 /* lite tier: no compositor blur, solid surfaces */
 [data-tier='lite'] .sidebar, [data-tier='lite'] .topbar, [data-tier='lite'] .modal-card, [data-tier='lite'] .toast {
@@ -2634,8 +2634,8 @@ body { font-size: 13.5px; }
 }
 .topbar {
   background: linear-gradient(to bottom, rgba(8, 9, 14, 0.45), rgba(8, 9, 14, 0.72));
-  -webkit-backdrop-filter: blur(30px) saturate(200%);
-  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(200% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(200% * var(--glass-sat-k, 1)));
 }
 :root[data-palette='paper'] .topbar {
   background: linear-gradient(to bottom, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.78));
@@ -2674,8 +2674,8 @@ body { font-size: 13.5px; }
 .modal-card {
   opacity: 0;
   transform: translateY(18px) scale(0.97);
-  -webkit-backdrop-filter: blur(0px) saturate(180%);
-  backdrop-filter: blur(0px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(0px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(0px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
   transition: opacity var(--dur-exit) var(--ease-spring),
               transform var(--dur-exit) var(--ease-spring),
               -webkit-backdrop-filter var(--dur-exit) var(--ease-spring),
@@ -2684,8 +2684,8 @@ body { font-size: 13.5px; }
 .modal-card.is-open {
   opacity: 1;
   transform: none;
-  -webkit-backdrop-filter: blur(36px) saturate(180%);
-  backdrop-filter: blur(36px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(36px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(36px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
   transition-duration: var(--dur-enter);
 }
 .modal-head { cursor: grab; }
@@ -2723,10 +2723,10 @@ body { font-size: 13.5px; }
 }
 
 /* perf: cheaper glass + no backdrop blur while scrolling */
-.sidebar { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
-.topbar { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+.sidebar { -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); }
+.topbar { -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); }
 
-.modal-card.is-open { -webkit-backdrop-filter: blur(24px) saturate(150%); backdrop-filter: blur(24px) saturate(150%); }
+.modal-card.is-open { -webkit-backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); }
 .topbar.is-scrolled {
   -webkit-backdrop-filter: none; backdrop-filter: none;
   background: rgba(8, 9, 14, 0.94);
@@ -2762,15 +2762,15 @@ body { font-size: 13.5px; }
 
 [data-tier='cinematic'] .sidebar {
   background: rgba(20, 22, 32, 0.55);
-  -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1)));
 }
 [data-tier='cinematic'] .topbar {
   background: linear-gradient(to bottom, rgba(8, 9, 14, 0.5), rgba(8, 9, 14, 0.75));
-  -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1)));
 }
 
 .card { box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34); }
-.modal-card.is-open { -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+.modal-card.is-open { -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1))); }
 #grain { opacity: 0.015; }
 
 /* software rasterizer: strip paint-heavy effects */
@@ -2934,15 +2934,15 @@ body { font-size: 13.5px; }
    ========================================================================= */
 .sidebar {
   background: rgba(20, 22, 32, 0.55);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1)));
   border: 1px solid rgba(255, 255, 255, 0.10);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 24px 60px rgba(0, 0, 0, 0.45);
 }
 .topbar {
   background: linear-gradient(to bottom, rgba(8, 9, 14, 0.42), rgba(8, 9, 14, 0.68));
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))) saturate(calc(150% * var(--glass-sat-k, 1)));
 }
 
 :root[data-palette='paper'] .sidebar { background: rgba(255, 255, 255, 0.6); }
@@ -3149,7 +3149,7 @@ body > .scrim {
   -webkit-backdrop-filter: none; backdrop-filter: none;
   transition: opacity 0.38s var(--ease-spring), backdrop-filter 0.52s var(--ease-spring), -webkit-backdrop-filter 0.52s var(--ease-spring);
 }
-body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: blur(16px) saturate(1.25); backdrop-filter: blur(16px) saturate(1.25); }
+body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: blur(calc(16px * var(--glass-blur-k, 1))) saturate(calc(1.25 * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(16px * var(--glass-blur-k, 1))) saturate(calc(1.25 * var(--glass-sat-k, 1))); }
 .spot {
   position: fixed; z-index: 100; overflow: hidden; border-radius: 11px;
   background: rgba(var(--ink-rgb), 0.045);
@@ -3165,7 +3165,7 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
   border-radius: 22px;
   background: var(--spot-glass);
   border-color: rgba(var(--ink-rgb), 0.10);
-  -webkit-backdrop-filter: blur(44px) saturate(1.7); backdrop-filter: blur(44px) saturate(1.7);
+  -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-k, 1))) saturate(calc(1.7 * var(--glass-sat-k, 1))); backdrop-filter: blur(calc(44px * var(--glass-blur-k, 1))) saturate(calc(1.7 * var(--glass-sat-k, 1)));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 40px 90px -10px rgba(0, 0, 0, 0.65), 0 8px 24px rgba(0, 0, 0, 0.35);
   transition-duration: 0.52s;
 }
@@ -3504,21 +3504,21 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 #ambient.has-fluid i { display: none !important; animation: none !important; }
 /* thinner tint on the sidebar glass so the blobs visibly swim through its blur */
 #ambient.has-fluid ~ .app .sidebar {
-  background: rgba(var(--main-glass), var(--side-glass-a));
-  -webkit-backdrop-filter: blur(22px) saturate(170%);
-  backdrop-filter: blur(22px) saturate(170%);
+  background: rgba(var(--main-glass), calc(var(--side-glass-a) * var(--glass-alpha-k, 1)));
+  -webkit-backdrop-filter: blur(calc(22px * var(--glass-blur-k, 1))) saturate(calc(170% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(22px * var(--glass-blur-k, 1))) saturate(calc(170% * var(--glass-sat-k, 1)));
 }
-:root[data-palette='paper'] #ambient.has-fluid ~ .app .sidebar { background: rgba(255, 255, 255, var(--side-glass-a)); }
+:root[data-palette='paper'] #ambient.has-fluid ~ .app .sidebar { background: rgba(255, 255, 255, calc(var(--side-glass-a) * var(--glass-alpha-k, 1))); }
 /* the main panel is glass too: half the sidebar's blur under a heavy tint,
    so the blobs only glow faintly behind the library */
 :root { --main-glass: 6, 7, 10; --main-glass-a: 0.91; --side-glass-a: 0.56; }
 :root[data-palette='paper'] { --main-glass: 243, 240, 233; --main-glass-a: 0.88; --side-glass-a: 0.64; }
 #ambient.has-fluid ~ .app .main {
-  background: rgba(var(--main-glass), var(--main-glass-a));
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  backdrop-filter: blur(12px) saturate(140%);
+  background: rgba(var(--main-glass), calc(var(--main-glass-a) * var(--glass-alpha-k, 1)));
+  -webkit-backdrop-filter: blur(calc(12px * var(--glass-blur-k, 1))) saturate(calc(140% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(12px * var(--glass-blur-k, 1))) saturate(calc(140% * var(--glass-sat-k, 1)));
 }
-#ambient.has-fluid ~ .app .topbar { background: rgba(var(--main-glass), 0.35) !important; }
+#ambient.has-fluid ~ .app .topbar { background: rgba(var(--main-glass), calc(0.35 * var(--glass-alpha-k, 1))) !important; }
 /* Big Picture's top row floats over the hero: a fade, never a flat bar */
 html.is-bigpicture .main::before { display: none; }
 html.is-bigpicture #ambient.has-fluid ~ .app .topbar { background: linear-gradient(to bottom, rgba(var(--main-glass), 0.82), rgba(var(--main-glass), 0)) !important; }
@@ -3526,8 +3526,8 @@ html.is-bigpicture #ambient.has-fluid ~ .app .topbar { background: linear-gradie
    the biggest GPU cost. Under this tint, over the (paused, already soft) fluid,
    the blur is invisible: screenshots with and without it differ by 1/255. So
    the fold keeps the tint and saturation and skips only the blur pass. */
-#ambient.has-fluid ~ .app .main.is-side-moving { -webkit-backdrop-filter: saturate(140%); backdrop-filter: saturate(140%); }
-#ambient.has-fluid ~ .app .main::after { background: linear-gradient(to top, rgba(var(--main-glass), 0.9), rgba(var(--main-glass), 0)); }
+#ambient.has-fluid ~ .app .main.is-side-moving { -webkit-backdrop-filter: saturate(calc(140% * var(--glass-sat-k, 1))); backdrop-filter: saturate(calc(140% * var(--glass-sat-k, 1))); }
+#ambient.has-fluid ~ .app .main::after { background: linear-gradient(to top, rgba(var(--main-glass), calc(0.9 * var(--glass-alpha-k, 1))), rgba(var(--main-glass), 0)); }
 
 /* the waves are only worth moving when glass is there to soften them */
 [data-tier='lite'] #ambient i,
@@ -3813,8 +3813,8 @@ input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; marg
   padding: 4px 8px;
   border-radius: 999px;
   background: rgba(10, 11, 16, 0.62);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
+  backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
   font-size: 9.5px;
   letter-spacing: 0.06em;
 }
@@ -4325,7 +4325,7 @@ img.acct-avatar { object-fit: cover; padding: 0; }
   position: sticky; top: -4px; z-index: 3;
   margin: 0 -18px; padding: 10px 18px 12px;
   background: var(--glass-bg-strong, var(--surface));
-  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1)));
   border-bottom: 1px solid var(--line);
 }
 .ge-art-slot.is-current .art-mini { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -4461,8 +4461,8 @@ img.acct-avatar { object-fit: cover; padding: 0; }
   padding: 6px;
   border-radius: 13px;
   background: var(--glass-bg-strong, var(--surface-2));
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(180% * var(--glass-sat-k, 1)));
   border: 1px solid var(--glass-border, var(--line-2));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
   transform-origin: top center;
@@ -4912,8 +4912,8 @@ html.is-bigpicture .pad-btn[data-btn="menu"], html.is-bigpicture .pad-btn[data-b
   padding: calc(var(--bp-safe-y, 20px) + 12px) 18px var(--bp-safe-y, 20px) var(--bp-safe-x, 24px);
   box-sizing: border-box;
   background: rgba(16, 18, 26, 0.94);
-  -webkit-backdrop-filter: blur(30px) saturate(160%);
-  backdrop-filter: blur(30px) saturate(160%);
+  -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(160% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(30px * var(--glass-blur-k, 1))) saturate(calc(160% * var(--glass-sat-k, 1)));
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 30px 0 80px rgba(0, 0, 0, 0.45);
   animation: bp-slide 0.34s var(--ease-spring, cubic-bezier(0.32, 0.72, 0, 1)) both;
@@ -5060,7 +5060,7 @@ html.is-pad .ga-item[data-danger]:focus { background: rgba(255, 80, 80, 0.16); }
 .activity-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .main.is-activity #sort-wrap,
 .main.is-activity #btn-view { display: none !important; }
-.act { max-width: 1180px; margin: 0 auto; padding: 18px 24px 40px; display: flex; flex-direction: column; gap: 14px; }
+#activity-view .act { max-width: 1180px; margin: 0 auto; padding: 18px 24px 40px; display: flex; flex-direction: column; gap: 14px; }
 .act-title { margin: 0; font-family: var(--font-display); font-size: 26px; font-weight: 600; letter-spacing: -0.02em; color: var(--text); }
 .act-sub { margin: 4px 0 0; font-size: 13px; color: var(--text-dim); }
 
@@ -5122,7 +5122,7 @@ html.is-pad .act-seg-btn:focus { outline: 3px solid var(--accent) !important; ou
 
 /* Big Picture */
 html.is-bigpicture .activity-view { padding: calc(64px + var(--bp-safe-y) + 8px) var(--bp-safe-x) calc(var(--bp-safe-y) + 72px); }
-html.is-bigpicture .act { max-width: none; padding: 0; }
+html.is-bigpicture #activity-view .act { max-width: none; padding: 0; }
 html.is-bigpicture .act-plot { height: 220px; }
 html.is-bigpicture .act-game { padding: 9px 10px; }
 html.is-bigpicture .act-thumb { width: 36px; height: 48px; }
@@ -5269,8 +5269,8 @@ html.is-pad .side-account:focus .side-av { box-shadow: 0 0 0 2px var(--bg-2), 0 
   border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(10, 11, 16, 0.6);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(calc(10px * var(--glass-blur-k, 1))) saturate(calc(140% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(10px * var(--glass-blur-k, 1))) saturate(calc(140% * var(--glass-sat-k, 1)));
   color: #fff;
   font: 600 12.5px/1 var(--font-ui, inherit);
   letter-spacing: 0.01em;
@@ -5344,8 +5344,8 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
   padding: 4px 7px 4px 6px;
   border-radius: 999px;
   background: rgba(10, 11, 16, 0.62);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
+  backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
   font: 700 11px/1 var(--font-display);
   font-variant-numeric: tabular-nums;
   color: #fff;
@@ -5462,8 +5462,8 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
   padding: 3px 8px 3px 6px;
   border-radius: 999px;
   background: rgba(10, 11, 16, 0.62);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
+  backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
   color: #fff;
   font: 700 11px/1 var(--font-display);
   font-variant-numeric: tabular-nums;
@@ -5974,3 +5974,208 @@ button.gvx-month { grid-template-columns: 150px minmax(60px, 1fr) 120px; }
 .imp3-sync-text b { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .imp3-sync-text span { font-size: 11.5px; color: var(--text-mute); }
 .imp3-sync.is-off .imp3-sync-text b { color: var(--text-dim); }
+
+/* ============================================================================
+   Navigation layouts (Settings → Appearance; lib/uiprefs.js)
+   One <aside class="sidebar">, restyled per html[data-ui-nav]: sidebar
+   (left/right), rail, dock, top tabs, none. Buttons keep their wiring.
+   ========================================================================= */
+
+/* ---- right side (sidebar and rail) */
+html[data-ui-nav-side='right']:is([data-ui-nav='sidebar'], [data-ui-nav='rail']) .app { flex-direction: row-reverse; }
+html[data-ui-nav-side='right']:is([data-ui-nav='sidebar'], [data-ui-nav='rail']) .side-pill::before { left: auto; right: -9px; }
+html[data-ui-nav-side='right'][data-ui-nav='sidebar'] .brand-chev { scale: -1 1; }
+
+/* ---- rail: always folded, and the brand mark is only a mark */
+html[data-ui-nav='rail'] .brand-chev { display: none; }
+html[data-ui-nav='rail'] #side-toggle { cursor: default; }
+
+/* ---- shared by dock and top tabs: one row */
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar {
+  flex-direction: row; align-items: center;
+  width: auto; flex-basis: auto; height: auto;
+  overflow: visible;
+}
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar :is(.side-pill, .side-sec, .side-stats) { display: none; }
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar :is(.side-nav, .side-foot) {
+  flex-direction: row; align-items: center; gap: 4px;
+  margin: 0; padding: 0; border: 0;
+}
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item { width: auto; flex: none; }
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item.is-active:not(.side-wish) {
+  box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb), 0.16), inset 0 0 0 1px rgba(var(--accent-rgb), 0.34);
+}
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .side-foot .side-item.side-wish { margin: 0; }
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .side-account {
+  width: auto; margin: 0; padding: 0 2px; border: 0; flex: none;
+}
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .side-account .side-acc-text { display: none; }
+
+/* ---- dock: a pill of icons at the bottom (or top), centred */
+html[data-ui-nav='dock'] .sidebar {
+  position: fixed; z-index: 70;
+  left: 50%; bottom: 14px; top: auto;
+  translate: -50% 0;
+  animation: none;
+  gap: 4px; padding: 6px 8px;
+  border-radius: calc(22px * var(--radius-k, 1));
+}
+html[data-ui-nav='dock'] .side-brand { display: none; }
+html[data-ui-nav='dock'] .sidebar .side-item {
+  width: 44px; height: 44px; padding: 0;
+  justify-content: center; border-radius: 13px;
+}
+html[data-ui-nav='dock'] .sidebar .side-item > :is(span, b) { display: none; }
+html[data-ui-nav='dock'] .sidebar .side-ico { width: 20px; height: 20px; flex-basis: 20px; }
+html[data-ui-nav='dock'] .side-foot { padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--glass-border, var(--line)); }
+html[data-ui-nav='dock'] .side-account { padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--glass-border, var(--line)); height: 44px; }
+/* the room it needs is kept clear, so nothing sits under it */
+html[data-ui-nav='dock'] .app { padding-bottom: 82px; }
+html[data-ui-nav='dock'][data-ui-dock-pos='top'] .sidebar { top: 14px; bottom: auto; }
+html[data-ui-nav='dock'][data-ui-dock-pos='top'] .app { padding-bottom: 12px; padding-top: 82px; }
+/* attached: spans the edge like a taskbar */
+html[data-ui-nav='dock'][data-ui-dock-style='attached'] .sidebar {
+  left: 12px; right: 12px; translate: none; bottom: 12px;
+  justify-content: center;
+  border-radius: var(--radius-glass, 18px);
+}
+html[data-ui-nav='dock'][data-ui-dock-style='attached'][data-ui-dock-pos='top'] .sidebar { top: 12px; bottom: auto; }
+html[data-ui-nav='dock'][data-ui-dock-style='attached'] .app { padding-bottom: 80px; }
+html[data-ui-nav='dock'][data-ui-dock-style='attached'][data-ui-dock-pos='top'] .app { padding-bottom: 12px; padding-top: 80px; }
+/* a top dock leaves a strip above the window's content: it drags the window */
+html[data-ui-nav='dock'][data-ui-dock-pos='top'] .sidebar { -webkit-app-region: no-drag; }
+html[data-ui-nav='dock'][data-ui-dock-pos='top'] .app::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 12px; -webkit-app-region: drag;
+}
+/* auto-hide: slides away, comes back when the pointer touches the edge */
+html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] .app { padding-top: 12px; padding-bottom: 12px; }
+html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] .sidebar {
+  transition: transform 240ms cubic-bezier(0.2, 0.9, 0.25, 1), opacity 200ms;
+  transform: translateY(calc(100% + 24px)); opacity: 0;
+}
+html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'][data-ui-dock-pos='top'] .sidebar { transform: translateY(calc(-100% - 24px)); }
+html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] :is(.sidebar:hover, .sidebar:focus-within),
+html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'].dock-peek .sidebar { transform: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] .sidebar { transition: opacity 120ms; }
+}
+
+/* ---- top tabs: the sections run across the top of the window */
+html[data-ui-nav='top'] .app { flex-direction: column; }
+html[data-ui-nav='top'] .sidebar {
+  flex: 0 0 auto; height: 52px;
+  padding: 0 10px 0 12px; gap: 6px;
+  -webkit-app-region: drag;
+}
+html[data-ui-nav='top'] .sidebar :is(button, .side-account) { -webkit-app-region: no-drag; }
+html[data-ui-nav='top'] .side-brand { padding: 0 10px 0 0; flex: none; }
+html[data-ui-nav='top'] .side-name { padding-right: 0; overflow: visible; }
+html[data-ui-nav='top'] .brand-chev { display: none; }
+html[data-ui-nav='top'] .sidebar .side-item { height: 36px; padding: 0 12px; gap: 7px; border-radius: 10px; }
+html[data-ui-nav='top'] .sidebar .side-item > :is(span, b) { opacity: 1; transform: none; flex: none; }
+html[data-ui-nav='top'] .side-foot { margin-left: auto; }
+html[data-ui-nav='top'] .sidebar .side-btn { color: var(--text-dim); font-size: 13px; }
+html[data-ui-nav='top'] .sidebar .side-btn:hover { color: var(--text); }
+/* Import and Settings: icons, with their names as tooltips */
+html[data-ui-nav='top'] .side-foot .side-item[data-rail-action] { padding: 0; width: 36px; justify-content: center; }
+html[data-ui-nav='top'] .side-foot .side-item[data-rail-action] > span { display: none; }
+html[data-ui-nav='top'] .side-account { padding-left: 6px; }
+@media (max-width: 900px) {
+  html[data-ui-nav='top'] .side-name { display: none; }
+  html[data-ui-nav='top'] .sidebar .side-item { padding: 0; width: 36px; justify-content: center; }
+  html[data-ui-nav='top'] .sidebar .side-item > :is(span, b) { display: none; }
+}
+
+/* ---- none: no navigation chrome; a menu button in the top bar reaches everything */
+html[data-ui-nav='none'] .sidebar { display: none; }
+.nav-menu-btn { display: none; }
+html[data-ui-nav='none']:not(.is-bigpicture) .nav-menu-btn { display: grid; place-items: center; flex: none; grid-column: 1; grid-row: 1; justify-self: start; }
+/* the top bar is a 3-column grid (title | search | actions): the menu button shares the title's column */
+html[data-ui-nav='none']:not(.is-bigpicture) .topbar .filter-title { grid-column: 1; grid-row: 1; margin-left: 46px; }
+html[data-ui-nav='none']:not(.is-bigpicture) .topbar .slot { grid-column: 2; grid-row: 1; }
+html[data-ui-nav='none']:not(.is-bigpicture) .topbar .top-actions { grid-column: 3; grid-row: 1; }
+.nav-menu {
+  position: fixed; z-index: 400;
+  min-width: 220px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  border-radius: 14px;
+  background: var(--glass-bg-strong, var(--surface-2));
+  -webkit-backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(160% * var(--glass-sat-k, 1)));
+  backdrop-filter: blur(calc(24px * var(--glass-blur-k, 1))) saturate(calc(160% * var(--glass-sat-k, 1)));
+  border: 1px solid var(--glass-border, var(--line-2));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  -webkit-app-region: no-drag;
+  transform-origin: top left;
+  animation: nav-menu-in 160ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+.nav-menu[hidden] { display: none; }
+@keyframes nav-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+.nav-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  height: 36px; padding: 0 10px;
+  border: 0; border-radius: 9px;
+  background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.nav-menu-item svg { width: 16px; height: 16px; flex: none; }
+.nav-menu-item > span { flex: 1; }
+.nav-menu-item b { font-size: 10.5px; font-weight: 600; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.nav-menu-item kbd { font: inherit; font-size: 10.5px; color: var(--text-mute); }
+.nav-menu-item:hover, .nav-menu-item:focus-visible { background: rgba(var(--ink-rgb), 0.07); color: var(--text); outline: none; }
+html.is-pad .nav-menu-item:focus { background: rgba(var(--ink-rgb), 0.07); color: var(--text); outline: 2px solid var(--accent); outline-offset: -2px; }
+.nav-menu-item.is-active { color: var(--text); box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb), 0.14); }
+.nav-menu-item.is-active svg { color: var(--accent); }
+.nav-menu-sep { height: 1px; margin: 4px 6px; background: var(--glass-border, var(--line)); }
+
+/* ============================================================================
+   Search placement (html[data-ui-search]). The closed search (#spot) floats
+   over a slot; these rules move or hide the slots, app.js picks which one.
+   ========================================================================= */
+/* top left: title, then search, then the actions on the right */
+html[data-ui-search='top-left']:not(.is-bigpicture) .topbar { grid-template-columns: max-content minmax(200px, 400px) minmax(max-content, 1fr); }
+html[data-ui-search='top-left']:not(.is-bigpicture) .topbar .filter-title { grid-column: 1; grid-row: 1; }
+html[data-ui-search='top-left']:not(.is-bigpicture) .topbar .slot { grid-column: 2; grid-row: 1; }
+html[data-ui-search='top-left']:not(.is-bigpicture) .topbar .top-actions { grid-column: 3; grid-row: 1; }
+@media (max-width: 980px) {
+  html[data-ui-search='top-left']:not(.is-bigpicture) .topbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+/* the top bar's slot is empty when the search lives elsewhere */
+html:is([data-ui-search='floating'], [data-ui-search='hidden']):not(.is-bigpicture) .topbar .slot,
+html[data-ui-search='in-nav']:not([data-ui-nav='none']):not([data-ui-nav='dock'][data-ui-dock-auto-hide='1']):not(.is-bigpicture) .topbar .slot { visibility: hidden; }
+
+/* the slot inside the navigation */
+.side-search-slot { display: none; flex: none; }
+html[data-ui-search='in-nav']:not([data-ui-nav='none']) .side-search-slot { display: block; height: 34px; margin: 0 0 4px; }
+html[data-ui-search='in-nav'][data-ui-nav='dock'] .side-search-slot { width: 44px; height: 44px; margin: 0; }
+/* top tabs: after the tabs and icons, before the account */
+html[data-ui-search='in-nav'][data-ui-nav='top'] .side-search-slot { width: 260px; margin: 0 0 0 6px; order: 3; }
+html[data-ui-search='in-nav'][data-ui-nav='top'] .side-nav { order: 1; }
+html[data-ui-search='in-nav'][data-ui-nav='top'] .side-foot { order: 2; }
+html[data-ui-search='in-nav'][data-ui-nav='top'] .side-account { order: 4; }
+@media (max-width: 900px) {
+  html[data-ui-search='in-nav'][data-ui-nav='top'] .side-search-slot { width: 36px; height: 36px; }
+}
+html.is-bigpicture .side-search-slot { display: none !important; }
+
+/* closed and small: only the magnifier shows, centred */
+.spot.is-compact .field { justify-content: center; padding: 0; gap: 0; height: 100%; }
+.spot.is-compact #q,
+.spot.is-compact .keys { width: 0; flex: 0 0 0; opacity: 0; }
+.spot.is-compact .field svg { width: 18px; height: 18px; }
+/* the corner button: round, glassy, lifted */
+.spot.is-round {
+  border-radius: 50%;
+  background: var(--glass-bg-strong, var(--surface-2));
+  border-color: var(--glass-border, var(--line-2));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  -webkit-backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1))); backdrop-filter: blur(calc(18px * var(--glass-blur-k, 1)));
+}
+.spot.is-round .field svg { stroke: var(--text); }
+/* hidden: invisible until opened, then it grows from the middle */
+.spot.is-ghost { opacity: 0; visibility: hidden; pointer-events: none; }
+html[data-ui-search='hidden'] .spot {
+  transition-property: left, top, width, height, border-radius, background-color, border-color, box-shadow, backdrop-filter, -webkit-backdrop-filter, opacity, visibility;
+}
+/* toasts stack above the corner search button instead of over it */
+html[data-ui-search='floating']:not(.is-bigpicture) .toasts { bottom: calc(var(--shell-gap, 12px) + 14px + 60px); }
+html[data-ui-search='floating'][data-ui-nav='dock'][data-ui-dock-style='attached'][data-ui-dock-pos='bottom']:not([data-ui-dock-auto-hide='1']):not(.is-bigpicture) .toasts { bottom: 160px; }
