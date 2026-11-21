@@ -519,7 +519,12 @@ const backgroundMode = process.env.GV_BACKGROUND === '1';
 // Big Picture: fullscreen plus a page zoom sized to the screen (see
 // src/lib/bigpicture.js). The renderer owns the mode; main only does the window.
 const BigPicture = require('./src/lib/bigpicture.js');
+const UiPrefs = require('./src/lib/uiprefs.js');
 let bigPictureOn = false;
+// Settings → Appearance → Size: the normal window's page zoom (Big Picture
+// uses its own). Read at start so the first paint already has it.
+let uiZoom = 1;
+try { uiZoom = UiPrefs.zoom((loadConfig() || {}).ui); } catch (_) { uiZoom = 1; }
 
 function bigPictureZoom() {
   const { screen } = require('electron');
@@ -540,7 +545,7 @@ function setBigPicture(on) {
     if (bigPictureOn && win.isMinimized()) win.restore();
     win.setFullScreen(bigPictureOn);
   }
-  const zoom = bigPictureOn ? (backgroundMode ? BigPicture.zoomFor(1920, 1080) : bigPictureZoom()) : 1;
+  const zoom = bigPictureOn ? (backgroundMode ? BigPicture.zoomFor(1920, 1080) : bigPictureZoom()) : uiZoom;
   win.webContents.setZoomFactor(zoom);
   return { on: bigPictureOn, zoom };
 }
@@ -599,7 +604,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     if (!win || win.isDestroyed()) return;
     if (bigPictureOn) win.webContents.send('app:bigpicture', true);   // a reload: pick it back up
-    else win.webContents.setZoomFactor(1);
+    else win.webContents.setZoomFactor(uiZoom);
   });
 
   win.webContents.on('console-message', (_e, level, message) => {
@@ -1258,6 +1263,65 @@ function createWindow() {
     });
     return result.canceled ? null : result.filePaths[0];
   });
+
+  // Custom background (Settings → Appearance → Background): the picked file is
+  // copied into userData/backgrounds so moving or deleting the original never
+  // breaks it. Only one is kept; it never leaves this PC.
+  const BG_DIR = path.join(app.getPath('userData'), 'backgrounds');
+  const BG_TYPES = {
+    image: { exts: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp'], max: 64 * 1024 * 1024, title: 'Choose a background picture' },
+    video: { exts: ['mp4', 'webm', 'm4v', 'mov', 'ogv'], max: 2 * 1024 * 1024 * 1024, title: 'Choose a background video' },
+  };
+  const clearBackgrounds = async (keep) => {
+    const names = await fs.promises.readdir(BG_DIR).catch(() => []);
+    await Promise.all(names.map((n) => (path.join(BG_DIR, n) === keep ? null : fs.promises.rm(path.join(BG_DIR, n), { force: true }).catch(() => {}))));
+  };
+  ipcMain.handle('ui:zoom', (_e, k) => {
+    const n = Number(k);
+    uiZoom = Number.isFinite(n) ? Math.min(1.2, Math.max(0.9, n)) : 1;
+    if (win && !win.isDestroyed() && !bigPictureOn) win.webContents.setZoomFactor(uiZoom);
+    return uiZoom;
+  });
+
+  // Copy and paste a shared look: the page may not read the clipboard, and
+  // its own writes fail while the window isn't focused
+  ipcMain.handle('ui:clipboard-write', (_e, text) => {
+    if (typeof text !== 'string' || text.length > 16384) return false;
+    require('electron').clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.handle('ui:clipboard-text', () => {
+    const { clipboard } = require('electron');
+    const t = clipboard.readText() || '';
+    return t.length > 16384 ? '' : t;
+  });
+
+  ipcMain.handle('ui:bg-pick', async (_, kind) => {
+    const type = BG_TYPES[kind];
+    if (!type) return { error: 'bad kind' };
+    const result = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      title: type.title,
+      filters: [{ name: kind === 'video' ? 'Videos' : 'Pictures', extensions: type.exts }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const src = result.filePaths[0];
+    const ext = path.extname(src).slice(1).toLowerCase();
+    if (!type.exts.includes(ext)) return { error: 'That file type isn’t supported.' };
+    const st = await fs.promises.stat(src).catch(() => null);
+    if (!st || !st.isFile()) return { error: 'Couldn’t read that file.' };
+    if (st.size > type.max) return { error: kind === 'video' ? 'That video is over 2 GB.' : 'That picture is over 64 MB.' };
+    try {
+      await fs.promises.mkdir(BG_DIR, { recursive: true });
+      const dest = path.join(BG_DIR, `background-${Date.now()}.${ext}`);
+      await fs.promises.copyFile(src, dest);
+      await clearBackgrounds(dest);
+      return { file: dest, kind };
+    } catch (e) {
+      return { error: 'Couldn’t copy that file.' };
+    }
+  });
+  ipcMain.handle('ui:bg-clear', async () => { await clearBackgrounds(null); return true; });
 
   ipcMain.handle('pick:image', async () => {
     const result = await dialog.showOpenDialog(win, {

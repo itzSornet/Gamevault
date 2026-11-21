@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld('api', {
 
   // Pick image file for custom cover
   pickImage: () => ipcRenderer.invoke('pick:image'),
+  uiClipboardWrite: (text) => ipcRenderer.invoke('ui:clipboard-write', text),
+  uiClipboardText: () => ipcRenderer.invoke('ui:clipboard-text'),
+  uiZoom: (k) => ipcRenderer.invoke('ui:zoom', k),
+  uiBackgroundPick: (kind) => ipcRenderer.invoke('ui:bg-pick', kind),
+  uiBackgroundClear: () => ipcRenderer.invoke('ui:bg-clear'),
 
   launchGame: (exePath, steamAppId, gameId, installDir, launcherPath) => ipcRenderer.send('game:launch', { exePath, steamAppId, gameId, installDir, launcherPath }),
   killGame: (gameId, exePath, installDir, steamAppId, launcherPath) => ipcRenderer.invoke('game:kill', { gameId, exePath, installDir, steamAppId, launcherPath }),

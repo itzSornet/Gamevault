@@ -78,7 +78,18 @@ test('cssVars: default prefs override nothing visible', () => {
   assert.equal(v['--glass-blur-k'], '1');
   assert.equal(v['--glass-alpha-k'], '1');
   assert.equal(v['--radius-k'], '1');
-  assert.equal(v['--font-k'], '1');
+  assert.equal(U.zoom(U.defaults()), 1);
+});
+
+test('size, shelf size and motion', () => {
+  assert.equal(U.zoom({ fontScale: 110 }), 1.1);
+  assert.equal(U.zoom({ fontScale: 400 }), 1.2);
+  assert.equal(U.normalize({ shelfSize: 'huge' }).shelfSize, 'medium');
+  const a = U.attrs({ shelfSize: 'large', motion: 'off', density: 'compact', showRatings: false });
+  assert.equal(a.shelfSize, 'large');
+  assert.equal(a.motion, 'off');
+  assert.equal(a.density, 'compact');
+  assert.equal(a.cardRatings, '0');
 });
 
 test('cssVars: accent and solid glass', () => {
@@ -97,4 +108,67 @@ test('newer: last write wins, empty sides lose', () => {
   assert.equal(U.newer(null, a), a);
   assert.equal(U.newer(a, { at: 99 }), a);
   assert.equal(U.newer(null, null), null);
+});
+
+test('tintVars leans the palette toward the accent and keeps each format', () => {
+  const base = { '--surface': '#0f1117', '--main-glass': '6, 7, 10', '--bg': 'nonsense' };
+  const off = U.tintVars(base, '#ff0000', 0);
+  assert.equal(off['--surface'], null);
+  const on = U.tintVars(base, '#ff0000', 100);
+  assert.match(on['--surface'], /^#[0-9a-f]{6}$/);
+  assert.notEqual(on['--surface'], '#0f1117');
+  assert.match(on['--main-glass'], /^\d+, \d+, \d+$/);
+  const [r, g] = on['--main-glass'].split(', ').map(Number);
+  assert.ok(r > 6 && g <= 7, 'red goes up, green does not');
+  assert.equal(on['--bg'], null, 'unreadable values are left alone');
+  assert.equal(U.tintVars(base, null, 100)['--surface'], null);
+});
+
+test('a custom accent recolours the fluid and is flagged for CSS', () => {
+  const v = U.cssVars({ accent: '#22b8e6' }, { surface: '#0f1117' });
+  assert.equal(v['--wave-1'], v['--accent-rgb']);
+  assert.equal(U.attrs({ accent: '#22b8e6' }).customAccent, '1');
+  assert.equal(U.attrs({}).customAccent, '0');
+  assert.equal(U.cssVars({}, {})['--wave-1'], null);
+  assert.ok(U.ACCENTS.length >= 8 && U.ACCENTS.every(([h]) => /^#[0-9a-f]{6}$/.test(h)));
+});
+
+test('presets: keep colours, size and motion; presetOf finds them', () => {
+  const mine = { accent: '#ff0000', tint: 30, fontScale: 110, motion: 'reduced', nav: 'top', backgroundFile: 'C:/bg.png', backgroundKind: 'image', background: 'image' };
+  const d = U.applyPreset(mine, 'dock');
+  assert.equal(d.nav, 'dock');
+  assert.equal(d.accent, '#ff0000');
+  assert.equal(d.tint, 30);
+  assert.equal(d.fontScale, 110);
+  assert.equal(d.motion, 'reduced');
+  assert.equal(d.background, 'image');
+  assert.equal(U.presetOf(d), 'dock');
+  assert.equal(U.presetOf(U.defaults()), 'default');
+  assert.equal(U.presetOf({ ...d, density: 'compact' }), null);
+  const g = U.applyPreset(U.defaults(), 'glass');
+  assert.equal(g.glass.blur, 180);
+  assert.equal(g.glass.solid, false);
+  assert.equal(U.applyPreset(mine, 'nope').nav, 'top');
+  for (const p of U.PRESETS) assert.equal(U.presetOf(U.applyPreset(U.defaults(), p.id)), p.id);
+});
+
+test('share a look: round trip, no paths, bad input', () => {
+  const ui = { nav: 'dock', accent: '#14b8a6', radius: 2, background: 'image', backgroundFile: 'C:/secret/me.png', backgroundKind: 'image' };
+  const text = U.exportLook(ui, 'ocean');
+  assert.ok(!text.includes('secret'));
+  assert.ok(!text.includes('backgroundFile'));
+  const back = U.importLook(text, {}, ['midnight', 'ocean']);
+  assert.equal(back.palette, 'ocean');
+  assert.equal(back.ui.nav, 'dock');
+  assert.equal(back.ui.accent, '#14b8a6');
+  assert.equal(back.ui.background, 'fluid'); // no file on this PC
+  const withFile = U.importLook(text, { backgroundFile: 'D:/mine.mp4', backgroundKind: 'video' }, ['ocean']);
+  assert.equal(withFile.ui.backgroundFile, 'D:/mine.mp4');
+  assert.equal(withFile.ui.background, 'image');
+  assert.equal(U.importLook('```' + text + '```', {}, []).palette, null);
+  assert.equal(U.importLook('{"nav":"dock"}', {}, []), null);
+  assert.equal(U.importLook('hello', {}, []), null);
+  assert.equal(U.importLook('x'.repeat(9000), {}, []), null);
+  assert.equal(U.importLook('{"gamevault-look":1,"ui":{"nav":"hologram","tint":900}}', {}, []).ui.nav, 'sidebar');
+  assert.equal(U.exportLook(U.defaults(), 'midnight'), '{"gamevault-look":1,"palette":"midnight","ui":{}}');
 });

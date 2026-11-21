@@ -187,11 +187,15 @@ void main(){
 
   // Decide what the background should be doing right now.
   function sync() {
-    const allowed = root.dataset.tier !== 'lite' && root.dataset.software !== '1';
+    // another background was picked (Settings → Appearance): free the GPU
+    const mode = root.dataset.uiBackground || 'fluid';
+    const allowed = mode === 'fluid' && root.dataset.tier !== 'lite' && root.dataset.software !== '1';
     if (!allowed) { teardown(); return; }
     if (!gl && !setup()) return;          // no WebGL: the CSS bands stay
     host.classList.add('has-fluid');
-    const still = (reduced && reduced.matches) || document.hidden;
+    // Settings → Appearance → Motion: Reduced or Off holds one still frame too
+    const appStill = root.dataset.uiMotion === 'reduced' || root.dataset.uiMotion === 'off';
+    const still = (reduced && reduced.matches) || appStill || document.hidden;
     if (root.dataset.busy === '1') stop();            // a layout animation is running: hold the last frame
     else if (still) { stop(); draw(); } else start();
   }
@@ -199,7 +203,9 @@ void main(){
   new MutationObserver((list) => {
     if (list.some((m) => m.attributeName === 'data-palette')) applyColors();
     sync();
-  }).observe(root, { attributes: true, attributeFilter: ['data-palette', 'data-tier', 'data-software', 'data-busy'] });
+  }).observe(root, { attributes: true, attributeFilter: ['data-palette', 'data-tier', 'data-software', 'data-busy', 'data-ui-background', 'data-ui-motion'] });
+  // a custom accent or tint changes the colours without touching data-palette
+  window.GvAmbient = { refresh: applyColors };
   document.addEventListener('visibilitychange', sync);
   if (reduced && reduced.addEventListener) reduced.addEventListener('change', sync);
   window.addEventListener('resize', resize);

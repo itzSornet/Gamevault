@@ -238,16 +238,16 @@
 
   const PALETTES = ['midnight', 'nebula', 'emerald', 'ocean', 'sunset', 'paper'];
 
-  function applyPalette(name, { announce = false, persist = false } = {}) {
+  function applyPalette(name, { announce = false, persist = false, fade = true } = {}) {
     const p = PALETTES.includes(name) ? name : 'midnight';
     const html = document.documentElement;
     // 29: a picked palette crossfades: a still of the old colours fades out over
     // the new ones (one layer's opacity, instead of every element repainting)
-    if (persist && html.dataset.palette && html.dataset.palette !== p && !prefersReducedMotion() && api.windowSnapshot) {
+    if (persist && fade && html.dataset.palette && html.dataset.palette !== p && !prefersReducedMotion() && api.windowSnapshot) {
       const seq = (applyPalette._seq = (applyPalette._seq || 0) + 1);
       api.windowSnapshot().catch(() => null).then((url) => {
         if (seq !== applyPalette._seq) return;
-        const finish = () => { state.palette = p; html.dataset.palette = p; };
+        const finish = () => { state.palette = p; html.dataset.palette = p; if (state.ui) applyUi(state.ui); commitLook(); };
         if (!url) { finish(); return; }
         const still = new Image();
         still.className = 'palette-still';
@@ -273,6 +273,7 @@
     if (persist && state.config.palette !== p) saveConfigPatch({ palette: p, uiAt: Date.now() });
     if (announce) toast(`Palette: ${p}`, 'ok');
     if (state.ui) applyUi(state.ui); // a custom accent is checked against the new surface
+    if (persist) commitLook();
   }
 
   // ---------------------------------------------------------------------------
@@ -298,11 +299,40 @@
       requestAnimationFrame(() => spotHooks.resync());
     }
     if (nextNav !== prevNav) { try { navHooks.apply(n); } catch (e) { reportError('nav layout', e); } }
-    const surface = getComputedStyle(html).getPropertyValue('--surface').trim();
-    for (const [k, v] of Object.entries(UiPrefs.cssVars(n, { surface }))) {
+    // Size zooms the page (main does it; Big Picture keeps its own zoom)
+    if (n.fontScale !== applyUi.fontScale) {
+      const first = applyUi.fontScale == null;
+      applyUi.fontScale = n.fontScale;
+      if (api.uiZoom && !(first && n.fontScale === 100)) {
+        api.uiZoom(UiPrefs.zoom(n)).then(() => requestAnimationFrame(() => { spotHooks.resync(); syncSidePill(); })).catch(() => {});
+      }
+    }
+    const motionChanged = applyUi.motion != null && n.motion !== applyUi.motion;
+    applyUi.motion = n.motion;
+    // Accent and tint are worked out from the palette's own colours, so read
+    // those with our overrides off (only when one of the three changed: the
+    // glass sliders call this on every move).
+    const colourKey = `${html.dataset.palette}|${n.accent}|${n.tint}`;
+    const vars = { ...UiPrefs.cssVars(n, { surface: '' }) };
+    if (colourKey !== applyUi.colourKey) {
+      applyUi.colourKey = colourKey;
+      for (const k of [...UiPrefs.TINT_KEYS, ...UiPrefs.ACCENT_KEYS]) html.style.removeProperty(k);
+      const cs = getComputedStyle(html);
+      Object.assign(vars, UiPrefs.cssVars(n, { surface: cs.getPropertyValue('--surface').trim() }));
+      const base = {};
+      for (const k of UiPrefs.TINT_KEYS) base[k] = cs.getPropertyValue(k).trim();
+      Object.assign(vars, UiPrefs.tintVars(base, vars['--accent'] || cs.getPropertyValue('--accent').trim(), n.tint));
+    } else {
+      // colours unchanged: leave the accent and tint overrides as they are
+      for (const k of UiPrefs.ACCENT_KEYS) delete vars[k];
+    }
+    for (const [k, v] of Object.entries(vars)) {
       if (v == null) html.style.removeProperty(k);
       else html.style.setProperty(k, v);
     }
+    if (window.GvAmbient) window.GvAmbient.refresh();
+    backdrop.sync();
+    if (motionChanged) backdrop.play();
     return n;
   }
 
@@ -313,9 +343,223 @@
     if (persist) {
       saveConfigPatch({ ui: next, uiAt: Date.now() });
       scheduleCloudSync(4000);
+      commitLook();
     }
     return next;
   }
+
+  // ---- look history (Undo), presets, reset and share a look. A "look" is the
+  // prefs plus the palette. Every saved change pushes the look before it;
+  // slider drags only count once, when let go. Kept in memory, last 10.
+  const lookHist = { past: [], committed: null, hold: false };
+  const lookSnap = () => ({ ui: UiPrefs.normalize(state.ui || state.config.ui), palette: state.palette });
+  const sameLook = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  function commitLook() {
+    if (lookHist.hold) return;
+    const now = lookSnap();
+    const before = lookHist.committed;
+    if (before && !sameLook(before, now)) {
+      lookHist.past.push(before);
+      if (lookHist.past.length > 10) lookHist.past.shift();
+    }
+    lookHist.committed = now;
+    syncLookTools();
+  }
+
+  /** Apply a whole look at once: one Undo step, no palette crossfade. */
+  function setLook(look, { undoable = true } = {}) {
+    const ui = { ...look.ui, backgroundFile: state.ui.backgroundFile, backgroundKind: state.ui.backgroundKind };
+    lookHist.hold = true;
+    try {
+      setUi(UiPrefs.normalize(ui));
+      if (look.palette && look.palette !== state.palette) applyPalette(look.palette, { persist: true, fade: false });
+    } finally { lookHist.hold = false; }
+    if (undoable) commitLook();
+    else { lookHist.committed = lookSnap(); syncLookTools(); }
+    refreshLookViews();
+  }
+
+  function undoLook() {
+    const prev = lookHist.past.pop();
+    if (!prev) { toast('Nothing to undo', 'ok'); return; }
+    setLook(prev, { undoable: false });
+    toast('Look change undone', 'ok');
+  }
+
+  function resetLook() {
+    if (UiPrefs.isDefault(state.ui) && state.palette === 'midnight') { toast('Already the default look', 'ok'); return; }
+    setLook({ ui: UiPrefs.defaults(), palette: 'midnight' });
+    toast('Back to the default look. Undo brings yours back.', 'ok');
+  }
+
+  function applyLookPreset(id) {
+    const p = UiPrefs.PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    setLook({ ui: UiPrefs.applyPreset(state.ui, id), palette: state.palette });
+    if (!state.config.uiHintSeen) saveConfigPatch({ uiHintSeen: true });
+  }
+
+  async function copyLook() {
+    const text = UiPrefs.exportLook(state.ui, state.palette);
+    let ok = false;
+    try { ok = api.uiClipboardWrite ? await api.uiClipboardWrite(text) : (await navigator.clipboard.writeText(text), true); } catch (_) { ok = false; }
+    toast(ok ? 'Look copied. Paste it anywhere to share it.' : 'Couldn’t copy the look', ok ? 'ok' : 'error');
+  }
+
+  async function pasteLook() {
+    const text = api.uiClipboardText ? await api.uiClipboardText().catch(() => '') : '';
+    const look = UiPrefs.importLook(text, state.ui, PALETTES);
+    if (!look) { toast('No look on the clipboard. Copy a GameVault look first.', 'error'); return; }
+    setLook({ ui: look.ui, palette: look.palette || state.palette });
+    toast('Look applied. Undo brings yours back.', 'ok');
+  }
+
+  // keeps the preset highlight and the Undo button in step with the prefs
+  function syncLookTools() {
+    const preset = UiPrefs.presetOf(state.ui);
+    for (const b of document.querySelectorAll('[data-look-preset]')) {
+      const on = b.dataset.lookPreset === preset;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    for (const b of document.querySelectorAll('[data-look-undo]')) b.disabled = !lookHist.past.length;
+  }
+
+  // a whole look changed at once: redraw the open controls so they show it
+  function refreshLookViews() {
+    if (customize.isOpen()) customize.render();
+    if (state.settingsOpen && state.settingsSection === 'appearance') {
+      const panel = document.querySelector('#st-panel');
+      const top = panel ? panel.scrollTop : 0;
+      renderSettings().then(() => { const p2 = document.querySelector('#st-panel'); if (p2) p2.scrollTop = top; });
+    }
+  }
+
+  // What sits behind the glass (Settings → Appearance → Background): the moving
+  // colours (lib/ambient.js), the selected game's art, a solid colour, or the
+  // user's own picture or video. The file is a copy in userData that never
+  // syncs; a video plays muted and loops, and holds still while the window is
+  // hidden, a game runs, on Lite, or with reduced motion.
+  const backdrop = (() => {
+    let host = null;
+    let layers = [];
+    let front = 0;
+    let video = null;
+    let shown = '';           // what the layers show now ('image:…', 'art:…', 'video:…')
+    let artGame = null;
+    let artTimer = 0;
+    let warned = '';
+    const html = document.documentElement;
+
+    const ensure = () => {
+      if (host) return host;
+      const amb = document.getElementById('ambient');
+      if (!amb) return null;
+      host = document.createElement('div');
+      host.className = 'ambient-media';
+      amb.appendChild(host);
+      document.addEventListener('visibilitychange', play);
+      new MutationObserver(play).observe(html, { attributes: true, attributeFilter: ['data-tier'] });
+      return host;
+    };
+    const clear = () => {
+      if (!host) return;
+      if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
+      host.textContent = '';
+      layers = []; video = null; shown = '';
+    };
+    const artOf = (g) => (g && ((g._noHero ? '' : (g._hero || g.heroUrl)) || g._cover || g.coverUrl)) || '';
+    const firstArtGame = () => {
+      const withArt = state.games.filter((g) => artOf(g));
+      return withArt.sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))[0] || null;
+    };
+    const missing = (what) => {
+      // the copy is gone (cleaned up, another PC's settings): back to the moving colours here only
+      if (warned !== what) { warned = what; toast(`Couldn’t load your background ${what}`, 'error'); }
+      if (state.ui) applyUi({ ...state.ui, background: 'fluid' });
+    };
+
+    function showImage(url, key, kind) {
+      if (shown === key) return;
+      if (video || !layers.length) clear();
+      shown = key;
+      if (!layers.length) {
+        for (let i = 0; i < 2; i++) { const l = document.createElement('div'); l.className = 'amb-layer'; host.appendChild(l); layers.push(l); }
+      }
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = () => {
+        if (shown !== key) return;
+        const back = layers[front ^ 1];
+        back.style.backgroundImage = cssUrl(url);
+        layers[front].classList.remove('is-on');
+        back.classList.add('is-on');
+        front ^= 1;
+      };
+      img.onerror = () => { if (shown === key && kind === 'image') missing('picture'); };
+      img.src = toFileUrl(url);
+    }
+
+    function showVideo(file) {
+      const key = `video:${file}`;
+      if (shown === key && video) return;
+      clear();
+      shown = key;
+      video = document.createElement('video');
+      video.className = 'amb-video';
+      video.muted = true; video.defaultMuted = true;
+      video.loop = true; video.playsInline = true;
+      video.preload = 'auto';
+      video.disablePictureInPicture = true;
+      video.setAttribute('aria-hidden', 'true');
+      video.onerror = () => { if (shown === key) missing('video'); };
+      video.src = toFileUrl(file);
+      host.appendChild(video);
+    }
+
+    function play() {
+      if (!video) return;
+      const hold = document.hidden || html.dataset.tier === 'lite' || prefersReducedMotion()
+        || Object.values(state.live || {}).some((v) => typeof v === 'number');
+      if (hold) video.pause();
+      else { const p = video.play(); if (p && p.catch) p.catch(() => {}); }
+    }
+
+    function sync() {
+      const ui = state.ui;
+      const amb = document.getElementById('ambient');
+      if (!ui || !amb) return;
+      const mode = ui.background;
+      amb.classList.toggle('has-backdrop', mode !== 'fluid');
+      if (!ensure()) return;
+      host.dataset.kind = mode;
+      const fileOk = ui.backgroundFile && ui.backgroundKind === mode;
+      if (mode === 'image' && fileOk) showImage(ui.backgroundFile, `image:${ui.backgroundFile}`, 'image');
+      else if (mode === 'video' && fileOk) showVideo(ui.backgroundFile);
+      else if (mode === 'art') {
+        const g = artGame || firstArtGame();
+        const url = artOf(g);
+        if (url) showImage(url, `art:${url}`, 'art');
+        else clear();
+      } else clear();
+      play();
+    }
+
+    /** The art background follows the game in front: the shelf's stage, the open details. */
+    function art(g) {
+      if (!g) return;
+      artGame = g;
+      if (!state.ui || state.ui.background !== 'art') return;
+      clearTimeout(artTimer);
+      artTimer = setTimeout(() => {
+        const url = artOf(artGame);
+        if (url && host) showImage(url, `art:${url}`, 'art');
+      }, 220);
+    }
+
+    return { sync, art, play };
+  })();
 
   // The places the sidebar leads to, in order (Ctrl+1..6 and the Go-to menu).
   const NAV_PLACES = [
@@ -458,6 +702,8 @@
       patch.palette = look.palette;
     }
     saveConfigPatch(patch);
+    lookHist.committed = lookSnap();
+    if (customize.isOpen() || (state.settingsOpen && state.settingsSection === 'appearance')) refreshLookViews();
   }
 
   // Measures real frame pacing for ~2s and steps down once if we're too slow.
@@ -2200,6 +2446,7 @@
 
   function renderShelfStage(g) {
     ensureShelfDom();
+    backdrop.art(g);
     const id = String(g.id);
     const live = state.live[id];
     const running = typeof live === 'number';
@@ -2554,6 +2801,7 @@
     const active = document.activeElement;
     state._focusReturn = (active && active.id === 'q') ? null : active;
     state.selectedId = String(id);
+    backdrop.art(state.games.find((x) => String(x.id) === String(id)));
     renderDetail();
     $('#topbar').hidden = false;
     const fb = $('#filterbar'); if (fb) fb.hidden = true;
@@ -3555,8 +3803,11 @@
     }, 320);
   }
 
+  // Windows' own setting, or Settings → Appearance → Motion set to Reduced or Off
+  const systemReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   function prefersReducedMotion() {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const m = document.documentElement.dataset.uiMotion;
+    return m === 'reduced' || m === 'off' || systemReducedMotion();
   }
 
   // iOS sheet: drag down from the header; velocity decides commit vs. spring back.
@@ -5038,7 +5289,7 @@
   const SETTINGS_SECTIONS = [
     { id: 'general', label: 'General', desc: 'Startup, the window and the in-game overlay.',
       icon: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>' },
-    { id: 'appearance', label: 'Appearance', desc: 'Colours, visual quality and motion.',
+    { id: 'appearance', label: 'Appearance', desc: 'Layout, colours, size and motion.',
       icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17z" fill="currentColor" stroke="none"/>' },
     { id: 'library', label: 'Library & import', desc: 'Artwork, your Steam account and importing games.',
       icon: '<rect x="3.5" y="4" width="7" height="16" rx="1.5"/><rect x="13.5" y="4" width="7" height="9" rx="1.5"/><path d="M13.5 17h7M13.5 20h4"/>' },
@@ -5833,6 +6084,276 @@
     };
   }
 
+  // A slider with its value beside it (Settings → Appearance).
+  const stRange = (attr, value, min, max, label) => `
+    <div class="st-range-wrap"><input type="range" class="st-range" ${attr} min="${min}" max="${max}" step="1" value="${value}" aria-label="${esc(label)}" /><output class="st-range-val">${value}%</output></div>`;
+  // Tint is a 0–100 amount, not a percentage of something
+  const rangeText = (attr, v) => (attr === 'data-ui-tint' ? String(v) : `${v}%`);
+
+  const stAccentPicker = (ui) => {
+    const known = UiPrefs.ACCENTS.some(([h]) => h === ui.accent);
+    const custom = ui.accent && !known ? ui.accent : null;
+    return `<div class="acc-row" data-ui-accent-group role="radiogroup" aria-label="Accent colour">
+      <button type="button" class="acc-sw is-auto${!ui.accent ? ' is-active' : ''}" data-value="" role="radio" aria-checked="${!ui.accent}" aria-label="The palette’s own" title="The palette’s own"><i class="pal-sw" data-value="${esc(state.palette)}"></i></button>
+      ${UiPrefs.ACCENTS.map(([h, name]) => `<button type="button" class="acc-sw${ui.accent === h ? ' is-active' : ''}" data-value="${h}" style="--sw:${h}" role="radio" aria-checked="${ui.accent === h}" aria-label="${esc(name)}" title="${esc(name)}"></button>`).join('')}
+      <label class="acc-sw is-custom${custom ? ' is-active' : ''}" title="Any colour"${custom ? ` style="--sw:${custom}"` : ''}>
+        <input type="color" data-ui-accent-custom value="${esc(custom || ui.accent || '#4c7dff')}" aria-label="Pick any accent colour" />
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </label>
+    </div>`;
+  };
+
+  function wireLookControls(panel) {
+    // accent swatches
+    const group = panel.querySelector('[data-ui-accent-group]');
+    const markAccent = (value) => {
+      if (!group) return;
+      const known = UiPrefs.ACCENTS.some(([h]) => h === value);
+      for (const b of group.querySelectorAll('button.acc-sw')) {
+        const on = (b.dataset.value || null) === (value || null);
+        b.classList.toggle('is-active', on);
+        b.setAttribute('aria-checked', String(on));
+      }
+      const custom = group.querySelector('.is-custom');
+      custom.classList.toggle('is-active', !!value && !known);
+      if (value && !known) custom.style.setProperty('--sw', value); else custom.style.removeProperty('--sw');
+    };
+    if (group) {
+      for (const b of group.querySelectorAll('button.acc-sw')) {
+        b.onclick = () => { const v = b.dataset.value || null; markAccent(v); setUi({ accent: v }); };
+      }
+      const pickAny = group.querySelector('[data-ui-accent-custom]');
+      pickAny.oninput = () => { markAccent(pickAny.value); setUi({ accent: pickAny.value }, { persist: false }); };
+      pickAny.onchange = () => { markAccent(pickAny.value); setUi({ accent: pickAny.value }); };
+    }
+
+    // sliders: live while dragging, saved when let go
+    const slider = (attr, patchOf) => {
+      const el = panel.querySelector(`[${attr}]`);
+      if (!el) return;
+      const out = el.parentElement.querySelector('output');
+      const val = () => Math.round(Number(el.value));
+      el.oninput = () => { if (out) out.textContent = rangeText(attr, val()); setUi(patchOf(val()), { persist: false }); };
+      el.onchange = () => setUi(patchOf(val()));
+      if (out) out.textContent = rangeText(attr, val());
+    };
+    const glass = (k) => (v) => ({ glass: { ...state.ui.glass, [k]: v } });
+    slider('data-ui-tint', (v) => ({ tint: v }));
+    slider('data-ui-glass-blur', glass('blur'));
+    slider('data-ui-glass-opacity', glass('opacity'));
+    slider('data-ui-glass-sat', glass('saturation'));
+    slider('data-ui-bg-dim', (v) => ({ backgroundDim: v }));
+
+    const rows = panel.querySelector('[data-ui-glass-rows]');
+    const solid = panel.querySelector('[data-ui-solid-switch]');
+    const showGlass = () => {
+      if (!rows) return;
+      rows.classList.toggle('is-disabled', state.ui.glass.solid);
+      for (const r of rows.querySelectorAll('input')) r.disabled = state.ui.glass.solid;
+    };
+    showGlass();
+    if (solid) solid.onchange = () => { setUi({ glass: { ...state.ui.glass, solid: solid.checked } }); showGlass(); };
+    const reset = panel.querySelector('[data-ui-glass-reset]');
+    if (reset) reset.onclick = () => {
+      const d = UiPrefs.defaults().glass;
+      setUi({ glass: d });
+      if (solid) solid.checked = false;
+      for (const [attr, v] of [['data-ui-glass-blur', d.blur], ['data-ui-glass-opacity', d.opacity], ['data-ui-glass-sat', d.saturation]]) {
+        const el = panel.querySelector(`[${attr}]`);
+        if (el) { el.value = v; const out = el.parentElement.querySelector('output'); if (out) out.textContent = `${v}%`; }
+      }
+      showGlass();
+    };
+
+    // background
+    const bgGroup = panel.querySelector('[data-ui-bg-group]');
+    const markBg = () => {
+      if (!bgGroup) return;
+      for (const p of bgGroup.querySelectorAll('.pill')) p.classList.toggle('is-active', p.dataset.value === state.ui.background);
+      for (const el of panel.querySelectorAll('[data-ui-bg-only]')) el.hidden = !el.dataset.uiBgOnly.split(' ').includes(state.ui.background);
+      const desc = panel.querySelector('#st-bg-file');
+      if (desc) desc.textContent = state.ui.backgroundKind === 'video' ? 'Your video, kept on this PC.' : 'Your picture, kept on this PC.';
+    };
+    const pickFile = async (kind) => {
+      if (!api.uiBackgroundPick) return;
+      const res = await api.uiBackgroundPick(kind).catch(() => ({ error: 'Couldn’t open that file.' }));
+      if (res && res.file) setUi({ background: kind, backgroundFile: res.file, backgroundKind: res.kind });
+      else if (res && res.error) toast(res.error, 'error');
+      markBg();
+    };
+    if (bgGroup) {
+      for (const pill of bgGroup.querySelectorAll('.pill')) {
+        pill.onclick = () => {
+          const v = pill.dataset.value;
+          const ui = state.ui;
+          if ((v === 'image' || v === 'video') && !(ui.backgroundFile && ui.backgroundKind === v)) { pickFile(v); return; }
+          setUi({ background: v });
+          markBg();
+        };
+      }
+    }
+    const change = panel.querySelector('[data-ui-bg-change]');
+    if (change) change.onclick = () => pickFile(state.ui.background === 'video' ? 'video' : 'image');
+    const remove = panel.querySelector('[data-ui-bg-remove]');
+    if (remove) remove.onclick = async () => {
+      setUi({ background: 'fluid', backgroundFile: null, backgroundKind: null });
+      markBg();
+      if (api.uiBackgroundClear) await api.uiBackgroundClear().catch(() => {});
+    };
+    const color = panel.querySelector('[data-ui-bg-color]');
+    if (color) {
+      if (!state.ui.backgroundColor) color.value = (getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#08090c').slice(0, 7);
+      color.oninput = () => setUi({ backgroundColor: color.value }, { persist: false });
+      color.onchange = () => setUi({ backgroundColor: color.value });
+    }
+    markBg();
+  }
+
+  // ---- presets, share, undo and reset (top of Appearance and the Customize panel)
+  const PRESET_ART = '<i class="pa-nav"></i><i class="pa-top"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i>';
+  function stLookTools(ui, opts = {}) {
+    const preset = UiPrefs.presetOf(ui);
+    const isNew = !state.config.uiHintSeen && !opts.drawer;
+    const presets = `<div class="cz-presets" role="group" aria-label="Presets">${UiPrefs.PRESETS.map((p) => `
+      <button type="button" class="cz-preset${p.id === preset ? ' is-active' : ''}" data-look-preset="${p.id}" aria-pressed="${p.id === preset}" title="${esc(p.desc)}">
+        <span class="cz-art" data-art="${p.id}" aria-hidden="true">${PRESET_ART}</span>
+        <span class="cz-preset-name">${esc(p.name)}</span>
+      </button>`).join('')}</div>`;
+    return stCard(`Customize${isNew ? '<span class="st-soon">New</span>' : ''}`,
+      (opts.drawer ? '' : stRow('Customize live', 'A panel beside your library, so you see each change as you make it. Right-click any empty spot to open it too.', '<button type="button" class="btn btn-primary" data-cz-open>Customize…</button>')) +
+      stRow('Presets', 'A starting point to tweak. Your colours, background, size and motion stay as they are.', presets, { wide: true }) +
+      stRow('Share a look', 'Copy your look as a short code to send to a friend, or paste one you got. Pictures and videos stay on this PC.',
+        '<div class="st-inline"><button type="button" class="btn btn-ghost" data-look-copy>Copy look</button><button type="button" class="btn btn-ghost" data-look-paste>Paste look</button></div>') +
+      stRow('Undo and reset', 'Undo steps back through your last 10 changes.',
+        `<div class="st-inline"><button type="button" class="btn btn-ghost" data-look-undo ${lookHist.past.length ? '' : 'disabled'}>Undo</button><button type="button" class="btn btn-ghost" data-look-reset>Reset to default</button></div>`));
+  }
+
+  function wireLookTools(panel) {
+    for (const b of panel.querySelectorAll('[data-look-preset]')) b.onclick = () => applyLookPreset(b.dataset.lookPreset);
+    const on = (sel, fn) => { const b = panel.querySelector(sel); if (b) b.onclick = fn; };
+    on('[data-cz-open]', () => customize.open());
+    on('[data-look-copy]', copyLook);
+    on('[data-look-paste]', pasteLook);
+    on('[data-look-undo]', undoLook);
+    on('[data-look-reset]', resetLook);
+  }
+
+  // ---- the Customize panel: Appearance beside the library, every change live
+  const customize = {
+    el: null,
+    isOpen() { return !!(this.el && !this.el.hidden); },
+    async render() {
+      if (!this.el) return;
+      const body = this.el.querySelector('.cz-body');
+      const top = body.scrollTop;
+      const built = await SETTINGS_RENDERERS.appearance({ drawer: true });
+      body.innerHTML = built.html;
+      built.wire(body);
+      body.scrollTop = top;
+    },
+    async open() {
+      if (document.documentElement.classList.contains('is-bigpicture')) return;
+      if (state.settingsOpen) closeSettings({ restoreFocus: false });
+      if (!this.el) {
+        const el = document.createElement('aside');
+        el.id = 'cz';
+        el.className = 'cz';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-label', 'Customize');
+        el.hidden = true;
+        el.innerHTML = `
+          <header class="cz-head">
+            <h2 class="cz-title">Customize</h2>
+            <button type="button" class="cz-x" data-cz-close aria-label="Close" title="Close (Esc)">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </header>
+          <div class="cz-body st-body" data-pad-region="cz"></div>`;
+        el.querySelector('[data-cz-close]').onclick = () => this.close();
+        el.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape' || e.defaultPrevented) return;
+          if (e.target.closest && e.target.closest('.pal-wrap, .sort-wrap') && document.querySelector('.cz .sort-menu:not([hidden])')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          this.close();
+        });
+        document.body.appendChild(el);
+        this.el = el;
+      }
+      if (!state.config.uiHintSeen) saveConfigPatch({ uiHintSeen: true });
+      const was = this.isOpen();
+      this._back = was ? this._back : document.activeElement;
+      await this.render();
+      this.el.hidden = false;
+      if (!was) {
+        sfx('open');
+        if (!prefersReducedMotion()) this.el.animate([{ opacity: 0, transform: 'translateX(24px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' });
+      }
+      this.el.querySelector('.cz-preset.is-active, .cz-preset')?.focus({ preventScroll: true });
+    },
+    close() {
+      if (!this.isOpen()) return;
+      sfx('close');
+      this.el.hidden = true;
+      this.el.querySelector('.cz-body').innerHTML = '';
+      const back = this._back;
+      this._back = null;
+      if (back && back.isConnected && typeof back.focus === 'function') back.focus({ preventScroll: true });
+    },
+  };
+
+  // right-click an empty spot (not a game, not a text field): a small menu
+  function initCustomize() {
+    let menu = null;
+    const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
+    document.addEventListener('contextmenu', (e) => {
+      closeMenu();
+      if (e.defaultPrevented) return;
+      if (gameFromEl(e.target) || (e.target.closest && e.target.closest('#game-view'))) return; // a game's own menu
+      if (document.documentElement.classList.contains('is-bigpicture')) return;
+      if (!$('#modal').hidden || spotHooks.isOpen()) return;
+      if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], #cz')) return;
+      e.preventDefault();
+      menu = document.createElement('div');
+      menu.className = 'sort-menu cz-menu';
+      menu.setAttribute('role', 'menu');
+      menu.innerHTML = `
+        <button type="button" class="sort-item" role="menuitem" data-m="open"><span>Customize look…</span></button>
+        <button type="button" class="sort-item" role="menuitem" data-m="undo" ${lookHist.past.length ? '' : 'disabled'}><span>Undo look change</span></button>`;
+      document.body.appendChild(menu);
+      const r = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(6, Math.min(e.clientX, innerWidth - r.width - 6))}px`;
+      menu.style.top = `${Math.max(6, Math.min(e.clientY, innerHeight - r.height - 6))}px`;
+      menu.addEventListener('click', (ev) => {
+        const b = ev.target.closest('[data-m]');
+        if (!b || b.disabled) return;
+        closeMenu();
+        if (b.dataset.m === 'open') customize.open(); else undoLook();
+      });
+      menu.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closeMenu(); }
+        if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+          ev.preventDefault();
+          const items = [...menu.querySelectorAll('button:not([disabled])')];
+          const i = items.indexOf(document.activeElement);
+          items[(i + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+        }
+      });
+      menu.querySelector('button')?.focus({ preventScroll: true });
+    });
+    document.addEventListener('pointerdown', (e) => { if (menu && !menu.contains(e.target)) closeMenu(); }, true);
+    window.addEventListener('blur', closeMenu);
+    window.addEventListener('resize', closeMenu);
+    // Ctrl+Z undoes a look change while the Customize panel or Appearance is open
+    document.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'z' || e.key === 'Z'))) return;
+      if (e.target.closest && e.target.closest('input[type="text"], input[type="search"], textarea, [contenteditable="true"]')) return;
+      if (!customize.isOpen() && !(state.settingsOpen && state.settingsSection === 'appearance')) return;
+      e.preventDefault();
+      undoLook();
+    });
+  }
+
   function wirePills(panel, selector, onPick) {
     const group = panel.querySelector(selector);
     if (!group) return;
@@ -5920,11 +6441,12 @@
       };
     },
 
-    async appearance() {
-      const reduced = prefersReducedMotion();
+    async appearance(opts = {}) {
+      const sysReduced = systemReducedMotion();
       const ui = state.ui || UiPrefs.defaults();
       return {
-        html: stCard('Layout',
+        html: stLookTools(ui, opts) +
+          stCard('Layout',
           stRow('Navigation', 'Where the Library, Wishlist, Activity and Settings buttons live. With None, use the menu button in the top bar or Ctrl 1–6.',
             stPills('data-ui-nav-group', [['sidebar', 'Sidebar'], ['rail', 'Rail'], ['dock', 'Dock'], ['top', 'Top tabs'], ['none', 'None']], ui.nav), { wide: true }) +
           `<div data-ui-only="sidebar rail">${stRow('Side', 'Which edge of the window it sits on.', stPills('data-ui-side-group', [['left', 'Left'], ['right', 'Right']], ui.navSide))}</div>` +
@@ -5935,10 +6457,39 @@
           }</div>` +
           stRow('Search', 'Where the search box sits. It always opens with Ctrl F or /, and Y on a controller.',
             stPills('data-ui-search-group', [['top-center', 'Top centre'], ['top-left', 'Top left'], ['in-nav', 'In the navigation'], ['floating', 'Corner button'], ['hidden', 'Hidden']], ui.search), { wide: true })) +
-          stCard('Look',
-          stRow('Palette', 'Sets the accent and the colors of the moving background. Paper is the light one.', stPalettePicker(state.palette)) +
-          stRow('Visual quality', 'Cinematic adds the animated background. Lite turns off blur and motion — best on older PCs.', stPills('data-tier-group', [['cinematic', 'Cinematic'], ['standard', 'Standard'], ['lite', 'Lite']], state.tier)) +
-          stRow('Motion', `Follows your system’s “reduce motion” setting — currently <b>${reduced ? 'reduced' : 'full'}</b>.`, '')),
+          stCard('Size and shape',
+            stRow('Size', 'Makes everything bigger or smaller: text, buttons and covers. Big Picture keeps its own size.',
+              stPills('data-ui-size-group', [['90', '90%'], ['100', '100%'], ['110', '110%'], ['120', '120%']], String(ui.fontScale))) +
+            stRow('Spacing', 'Compact fits more on screen with tighter rows and gaps.', stPills('data-ui-density-group', [['comfortable', 'Comfortable'], ['compact', 'Compact']], ui.density)) +
+            stRow('Corners', 'How rounded cards, buttons and panels are.', stPills('data-ui-radius-group', [['0', 'Sharp'], ['1', 'Default'], ['2', 'Round']], String(ui.radius)))) +
+          stCard('Game cards',
+            stRow('Card size', 'How big the covers are in the card view.', stPills('data-ui-cardsize-group', [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']], ui.cardSize)) +
+            stRow('Titles', 'The game’s name under its cover.', stSwitch('data-ui-titles-switch', ui.showTitles, { label: 'Titles' })) +
+            stRow('Playtime', 'Hours played and when you last played.', stSwitch('data-ui-playtime-switch', ui.showPlaytime, { label: 'Playtime' })) +
+            stRow('Ratings', 'Your rating in the corner of the cover.', stSwitch('data-ui-ratings-switch', ui.showRatings, { label: 'Ratings' })) +
+            stRow('Shelf covers', 'How big the covers are along the bottom of the shelf view.', stPills('data-ui-shelfsize-group', [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']], ui.shelfSize))) +
+          stCard('Colour',
+            stRow('Palette', 'Sets the surfaces, the accent and the colours of the moving background. Paper is the light one.', stPalettePicker(state.palette)) +
+            stRow('Accent', 'Buttons, highlights and the moving background’s main colour. The first one is the palette’s own.', stAccentPicker(ui), { wide: true }) +
+            stRow('Tint', 'How much the panels lean toward the accent. 0 keeps them neutral.', stRange('data-ui-tint', ui.tint, 0, 100, 'Tint'))) +
+          stCard('Glass',
+            stRow('Solid panels', 'No see-through glass: the panels are opaque. Also lighter on older PCs.', stSwitch('data-ui-solid-switch', ui.glass.solid, { label: 'Solid panels' })) +
+            `<div data-ui-glass-rows>${
+              stRow('Blur', 'How soft the background looks through the panels.', stRange('data-ui-glass-blur', ui.glass.blur, 0, 200, 'Blur')) +
+              stRow('Opacity', 'Lower lets more of the background show through.', stRange('data-ui-glass-opacity', ui.glass.opacity, 40, 140, 'Opacity')) +
+              stRow('Colour boost', 'How vivid the background is behind the glass.', stRange('data-ui-glass-sat', ui.glass.saturation, 50, 150, 'Colour boost'))
+            }</div>` +
+            stRow('', '', '<button type="button" class="btn btn-ghost" data-ui-glass-reset>Reset glass</button>')) +
+          stCard('Background',
+            stRow('Background', 'What sits behind the glass. Your picture or video stays on this PC and isn’t synced.',
+              stPills('data-ui-bg-group', [['fluid', 'Moving colours'], ['art', 'Game art'], ['solid', 'Solid colour'], ['image', 'Picture'], ['video', 'Video']], ui.background), { wide: true }) +
+            `<div data-ui-bg-only="solid">${stRow('Colour', '', `<input type="color" class="st-color" data-ui-bg-color value="${esc(ui.backgroundColor || '#08090c')}" aria-label="Background colour" />`)}</div>` +
+            `<div data-ui-bg-only="image video">${stRow('File', '', '<div class="st-inline"><button type="button" class="btn btn-ghost" data-ui-bg-change>Choose another…</button><button type="button" class="btn btn-ghost" data-ui-bg-remove>Remove</button></div>', { descId: 'st-bg-file' })}</div>` +
+            `<div data-ui-bg-only="art image video">${stRow('Dim', 'Darkens the background so the library stays easy to read.', stRange('data-ui-bg-dim', ui.backgroundDim, 0, 100, 'Dim'))}</div>`) +
+          stCard('Quality',
+            stRow('Visual quality', 'Cinematic adds the animated background. Lite turns off blur and motion — best on older PCs.', stPills('data-tier-group', [['cinematic', 'Cinematic'], ['standard', 'Standard'], ['lite', 'Lite']], state.tier)) +
+            stRow('Motion', `Reduced stops things sliding, tilting and moving. Off also makes every change instant. Follow Windows uses its “Animation effects” setting, now <b>${sysReduced ? 'off' : 'on'}</b>.`,
+              stPills('data-ui-motion-group', [['full', 'Follow Windows'], ['reduced', 'Reduced'], ['off', 'Off']], ui.motion), { wide: true })),
         wire(panel) {
           wirePalettePicker(panel, (v) => applyPalette(v, { announce: true, persist: true }));
           wirePills(panel, '[data-tier-group]', (v) => applyTier(v, { announce: true, persist: true }));
@@ -5953,6 +6504,18 @@
           wirePills(panel, '[data-ui-dockstyle-group]', (v) => setUi({ dockStyle: v }));
           const hide = panel.querySelector('[data-ui-dock-hide]');
           if (hide) hide.addEventListener('change', () => setUi({ dockAutoHide: hide.checked }));
+          wirePills(panel, '[data-ui-size-group]', (v) => setUi({ fontScale: Number(v) }));
+          wirePills(panel, '[data-ui-density-group]', (v) => { setUi({ density: v }); requestAnimationFrame(() => { syncSidePill(); spotHooks.resync(); }); });
+          wirePills(panel, '[data-ui-radius-group]', (v) => setUi({ radius: Number(v) }));
+          wirePills(panel, '[data-ui-cardsize-group]', (v) => setUi({ cardSize: v }));
+          wirePills(panel, '[data-ui-shelfsize-group]', (v) => setUi({ shelfSize: v }));
+          wirePills(panel, '[data-ui-motion-group]', (v) => setUi({ motion: v }));
+          for (const [attr, key] of [['data-ui-titles-switch', 'showTitles'], ['data-ui-playtime-switch', 'showPlaytime'], ['data-ui-ratings-switch', 'showRatings']]) {
+            const sw = panel.querySelector(`[${attr}]`);
+            if (sw) sw.addEventListener('change', () => setUi({ [key]: sw.checked }));
+          }
+          wireLookControls(panel);
+          wireLookTools(panel);
         },
       };
     },
@@ -6770,6 +7333,7 @@
         saveGamesSoon();
       }
       refreshGameUi(g);
+      backdrop.play();
       toast(`Launched ${g ? g.name : 'game'}`, 'ok');
     });
 
@@ -6781,6 +7345,7 @@
       state.live[id] = mins;
       if (!state.liveStart) state.liveStart = {};
       state.liveStart[id] = Date.now() - mins * 60000;
+      if (!wasRunning) backdrop.play();
       const g = findGame(id);
       if (!g) return;
       updateCard(g);
@@ -6793,6 +7358,7 @@
       clearLaunchWatchdog(id);
       delete state.live[id];
       if (state.liveStart) delete state.liveStart[id];
+      backdrop.play();
       const g = findGame(id);
       if (!g) return;
       // The tracker discards blips under 30 s (launcher hand-off, crash on
@@ -6977,6 +7543,7 @@
     const step = (name, fn) => { try { fn(); } catch (e) { reportError(`boot:${name}`, e); } };
     step('palette', () => applyPalette(state.palette));
     step('ui', () => applyUi(state.ui || state.config.ui));
+    step('look', () => { lookHist.committed = lookSnap(); initCustomize(); });
     step('nav', () => initNavLayouts());
     step('tier', () => applyTier(state.tier));
     step('view', () => applyView());
@@ -8848,6 +9415,7 @@
   async function enterBigPicture({ instant = false } = {}) {
     if (bp.on || bp.busy || !window.BigPicture) return;
     bp.busy = true;
+    customize.close(); // Big Picture keeps its own look
     try {
       bp.saved = { view: state.view, sort: state.sort, filter: state.filter };
       bp.on = true;

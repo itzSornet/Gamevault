@@ -27,6 +27,8 @@
     density: ['comfortable', 'compact'],
     background: ['fluid', 'art', 'solid', 'image', 'video'],
     cardSize: ['small', 'medium', 'large'],
+    shelfSize: ['small', 'medium', 'large'],
+    // full = follow Windows' own "animation effects" setting (the old behaviour)
     motion: ['full', 'reduced', 'off'],
     colorScheme: ['palette', 'system'],
   };
@@ -61,6 +63,7 @@
     backgroundColor: null,
     backgroundDim: 40,
     cardSize: 'medium',
+    shelfSize: 'medium',
     showTitles: true,
     showPlaytime: true,
     showRatings: true,
@@ -68,6 +71,13 @@
     fontScale: 100,
     colorScheme: 'palette',
   });
+
+  // the accent swatches in Settings → Appearance (any other colour works too)
+  const ACCENTS = Object.freeze([
+    ['#4c7dff', 'Blue'], ['#7c4dff', 'Violet'], ['#d946ef', 'Magenta'], ['#ec4899', 'Pink'],
+    ['#ef4444', 'Red'], ['#f0603a', 'Orange'], ['#f5a524', 'Amber'], ['#84cc16', 'Lime'],
+    ['#1fa774', 'Green'], ['#14b8a6', 'Teal'], ['#22b8e6', 'Sky'], ['#94a3b8', 'Slate'],
+  ]);
 
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const defaults = () => clone(DEFAULTS);
@@ -186,11 +196,44 @@
     return toHex(mix(a, toward, 0.9));
   }
 
+  // the palette colours that tint leans toward the accent
+  const TINT_KEYS = ['--bg', '--bg-2', '--surface', '--surface-2', '--surface-3', '--line', '--line-2', '--main-glass', '--hero-base', '--art-well', '--shade-rgb'];
+  const TINT_MAX = 0.2; // tint 100 = surfaces are 20% accent
+
+  function parseColor(v) {
+    if (typeof v !== 'string') return null;
+    const t = v.trim();
+    if (t.startsWith('#')) { const c = rgb(t); return c ? { c, triple: false } : null; }
+    const parts = t.split(',').map((x) => Number(x.trim()));
+    if (parts.length === 3 && parts.every((x) => Number.isFinite(x))) return { c: parts, triple: true };
+    return null;
+  }
+
+  /**
+   * Tinted versions of the palette's own colours. `base` maps a TINT_KEYS name
+   * to its current value (#hex or an "r, g, b" triple); the result keeps each
+   * value's format. Tint 0 removes the overrides (null).
+   */
+  function tintVars(base, accent, tint) {
+    const v = {};
+    const a = rgb(accent);
+    const t = Math.min(100, Math.max(0, Number(tint) || 0)) / 100 * TINT_MAX;
+    for (const k of TINT_KEYS) {
+      const p = base && parseColor(base[k]);
+      if (!a || !t || !p) { v[k] = null; continue; }
+      const m = mix(p.c, a, t);
+      v[k] = p.triple ? m.map((x) => Math.round(x)).join(', ') : toHex(m);
+    }
+    return v;
+  }
+
   /**
    * CSS custom properties for these prefs. Only keys that differ from the
    * stylesheet's own values are returned; null means "remove the override".
    * `surface` is the palette's surface colour (for accent contrast).
    */
+  const ACCENT_KEYS = ['--accent', '--accent-hi', '--accent-dim', '--accent-rgb', '--on-accent', '--wave-1'];
+
   function cssVars(ui, { surface } = {}) {
     const n = normalize(ui);
     const v = {};
@@ -202,20 +245,27 @@
       v['--accent-dim'] = `rgba(${c.join(', ')}, 0.16)`;
       v['--accent-rgb'] = c.join(', ');
       v['--on-accent'] = onColor(acc);
+      v['--wave-1'] = c.join(', ');
     } else {
-      for (const k of ['--accent', '--accent-hi', '--accent-dim', '--accent-rgb', '--on-accent']) v[k] = null;
+      for (const k of ACCENT_KEYS) v[k] = null;
     }
     const solid = n.glass.solid;
     v['--glass-blur-k'] = solid ? '0' : String(n.glass.blur / 100);
     v['--glass-sat-k'] = solid ? '1' : String(n.glass.saturation / 100);
     v['--glass-alpha-k'] = solid ? '4' : String(n.glass.opacity / 100); // alpha clamps at 1: solid = opaque
     v['--radius-k'] = String([0.35, 1, 1.6][n.radius]);
-    v['--font-k'] = String(n.fontScale / 100);
     v['--tint-k'] = String(n.tint / 100);
     v['--bg-dim'] = String(n.backgroundDim / 100);
     v['--bg-solid'] = n.backgroundColor || null;
     return v;
   }
+
+  /**
+   * Page zoom for the Size setting. Every size in the stylesheet is in px, so
+   * main zooms the page (webContents) instead of the root font size. Big
+   * Picture sets its own zoom and ignores this.
+   */
+  const zoom = (ui) => normalize(ui).fontScale / 100;
 
   /** html data-* attributes for these prefs (CSS selects on them). */
   function attrs(ui) {
@@ -230,12 +280,91 @@
       density: n.density,
       background: n.background,
       cardSize: n.cardSize,
+      shelfSize: n.shelfSize,
       motion: n.motion,
       cardTitles: n.showTitles ? '1' : '0',
       cardPlaytime: n.showPlaytime ? '1' : '0',
       cardRatings: n.showRatings ? '1' : '0',
       glassSolid: n.glass.solid ? '1' : '0',
+      customAccent: n.accent ? '1' : '0',
     };
+  }
+
+  // ------------------------------------------------------------------ presets
+
+  // A preset sets the layout, shape and glass. It keeps what is personal:
+  // colours, background, size and motion (the last two are about comfort).
+  const KEEP_ON_PRESET = ['accent', 'tint', 'background', 'backgroundFile', 'backgroundKind', 'backgroundColor', 'backgroundDim', 'colorScheme', 'fontScale', 'motion'];
+  const PRESETS = Object.freeze([
+    { id: 'default', name: 'Default', desc: 'The classic GameVault look', patch: {} },
+    { id: 'minimal', name: 'Minimal', desc: 'No navigation bar, search out of the way, solid panels', patch: { nav: 'none', search: 'hidden', glass: { solid: true } } },
+    { id: 'dock', name: 'Dock', desc: 'A floating dock along the bottom', patch: { nav: 'dock', dockPos: 'bottom', dockStyle: 'floating' } },
+    { id: 'compact', name: 'Compact', desc: 'Icon rail, tight spacing, small covers', patch: { nav: 'rail', density: 'compact', cardSize: 'small', shelfSize: 'small', radius: 0 } },
+    { id: 'couch', name: 'Couch', desc: 'Big covers and round corners, easy to read from the sofa', patch: { cardSize: 'large', shelfSize: 'large', radius: 2 } },
+    { id: 'glass', name: 'Glass', desc: 'Heavy blur and see-through panels', patch: { radius: 2, glass: { blur: 180, opacity: 60, saturation: 130 } } },
+  ]);
+
+  /** These prefs with a preset applied (unknown id = unchanged). */
+  function applyPreset(ui, id) {
+    const n = normalize(ui);
+    const p = PRESETS.find((x) => x.id === id);
+    if (!p) return n;
+    const out = { ...defaults(), ...clone(p.patch) };
+    out.glass = { ...DEFAULTS.glass, ...(p.patch.glass || {}) };
+    for (const k of KEEP_ON_PRESET) out[k] = n[k];
+    return normalize(out);
+  }
+
+  /** The preset these prefs match exactly, or null when they've been tweaked. */
+  function presetOf(ui) {
+    const n = JSON.stringify(normalize(ui));
+    const hit = PRESETS.find((p) => JSON.stringify(applyPreset(ui, p.id)) === n);
+    return hit ? hit.id : null;
+  }
+
+  // ------------------------------------------------------------------ share a look
+
+  const LOOK_TAG = 'gamevault-look';
+  const LOOK_MAX = 8 * 1024;
+
+  /**
+   * A look as one short line of JSON to paste anywhere: only what differs
+   * from the defaults, and never a file path (a custom picture or video
+   * stays on this PC).
+   */
+  function exportLook(ui, palette) {
+    const sync = syncable(ui);
+    const base = syncable(DEFAULTS);
+    const diff = {};
+    for (const k of Object.keys(sync)) {
+      if (k === 'v') continue;
+      if (JSON.stringify(sync[k]) !== JSON.stringify(base[k])) diff[k] = sync[k];
+    }
+    const out = { [LOOK_TAG]: VERSION };
+    if (typeof palette === 'string' && palette) out.palette = palette;
+    out.ui = diff;
+    return JSON.stringify(out);
+  }
+
+  /**
+   * Read a pasted look. Returns { ui, palette } (palette null when missing or
+   * not one of `palettes`), keeping this PC's own background file; null when
+   * the text isn't a GameVault look.
+   */
+  function importLook(text, local, palettes) {
+    if (typeof text !== 'string' || !text.trim() || text.length > LOOK_MAX) return null;
+    let raw;
+    try {
+      const t = text.trim();
+      // chat apps may wrap it in quotes or code fences
+      raw = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
+    } catch (_) { return null; }
+    if (!raw || typeof raw !== 'object' || !(LOOK_TAG in raw) || !raw.ui || typeof raw.ui !== 'object' || Array.isArray(raw.ui)) return null;
+    const mine = normalize(local);
+    const ui = normalize({ ...defaults(), ...raw.ui, backgroundFile: mine.backgroundFile, backgroundKind: mine.backgroundKind });
+    const list = Array.isArray(palettes) ? palettes : [];
+    const palette = typeof raw.palette === 'string' && list.includes(raw.palette) ? raw.palette : null;
+    return { ui, palette };
   }
 
   // ------------------------------------------------------------------ sync
@@ -252,5 +381,10 @@
     return tb > ta ? b : a;
   }
 
-  return { VERSION, CHOICES, RANGES, DEFAULTS, defaults, normalize, syncable, adopt, isDefault, cssVars, attrs, onColor, readableAccent, contrast: (a, b) => contrast(rgb(a), rgb(b)), newer };
+  return {
+    VERSION, CHOICES, RANGES, DEFAULTS, ACCENTS, TINT_KEYS, ACCENT_KEYS,
+    defaults, normalize, syncable, adopt, isDefault, cssVars, attrs, tintVars, zoom,
+    PRESETS, applyPreset, presetOf, exportLook, importLook,
+    onColor, readableAccent, contrast: (a, b) => contrast(rgb(a), rgb(b)), newer,
+  };
 }));
