@@ -6150,7 +6150,17 @@
       if (!rows) return;
       rows.classList.toggle('is-disabled', state.ui.glass.solid);
       for (const r of rows.querySelectorAll('input')) r.disabled = state.ui.glass.solid;
+      // Lite turns every blur off, so the Blur slider would do nothing there
+      const lite = document.documentElement.dataset.tier === 'lite';
+      const blur = panel.querySelector('[data-ui-glass-blur]');
+      if (blur) {
+        if (lite) blur.disabled = true;
+        blur.closest('.st-row')?.classList.toggle('is-disabled', lite || state.ui.glass.solid);
+      }
+      const note = panel.querySelector('[data-ui-lite-note]');
+      if (note) note.hidden = !lite || state.ui.glass.solid;
     };
+    panel._showGlass = showGlass;
     showGlass();
     if (solid) solid.onchange = () => { setUi({ glass: { ...state.ui.glass, solid: solid.checked } }); showGlass(); };
     const reset = panel.querySelector('[data-ui-glass-reset]');
@@ -6260,6 +6270,7 @@
         el.className = 'cz';
         el.setAttribute('role', 'dialog');
         el.setAttribute('aria-label', 'Customize');
+        el.dataset.padRegion = 'cz';
         el.hidden = true;
         el.innerHTML = `
           <header class="cz-head">
@@ -6268,7 +6279,7 @@
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
           </header>
-          <div class="cz-body st-body" data-pad-region="cz"></div>`;
+          <div class="cz-body st-body"></div>`;
         el.querySelector('[data-cz-close]').onclick = () => this.close();
         el.addEventListener('keydown', (e) => {
           if (e.key !== 'Escape' || e.defaultPrevented) return;
@@ -6476,6 +6487,7 @@
             stRow('Solid panels', 'No see-through glass: the panels are opaque. Also lighter on older PCs.', stSwitch('data-ui-solid-switch', ui.glass.solid, { label: 'Solid panels' })) +
             `<div data-ui-glass-rows>${
               stRow('Blur', 'How soft the background looks through the panels.', stRange('data-ui-glass-blur', ui.glass.blur, 0, 200, 'Blur')) +
+              `<div data-ui-lite-note hidden>${stRow('', 'Visual quality is on Lite, which turns blur off. Pick Standard or Cinematic under Quality to use it.', '')}</div>` +
               stRow('Opacity', 'Lower lets more of the background show through.', stRange('data-ui-glass-opacity', ui.glass.opacity, 40, 140, 'Opacity')) +
               stRow('Colour boost', 'How vivid the background is behind the glass.', stRange('data-ui-glass-sat', ui.glass.saturation, 50, 150, 'Colour boost'))
             }</div>` +
@@ -6492,7 +6504,7 @@
               stPills('data-ui-motion-group', [['full', 'Follow Windows'], ['reduced', 'Reduced'], ['off', 'Off']], ui.motion), { wide: true })),
         wire(panel) {
           wirePalettePicker(panel, (v) => applyPalette(v, { announce: true, persist: true }));
-          wirePills(panel, '[data-tier-group]', (v) => applyTier(v, { announce: true, persist: true }));
+          wirePills(panel, '[data-tier-group]', (v) => { applyTier(v, { announce: true, persist: true }); if (panel._showGlass) panel._showGlass(); });
           const showFor = () => {
             for (const el of panel.querySelectorAll('[data-ui-only]')) el.hidden = !el.dataset.uiOnly.split(' ').includes(state.ui.nav);
           };
@@ -8940,6 +8952,9 @@
     if (modal && !modal.hidden) return modal;
     if (spotHooks.isOpen()) return $('#spot');
     const sort = $('#sort-menu');
+    const menuOpen = Array.from(document.querySelectorAll('[role="menu"]')).some((m) => !m.hidden && m.getClientRects().length && !m.closest('#cz'));
+    // the Customize panel holds the controller while it's open (B closes it)
+    if (customize.isOpen() && !menuOpen && !(sort && !sort.hidden)) return customize.el;
     if (sort && !sort.hidden) return sort;
     const menu = Array.from(document.querySelectorAll('[role="menu"]')).find((m) => !m.hidden && m.getClientRects().length);
     if (menu) return menu;
@@ -9068,7 +9083,7 @@
       return padScroll((a === 'pageDown' ? 1 : -1) * s.clientHeight * 0.85, true);
     }
     if (a === 'menu') {
-      if (!$('#modal').hidden || spotHooks.isOpen()) return;
+      if (!$('#modal').hidden || spotHooks.isOpen() || customize.isOpen()) return;
       // on a game: its options (edit, finished, folder…); anywhere else: Settings
       const g = padMenuGame();
       if (g) { openGameActions(g); return padEnsureFocus(); }
@@ -9077,7 +9092,7 @@
       return padEnsureFocus(true);
     }
     if (a === 'view') {
-      if (!$('#modal').hidden || spotHooks.isOpen() || state.settingsOpen) return;
+      if (!$('#modal').hidden || spotHooks.isOpen() || state.settingsOpen || customize.isOpen()) return;
       // on a game page: edit it straight away
       if (state.selectedId) {
         const g = state.games.find((x) => String(x.id) === state.selectedId);
@@ -9248,7 +9263,7 @@
   }
 
   function padTab(d) {
-    if (!$('#modal').hidden || spotHooks.isOpen()) return;
+    if (!$('#modal').hidden || spotHooks.isOpen() || customize.isOpen()) return;
     if (state.settingsOpen) {
       const tabs = Array.from(document.querySelectorAll('#settings-view .st-tab'));
       const i = tabs.findIndex((t) => t.classList.contains('is-active'));
@@ -9298,7 +9313,7 @@
     const modalOpen = !$('#modal').hidden;
     if (bp.menuOpen) { add(['a'], 'Select'); add(['b'], 'Close'); }
     else if (spotHooks.isOpen()) { add(['a'], 'Open'); add(['b'], 'Close'); }
-    else if (modalOpen) { add(['a'], 'Select'); add(['b'], 'Close'); }
+    else if (modalOpen || customize.isOpen()) { add(['a'], 'Select'); add(['b'], 'Close'); }
     else if (state.settingsOpen) { add(['a'], 'Select'); add(['lb', 'rb'], 'Section'); add(['b'], 'Back'); }
     else {
       const a = document.activeElement;

@@ -1408,6 +1408,9 @@ input[type='checkbox'] { width: 15px; height: 15px; accent-color: var(--accent);
 [data-tier='lite'] .card:hover { transform: none; box-shadow: none; }
 [data-tier='lite'] .card-img { transition: none; }
 [data-tier='lite'] * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+/* Solid panels (Settings → Appearance → Glass): no backdrop layer at all,
+   not just a 0px blur, so the GPU skips the work like on Lite */
+html[data-ui-glass-solid='1'] * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
@@ -5874,6 +5877,18 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .pk-plaque { transit
 .tile-rating .rate-chip svg { width: 13px; height: 13px; }
 html.is-bigpicture .tile-rating { transform-origin: top center; }
 
+/* rating pills, larger: the one beside "played …" in the shelf banner grows
+   the most; the ones on covers (cards and shelf tiles) a little */
+.shelf-meta .rate-chip { padding: 6px 13px 6px 10px; gap: 6px; font-size: 15px; }
+.shelf-meta .rate-chip svg { width: 15px; height: 15px; }
+.shelf-meta .peak-foil.is-sm { padding: 5px 16px 6px; font-size: 15px; }
+.shelf-meta .rate-chip, .shelf-meta .peak-foil { margin-left: 10px; }
+#grid .card-rating:not(.peak-foil), .card-rating:not(.peak-foil),
+.tile-rating .rate-chip { padding: 6px 15px 6px 12px; gap: 6px; font-size: 15px; }
+.card-rating:not(.peak-foil) svg, .tile-rating .rate-chip svg { width: 15px; height: 15px; }
+#grid .card-rating.peak-foil, .card-rating.peak-foil,
+.tile-rating.is-peak .peak-foil { padding: 5px 17px 6px; font-size: 14px; }
+
 /* the shelf logo's box can be wider than the drawn logo (the image keeps its
    ratio inside it), so the sheen's mask must be fitted the same way as the
    image, not stretched over the box: a stretched mask drew ghost copies */
@@ -6217,6 +6232,15 @@ html[data-ui-search='in-nav'][data-ui-nav='top'] .side-account { order: 4; }
 @media (max-width: 900px) {
   html[data-ui-search='in-nav'][data-ui-nav='top'] .side-search-slot { width: 36px; height: 36px; }
 }
+/* the search box shares the row with the tabs: between 900 and 1100 px the
+   tabs fold to icons (like under 900) and the box narrows, so the account
+   stays on screen */
+@media (max-width: 1100px) and (min-width: 901px) {
+  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .side-search-slot { width: 200px; }
+  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .side-name { display: none; }
+  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item { padding: 0; width: 36px; justify-content: center; }
+  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item > :is(span, b) { display: none; }
+}
 html.is-bigpicture .side-search-slot { display: none !important; }
 
 /* closed and small: only the magnifier shows, centred */
@@ -6438,3 +6462,15 @@ html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf-hero { min-height: 2
 /* ---- right-click menu */
 .cz-menu { position: fixed; top: 0; left: 0; right: auto; z-index: 130; width: 200px; transform-origin: top left; }
 .cz-menu .sort-item:disabled { opacity: 0.45; cursor: default; background: none; }
+
+/* small windows: the resting search box is too narrow for its "Ctrl F" hint
+   and its placeholder both; the placeholder wins */
+@media (max-width: 960px) {
+  html:not(.is-bigpicture) .spot:not(.open) .keys { display: none; }
+}
+
+/* the controller's button hints (and toasts) stay clear of a bottom dock and
+   of the corner search button */
+html[data-ui-nav='dock']:not([data-ui-dock-pos='top']):not(.is-bigpicture) :is(.pad-hints, .toasts) { bottom: 84px; }
+html[data-ui-search='floating']:not(.is-bigpicture) .pad-hints { bottom: calc(var(--shell-gap, 12px) + 14px + 60px); }
+html[data-ui-search='floating'][data-ui-nav='dock'][data-ui-dock-style='attached']:not([data-ui-dock-pos='top']):not([data-ui-dock-auto-hide='1']):not(.is-bigpicture) .pad-hints { bottom: 150px; }
