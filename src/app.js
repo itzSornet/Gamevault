@@ -1600,6 +1600,7 @@
     if (name === 'up') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>`;
     if (name === 'search') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>`;
     if (name === 'plus') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
+    if (name === 'cart') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 4.5h2.2l2.1 10.2a1.5 1.5 0 0 0 1.5 1.2h7.6a1.5 1.5 0 0 0 1.5-1.1l1.6-6.3H7"/><circle cx="10" cy="19.5" r="1.2"/><circle cx="17" cy="19.5" r="1.2"/></svg>`;
     if (name === 'ext') return `<svg ${s} fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5M19 5l-8 8M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4"/></svg>`;
     return '';
   }
@@ -1625,13 +1626,113 @@
     return y <= 1 ? 'a year ago' : `${y} years ago`;
   }
 
+  // ---- wishlist prices: IsThereAnyDeal, through GameVault Cloud (no key in
+  // the app). Kept in memory only (never synced); main caches them on disk.
+  // Amounts, shops and links are shown exactly as IsThereAnyDeal sends them.
+  function wishPrice(g) {
+    const p = g.steamAppId && state.prices ? state.prices[g.steamAppId] : null;
+    return p || null;
+  }
+  function wishMoney(d) {
+    if (!d || typeof d.amount !== 'number') return '';
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: d.currency || 'USD' }).format(d.amount); } catch (_) { return String(d.amount); }
+  }
+  function wishOnSale(g) { const p = wishPrice(g); return !!(p && p.current && p.current.cut > 0); }
+  function loadWishPrices(list) {
+    if (!api.prices) return;
+    const asked = state._priceAsked || (state._priceAsked = new Set());
+    const ids = list.map((g) => Number(g.steamAppId)).filter((id) => id > 0 && !asked.has(id));
+    if (!ids.length) return;
+    for (const id of ids) asked.add(id);
+    api.prices(ids).then((res) => {
+      if (!res || !res.ok || !res.data) {
+        // let a later visit try again
+        setTimeout(() => { for (const id of ids) asked.delete(id); }, 5 * 60000);
+        return;
+      }
+      state.prices = { ...(state.prices || {}), ...res.data };
+      if (state.filter === 'Want' && !state.selectedId && !state.settingsOpen) renderWishlist();
+    }).catch(() => { for (const id of ids) asked.delete(id); });
+  }
+
+  // "Buy": every shop selling the game, cheapest first, each opening its deal
+  // (IsThereAnyDeal's own link, unchanged). The Steam store page stays one
+  // click away at the bottom.
+  function openWishBuy(g) {
+    // older saved answers only have the best price, not every shop
+    const dealsOf = (p) => (p && Array.isArray(p.deals) && p.deals.length ? p.deals : p && p.current ? [p.current] : []);
+    const rows = (p) => dealsOf(p).map((d, i) => `
+      <button type="button" class="wb-row${i === 0 ? ' is-best' : ''}" data-wb-url="${esc(d.url || '')}">
+        <span class="wb-shop"><b>${esc(d.shop || 'Store')}</b>${i === 0 ? '<span class="wb-best">Cheapest</span>' : ''}${d.drm && d.drm.length && d.drm.join(', ') !== d.shop ? `<small>${esc(d.drm.join(', '))}</small>` : ''}</span>
+        ${d.cut > 0 ? `<span class="wl-chip is-sale">−${Number(d.cut)}%</span>` : '<span></span>'}
+        <span class="wb-price">${d.cut > 0 && d.regular > d.amount ? `<s>${esc(wishMoney({ amount: d.regular, currency: d.currency }))}</s>` : ''}${esc(wishMoney(d))}</span>
+        <span class="wb-go">${wlIcon('ext', 13)}</span>
+      </button>`).join('');
+    // 'loading' until the price server answers; then 'done' or 'failed'.
+    // Never left on "Loading": a missing answer, an empty one or no answer
+    // in 20 seconds each says so.
+    let status = 'loading';
+    const body = () => {
+      const p = wishPrice(g);
+      if (dealsOf(p).length) return `<div class="wb-list">${rows(p)}</div>`;
+      if (!g.steamAppId) return '<p class="wb-empty">No prices: this game isn’t linked to a Steam store page, so stores can’t be matched to it.</p>';
+      if (status === 'done') return '<p class="wb-empty">No store is selling this game right now.</p>';
+      if (status === 'failed') return '<p class="wb-empty">Couldn’t load prices right now. Try again in a bit.</p>';
+      return '<p class="wb-empty">Loading prices…</p>';
+    };
+    const foot = () => {
+      return `<span class="wb-links">${g.steamAppId ? '<button type="button" data-wb-steam>Steam store page</button> · ' : ''}Prices from <button type="button" data-wb-itad>IsThereAnyDeal</button></span>`;
+    };
+    const card = openModal(`
+      <div class="wb">
+        <div class="wb-head"><div class="wb-kicker">Where to buy</div><div class="wb-game">${esc(g.name || 'Untitled')}</div></div>
+        <div data-wb-body>${body()}</div>
+        <div class="wb-foot" data-wb-foot>${foot()}</div>
+      </div>`, { className: 'wb-modal' });
+    if (!card) return;
+    const paint = () => {
+      if (!card.isConnected) return;
+      card.querySelector('[data-wb-body]').innerHTML = body();
+      card.querySelector('[data-wb-foot]').innerHTML = foot();
+    };
+    card.addEventListener('click', (e) => {
+      const t = e.target.closest('button');
+      if (!t || !api.openExternal) return;
+      if (t.dataset.wbUrl && /^https:\/\//.test(t.dataset.wbUrl)) api.openExternal(t.dataset.wbUrl);
+      else if (t.hasAttribute('data-wb-steam')) api.openExternal(`https://store.steampowered.com/app/${encodeURIComponent(g.steamAppId)}/`);
+      else if (t.hasAttribute('data-wb-itad')) {
+        const p = wishPrice(g);
+        api.openExternal(p && /^https:\/\//.test(p.page || '') ? p.page : 'https://isthereanydeal.com/');
+      }
+    });
+    const p = wishPrice(g);
+    if (p && Array.isArray(p.deals)) status = 'done';
+    else if (!g.steamAppId) status = 'done';
+    else if (!api.prices) { status = 'failed'; paint(); }
+    else {
+      const timer = setTimeout(() => { if (status === 'loading') { status = 'failed'; paint(); } }, 20000);
+      api.prices([Number(g.steamAppId)]).then((res) => {
+        clearTimeout(timer);
+        if (res && res.ok && res.data) {
+          state.prices = { ...(state.prices || {}), ...res.data };
+          status = 'done';
+        } else status = 'failed';
+        paint();
+        if (state.filter === 'Want' && !state.selectedId && !state.settingsOpen) renderWishlist();
+      }).catch(() => { clearTimeout(timer); status = 'failed'; paint(); });
+    }
+  }
+
   function wishFactsHtml(g) {
     const m = wishMeta(g);
     const out = [];
-    const p = m && m.price;
-    if (p && p.discount > 0) out.push(`<span class="wl-chip is-sale">−${p.discount}%</span><span class="wl-price">${p.initial ? `<s>${esc(p.initial)}</s>` : ''}${esc(p.final)}</span>`);
-    else if (m && m.free) out.push('<span class="wl-chip">Free to play</span>');
-    else if (p && p.final) out.push(`<span class="wl-price">${esc(p.final)}</span>`);
+    const pr = wishPrice(g);
+    const cur = pr && pr.current;
+    if (cur) {
+      const shop = cur.shop ? `<span class="wl-shop">at ${esc(cur.shop)}</span>` : '';
+      const now = `<span class="wl-price">${cur.cut > 0 && cur.regular > cur.amount ? `<s>${esc(wishMoney({ amount: cur.regular, currency: cur.currency }))}</s>` : ''}${esc(wishMoney(cur))}</span>`;
+      out.push(`<button type="button" class="wl-deal" data-deal title="${esc(cur.shop ? `Best price right now, at ${cur.shop}. Open the deal` : 'Open the deal')}">${cur.cut > 0 ? `<span class="wl-chip is-sale">−${Number(cur.cut)}%</span>` : ''}${now}${shop}</button>`);
+    } else if (m && m.free) out.push('<span class="wl-chip">Free to play</span>');
     if (m && m.release && m.release.soon) {
       const d = String(m.release.date || '').trim();
       out.push(`<span class="wl-chip is-soon">${esc(/\d/.test(d) ? `Coming ${d}` : (d || 'Coming soon'))}</span>`);
@@ -1639,14 +1740,6 @@
     const ago = wishAgo(g.added);
     if (ago) out.push(`<span class="wl-since">Added ${esc(ago)}</span>`);
     return out.join('');
-  }
-
-  function wishPriceText(p) {
-    if (!p || typeof p.final !== 'number') return '';
-    if (p.final === 0) return 'Free';
-    let s = '';
-    try { s = new Intl.NumberFormat('en-US', { style: 'currency', currency: p.currency || 'USD' }).format(p.final / 100); } catch (_) { return ''; }
-    return p.initial > p.final ? `−${Math.round((1 - p.final / p.initial) * 100)}%  ${s}` : s;
   }
 
   // Wide art for the card: the game's hero, else Steam's own library art,
@@ -1713,7 +1806,7 @@
           <div class="wl-facts" data-wl-facts></div>
           <div class="wl-actions">
             <button type="button" class="wl-btn is-got" data-got>${wlIcon('check', 15)} I got it</button>
-            ${g.steamAppId ? `<button type="button" class="wl-btn" data-store>${wlIcon('ext', 14)} Steam store</button>` : ''}
+            <button type="button" class="wl-btn" data-buy>${wlIcon('cart', 15)} Buy</button>
             <button type="button" class="wl-btn" data-open>Details</button>
             <button type="button" class="wl-btn is-icon" data-remove title="Remove from wishlist" aria-label="Remove ${esc(g.name)} from your wishlist">${wlIcon('x', 15)}</button>
           </div>
@@ -1741,6 +1834,7 @@
             <div class="wl-facts" data-wl-facts></div>
           </div>
           <div class="wl-card-acts">
+            <button type="button" class="wl-icon is-buy" data-buy title="Where to buy, and prices" aria-label="Where to buy ${esc(g.name)}">${wlIcon('cart', 15)}</button>
             <button type="button" class="wl-icon is-top" data-top title="Make it your top pick" aria-label="Make ${esc(g.name)} your top pick">${wlIcon('up', 15)}</button>
             <button type="button" class="wl-icon is-got" data-got title="I got it: move to library" aria-label="Move ${esc(g.name)} to your library">${wlIcon('check', 15)}</button>
             <button type="button" class="wl-icon is-remove" data-remove title="Remove from wishlist" aria-label="Remove ${esc(g.name)} from your wishlist">${wlIcon('x', 15)}</button>
@@ -1773,17 +1867,18 @@
           <div class="wl-top-slot" data-wl-top></div>
           <div class="wl-next" data-wl-next hidden>Up next</div>
           <div class="wl-grid" data-wl-grid></div>
+          <p class="wl-credit" data-wl-credit hidden>Prices from <button type="button" class="wl-credit-link" data-itad>IsThereAnyDeal</button></p>
           <div class="wl-empty" data-wl-empty hidden>
             <div class="wl-empty-star">${wlIcon('star', 38)}</div>
             <h2>Nothing on your wishlist yet</h2>
-            <p>Search above for a game you want. Steam games show their price, sales and release date here.</p>
+            <p>Search above for a game you want. Its best price, sales and release date show up here.</p>
             <button type="button" class="btn" data-wl-import>Import your Steam wishlist</button>
           </div>
         </div>`;
       wireWishlist(view);
     }
     const list = wishOrder();
-    const sale = list.filter((g) => { const m = wishMeta(g); return m && m.price && m.price.discount > 0; }).length;
+    const sale = list.filter(wishOnSale).length;
     const soon = list.filter((g) => { const m = wishMeta(g); return m && m.release && m.release.soon; }).length;
     const bits = [`${list.length.toLocaleString()} game${list.length === 1 ? '' : 's'} you want`];
     if (sale) bits.push(`<b>${sale} on sale</b>`);
@@ -1798,6 +1893,7 @@
       topSlot.textContent = '';
       topEl = document.createElement('section');
       topEl.className = 'wl-top';
+      topEl.draggable = true;
       topEl.dataset.id = String(top.id);
       topEl.dataset.wlItem = 'top';
       paintWishTop(topEl, top);
@@ -1814,6 +1910,7 @@
       if (!el) {
         el = document.createElement('article');
         el.className = 'wl-card';
+        el.draggable = true;
         el.dataset.id = id;
         el.dataset.wlItem = 'card';
       }
@@ -1825,6 +1922,10 @@
     view.querySelector('[data-wl-next]').hidden = rest.length === 0;
     view.querySelector('[data-wl-empty]').hidden = list.length > 0;
     for (const g of list) queueWishMeta(g);
+    loadWishPrices(list);
+    // IsThereAnyDeal's terms: credit them wherever their prices show
+    const credit = view.querySelector('[data-wl-credit]');
+    if (credit) credit.hidden = !list.some((g) => wishPrice(g) && wishPrice(g).current);
   }
 
   // A change to the list: what stays slides to its new place, what leaves
@@ -1887,6 +1988,20 @@
     const urls = [a.hero || a.cover, a.logo].filter(Boolean);
     const decode = (u) => { const im = new Image(); im.decoding = 'async'; im.src = u; return im.decode ? im.decode().catch(() => {}) : Promise.resolve(); };
     return Promise.race([Promise.all(urls.map(decode)), new Promise((r) => setTimeout(r, 220))]);
+  }
+
+  // Put a wishlisted game at place `to` (0 = top pick); the rest keep their order.
+  async function wishMoveTo(g, to) {
+    const list = wishOrder();
+    const from = list.indexOf(g);
+    if (from < 0) return;
+    const next = list.filter((x) => x !== g);
+    to = Math.max(0, Math.min(next.length, to));
+    if (to === from) return;
+    next.splice(to, 0, g);
+    if (next[0] !== list[0]) await primeWishTop(next[0]);
+    wishTransition(() => { next.forEach((x, i) => { x.wishRank = i; }); });
+    saveGamesSoon();
   }
 
   async function wishMakeTop(g) {
@@ -1961,7 +2076,7 @@
     enrichArt({ only: [g] }).catch(() => {});
   }
 
-  // Steam store data (price, sale, release) for wishlisted Steam games, one
+  // Steam store data (release date, free to play) for wishlisted Steam games, one
   // request at a time and at most every 12 h per game.
   function queueWishMeta(g) {
     if (!g.steamAppId || !api.steamDetails) return;
@@ -1989,6 +2104,7 @@
       const t = e.target.closest('button');
       if (!t || !view.contains(t)) return;
       if (t.hasAttribute('data-wl-import')) { $('#btn-import')?.click(); return; }
+      if (t.hasAttribute('data-itad')) { if (api.openExternal) api.openExternal('https://isthereanydeal.com/'); return; }
       const item = t.closest('[data-wl-item]');
       const g = item && !item.classList.contains('is-ghost') && state.games.find((x) => String(x.id) === item.dataset.id);
       if (!g) return;
@@ -1996,7 +2112,67 @@
       else if (t.hasAttribute('data-got')) wishGot(g);
       else if (t.hasAttribute('data-remove')) wishRemove(g);
       else if (t.hasAttribute('data-top')) wishMakeTop(g);
+      else if (t.hasAttribute('data-buy')) openWishBuy(g);
+      else if (t.hasAttribute('data-deal')) {
+        const cur = wishPrice(g) && wishPrice(g).current;
+        const url = cur && /^https:\/\//.test(cur.url || '') ? cur.url : (wishPrice(g) && wishPrice(g).page);
+        if (url && api.openExternal) api.openExternal(url);
+      }
       else if (t.hasAttribute('data-store') && api.openExternal) api.openExternal(`https://store.steampowered.com/app/${encodeURIComponent(g.steamAppId)}/`);
+    });
+
+    // Drag a card (or the top pick) onto another one to put it in that place:
+    // dropping on the left half lands before it, the right half after it, and
+    // dropping on the top pick makes it the new top pick.
+    let dragId = null, dropEl = null;
+    const clearDrop = () => {
+      if (dropEl) dropEl.classList.remove('is-drop-before', 'is-drop-after', 'is-drop-top');
+      dropEl = null;
+    };
+    const itemOf = (t) => t && t.closest && t.closest('[data-wl-item]');
+    const placeOf = (el, e) => {
+      if (el.dataset.wlItem === 'top') return { cls: 'is-drop-top', after: false };
+      const r = el.getBoundingClientRect();
+      const after = e.clientX > r.left + r.width / 2;
+      return { cls: after ? 'is-drop-after' : 'is-drop-before', after };
+    };
+    view.addEventListener('dragstart', (e) => {
+      const el = itemOf(e.target);
+      if (!el || !view.contains(el) || el.classList.contains('is-ghost')) return;
+      dragId = el.dataset.id;
+      el.classList.add('is-dragging');
+      view.classList.add('is-sorting');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', dragId); } catch (_) {}
+    });
+    view.addEventListener('dragover', (e) => {
+      if (!dragId) return;
+      const el = itemOf(e.target);
+      if (!el || el.dataset.id === dragId) { clearDrop(); return; }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const { cls } = placeOf(el, e);
+      if (dropEl !== el || !el.classList.contains(cls)) { clearDrop(); dropEl = el; el.classList.add(cls); }
+    });
+    view.addEventListener('drop', (e) => {
+      if (!dragId) return;
+      const el = itemOf(e.target);
+      const g = state.games.find((x) => String(x.id) === dragId);
+      if (!el || !g || el.dataset.id === dragId) return;
+      e.preventDefault();
+      const list = wishOrder();
+      const target = state.games.find((x) => String(x.id) === el.dataset.id);
+      const { after } = placeOf(el, e);
+      let to = list.indexOf(target) + (after ? 1 : 0);
+      if (list.indexOf(g) < to) to -= 1;   // it leaves its old place first
+      clearDrop();
+      wishMoveTo(g, to);
+    });
+    view.addEventListener('dragend', () => {
+      clearDrop();
+      dragId = null;
+      view.classList.remove('is-sorting');
+      for (const el of view.querySelectorAll('.is-dragging')) el.classList.remove('is-dragging');
     });
 
     // "Add a game you want…": Steam store and SteamGridDB, searched side by
@@ -2022,7 +2198,7 @@
       const rows = results.map((r, i) => {
         const h = have(r);
         const tag = h ? (gvIsWishlisted(h) ? 'On your wishlist' : 'In your library')
-          : r.sgdbId ? [r.year, 'SteamGridDB'].filter(Boolean).join(' · ') : wishPriceText(r.price);
+          : r.sgdbId ? [r.year, 'SteamGridDB'].filter(Boolean).join(' · ') : 'Steam';
         const img = /^https:\/\//.test(r.image || '') ? `<img src="${esc(r.image)}" alt="" />` : `<span class="wl-res-ph">${wlIcon('star', 12)}</span>`;
         return `<button type="button" class="wl-res${i === active ? ' is-active' : ''}${h ? ' is-have' : ''}" role="option" aria-selected="${i === active}" data-i="${i}">${img}<span class="wl-res-name">${esc(r.name)}</span><span class="wl-res-tag">${esc(tag)}</span></button>`;
       });
@@ -2046,10 +2222,14 @@
       let steam = null, grid = null;
       const merge = (final) => {
         if (my !== seq) return;
-        const fromSteam = steam && steam.ok ? steam.data : [];
+        // no soundtracks, artbooks, upgrades or other add-ons: you wish for games
+        const extra = /\b(soundtrack|ost|artbook|art ?book|upgrade|season pass|dlc|expansion pass|wallpapers?)\b/i;
+        const fromSteam = (steam && steam.ok ? steam.data : []).filter((r) => !extra.test(r.name));
         const seen = new Set(fromSteam.map((r) => norm(r.name)));
+        // a SteamGridDB game with the same name is only the same game when
+        // SteamGridDB knows it on Steam (God of War 2005 is not the 2018 one)
         const fromGrid = (grid && grid.ok && Array.isArray(grid.data) ? grid.data : [])
-          .filter((x) => x && x.id && x.name && !seen.has(norm(x.name)))
+          .filter((x) => x && x.id && x.name && !(seen.has(norm(x.name)) && (x.types || []).includes('steam')))
           .slice(0, 6)
           .map((x) => ({ name: String(x.name), sgdbId: x.id, year: yearOf(x.releaseDate) }));
         results = [...fromSteam, ...fromGrid];
@@ -2063,13 +2243,10 @@
       };
       const askGrid = () => (api.sgdbGames && t.length >= 3 ? api.sgdbGames(t) : Promise.resolve(null)).catch(() => null)
         .then((r) => { grid = r; merge(false); });
-      const own = hasOwnSgdbKey();
       const steamP = (api.steamSearch ? api.steamSearch(t) : Promise.resolve(null)).catch(() => null).then((r) => { steam = r; merge(false); });
-      // own key: both at once. Shared cache: SteamGridDB only if Steam came up short.
-      pending = (own
-        ? Promise.all([steamP, askGrid()])
-        : steamP.then(() => (my === seq && (!steam || !steam.ok || steam.data.length < 3) ? askGrid() : null))
-      ).then(() => merge(true));
+      // both at once: Steam for its store games, SteamGridDB for everything
+      // else (older, console-first and non-Steam games)
+      pending = Promise.all([steamP, askGrid()]).then(() => merge(true));
       return pending;
     };
     const pick = (i) => {
@@ -2138,7 +2315,7 @@
     tile._name = name;
     tile._r = r;
     tile.title = name;
-    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>${r ? `<span class="tile-rating${r >= Rating.PEAK ? ' is-peak' : ''}">${ratingChipHtml(r, String(g.id))}</span>` : ''}`;
+    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>${!r ? '' : r >= Rating.PEAK ? `<span class="tile-rating is-peak peak-strap" data-id="${esc(String(g.id))}" data-peak-open title="Your best game ever">${PEAK_BAND}</span>` : `<span class="tile-rating">${ratingChipHtml(r, String(g.id))}</span>`}`;
     const img = tile.querySelector('img');
     fadeInOnLoad(img);
     if (img) {
@@ -2759,9 +2936,12 @@
         const tier = Rating.tier(r);
         if (ref.rating.dataset.tier !== tier || ref.rating.dataset.r !== String(r)) {
           ref.rating.dataset.tier = tier;
-          ref.rating.classList.toggle('peak-foil', tier === 'peak');
+          const peak = tier === 'peak';
+          ref.rating.classList.toggle('peak-strap', peak);
+          if (peak) ref.rating.dataset.id = String(g.id);
+          else { delete ref.rating.dataset.id; delete ref.rating.dataset.ps; ref.rating.removeAttribute('style'); }
           ref.rating.dataset.r = String(r);
-          ref.rating.innerHTML = r >= Rating.PEAK ? `<span class="peak-word">Peak</span>` : `${STAR_ICON}<span>${Rating.label(r)}</span>`;
+          ref.rating.innerHTML = peak ? PEAK_BAND : `${STAR_ICON}<span>${Rating.label(r)}</span>`;
           ref.rating.toggleAttribute('data-peak-open', tier === 'peak');
           ref.rating.title = r >= Rating.PEAK ? 'Your rating: PEAK' : `Your rating: ${Rating.label(r)} / 10`;
         }
@@ -3493,134 +3673,494 @@
 
   // ---- ratings: 1.3.1's scale (0.1-10, 10 = PEAK), stored on g.rating
   const STAR_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="m12 3.2 2.7 5.5 6 .9-4.35 4.25 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.6l6-.9z"/></svg>';
-  // gold foil chip; the sweep is a pseudo-element so it costs nothing at rest
-  const peakChip = (extra = '', id = '') => `<span class="peak-foil${extra}"${id ? ` data-peak-open data-id="${esc(id)}" title="Your best game ever"` : ''}><span class="peak-word">Peak</span></span>`;
+  // ---- PEAK: a scrap of old paper ripped across the top of the cover, PEAK
+  // typed on it, and rough patches of the cover's own colours on it (top
+  // right, bottom left). Drawn as SVG; its tear, patches and typing come from
+  // the game's id, so each Peak game has its own scrap and it never changes.
+  const PEAK_BAND = '<span class="ps-slot"></span>';
+  const strapHtml = (g, extra = '', open = true) => `<span class="peak-strap is-chip${extra}" data-id="${esc(String(g.id))}"${open ? ' data-peak-open title="Your best game ever"' : ''}>${PEAK_BAND}</span>`;
   function ratingChipHtml(r, id = '') {
     if (!r) return '';
-    return r >= Rating.PEAK ? peakChip(' is-sm', id) : `<span class="rate-chip tier-${Rating.tier(r)}">${STAR_ICON}<span>${Rating.label(r)}</span></span>`;
+    return r >= Rating.PEAK ? strapHtml({ id }, ' is-sm') : `<span class="rate-chip tier-${Rating.tier(r)}">${STAR_ICON}<span>${Rating.label(r)}</span></span>`;
   }
+  function seedOf(s) {
+    let h = 2166136261;
+    for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+  function seededRand(seed) {
+    let a = seed || 1;
+    return () => {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  let peakSvgN = 0;
+  function peakSvg(id, chip) {
+    const rand = seededRand(seedOf(`${id}${chip ? ':chip' : ''}`));
+    const r = (lo, hi) => lo + rand() * (hi - lo);
+    const f = (v) => v.toFixed(1);
+    const W = chip ? 132 : 240, H = chip ? 46 : 48;
+    const p = `ps${++peakSvgN}`;
+    // a torn edge: many short steps that wander, with the odd deep bite
+    const tear = (x0, y0, x1, y1, amp) => {
+      const out = [];
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const nx = -(y1 - y0) / len, ny = (x1 - x0) / len;
+      const steps = Math.max(3, Math.round(len / r(2.8, 4.2)));
+      let off = 0;
+      for (let i = 0; i < steps; i++) {
+        off = off * 0.6 + (rand() - 0.5) * amp + (rand() < 0.03 ? (rand() - 0.5) * amp * 2 : 0);
+        const t = i / steps;
+        out.push([x0 + (x1 - x0) * t + nx * off, y0 + (y1 - y0) * t + ny * off]);
+      }
+      return out;
+    };
+    const path = (pts) => `M${pts.map(([x, y]) => `${f(x)} ${f(y)}`).join('L')}Z`;
+    // the scrap's outline: uneven height, one end thicker than the other
+    const tl = chip ? [r(0, 6), r(1, 7)] : [-3, r(0, 8)];
+    const tm1 = [W * r(0.25, 0.42), r(0, 9)], tm2 = [W * r(0.58, 0.75), r(0, 9)];
+    const tr = chip ? [W - r(0, 6), r(1, 7)] : [W + 3, r(0, 8)];
+    const br = chip ? [W - r(0, 6), H - r(1, 7)] : [W + 3, H - r(0, 8)];
+    const bm2 = [W * r(0.58, 0.75), H - r(0, 9)], bm1 = [W * r(0.25, 0.42), H - r(0, 9)];
+    const bl = chip ? [r(0, 6), H - r(1, 7)] : [-3, H - r(0, 8)];
+    const corners = [tl, tm1, tm2, tr, br, bm2, bm1, bl];
+    const outline = (amp, inset) => {
+      const c = corners.map(([x, y], i) => {
+        const top = i < 4;
+        const side = chip && (i === 0 || i === 7) ? inset : chip && (i === 3 || i === 4) ? -inset : 0;
+        return [x + side, y + (top ? inset : -inset)];
+      });
+      let pts = [];
+      for (let i = 0; i < c.length; i++) {
+        const [x0, y0] = c[i], [x1, y1] = c[(i + 1) % c.length];
+        const straight = !chip && (i === 3 || i === 7);
+        pts = pts.concat(straight ? [[x0, y0]] : tear(x0, y0, x1, y1, amp));
+      }
+      return path(pts);
+    };
+    const outer = outline(1.4, 0);
+    const inner = outline(1.1, 1.5);
+    // a faint age stain (the only soft shape on the scrap)
+    const blob = (cx, cy, rx, ry) => {
+      const k = 8 + Math.floor(rand() * 5), a0 = rand() * 6.283, pts = [];
+      for (let i = 0; i < k; i++) {
+        const a = a0 + (i / k) * 6.283, m = r(0.6, 1.18);
+        pts.push([cx + Math.cos(a) * rx * m, cy + Math.sin(a) * ry * m]);
+      }
+      const mid = (u, v) => [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2];
+      const s0 = mid(pts[0], pts[1]);
+      let d = `M${f(s0[0])} ${f(s0[1])}`;
+      for (let i = 1; i <= k; i++) {
+        const c = pts[i % k], m = mid(pts[i % k], pts[(i + 1) % k]);
+        d += `Q${f(c[0])} ${f(c[1])} ${f(m[0])} ${f(m[1])}`;
+      }
+      return `${d}Z`;
+    };
+    // colour: torn pieces of the cover's colours running top to bottom, one at
+    // each end, each with a thin torn strip of another colour peeking out
+    // from under it. Straight-ish torn edges, no round shapes; the typed word
+    // keeps the middle.
+    const strip = (xTop, xBot, right) => {
+      const far = right ? W + 6 : -6;
+      return path([...tear(xTop, -4, xBot, H + 4, chip ? 2.8 : 3.6), [xBot, H + 4], [far, H + 4], [far, -4]]);
+    };
+    // every piece leans: its top and bottom land well apart, either way
+    // round, so sometimes the top reaches further and sometimes the bottom
+    const lean = ([lo, hi], [min, max]) => {
+      const base = W * r(lo, hi);
+      const off = W * (chip ? r(0.05, 0.1) : r(0.07, 0.15)) * (rand() < 0.5 ? -1 : 1);
+      const clamp = (v) => Math.min(W * max, Math.max(W * min, v));
+      return [clamp(base + off / 2), clamp(base - off / 2)];
+    };
+    const [rT, rB] = lean(chip ? [0.82, 0.9] : [0.73, 0.82], chip ? [0.78, 0.97] : [0.69, 0.9]);
+    const [lT, lB] = lean(chip ? [0.1, 0.17] : [0.18, 0.27], chip ? [0.03, 0.22] : [0.1, 0.31]);
+    const sl = chip ? [2, 7] : [2, 12];
+    const pieceR = strip(rT, rB, true);
+    const pieceL = strip(lT, lB, false);
+    const sliverR = strip(rT - r(...sl), rB - r(...sl), true);
+    const sliverL = strip(lT + r(...sl), lB + r(...sl), false);
+    const stain = blob(W * r(0.3, 0.7), H * r(0.3, 0.7), W * r(0.15, 0.3), H * r(0.4, 0.7));
+    // typed: a typewriter face, each letter a little off its line and inked unevenly
+    const fs = chip ? 19 : 21, step = fs * 0.8;
+    const x0 = W / 2 - step * 1.5, y0 = H / 2 + fs * 0.34;
+    const letters = 'PEAK'.split('').map((ch, i) => {
+      const x = x0 + i * step + r(-0.6, 0.6), y = y0 + r(-0.9, 0.9), rot = r(-4, 4), o = r(0.74, 0.95);
+      return `<text x="${f(x)}" y="${f(y)}" transform="rotate(${f(rot)} ${f(x)} ${f(y)})" fill-opacity="${o.toFixed(2)}" text-anchor="middle">${ch}</text>`;
+    }).join('');
+    return `<svg class="ps-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Peak">`
+      + '<defs>'
+      + `<clipPath id="${p}o"><path d="${outer}"/></clipPath>`
+      + `<clipPath id="${p}p"><path d="${inner}"/></clipPath>`
+      + `<filter id="${p}g" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" seed="4" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 0.36 0 0 0 0 0.27 0 0 0 0 0.16 0 0 0 0.5 -0.06"/></filter>`
+      + `<filter id="${p}f" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.018 0.42" numOctaves="2" seed="9"/><feColorMatrix values="0 0 0 0 0.45 0 0 0 0 0.34 0 0 0 0 0.2 0 0 0 0.55 -0.12"/></filter>`
+      + `<filter id="${p}i" x="-10%" y="-20%" width="120%" height="140%"><feTurbulence type="fractalNoise" baseFrequency="0.95" numOctaves="1" seed="${seedOf(id) % 89}"/><feDisplacementMap in="SourceGraphic" scale="1.2"/></filter>`
+      + '</defs>'
+      + `<path d="${outer}" fill="#f7f1e3"/>`
+      + `<g clip-path="url(#${p}o)">`
+      + `<path d="${inner}" fill="#e8dcc2"/>`
+      + `<g clip-path="url(#${p}p)">`
+      + `<path d="${stain}" fill="#b8904f" opacity="0.13"/>`
+      + `<path class="ps-b ps-b3" d="${sliverR}" fill="var(--s3)"/>`
+      + `<path class="ps-b ps-b4" d="${sliverL}" fill="var(--s4)"/>`
+      + `<path class="ps-b ps-b1" d="${pieceR}" fill="var(--s1)"/>`
+      + `<path class="ps-b ps-b2" d="${pieceL}" fill="var(--s2)"/>`
+      + '</g>'
+      + `<rect width="${W}" height="${H}" filter="url(#${p}g)" style="mix-blend-mode:multiply"/>`
+      + `<rect width="${W}" height="${H}" filter="url(#${p}f)" style="mix-blend-mode:multiply"/>`
+      + `<path d="${inner}" fill="none" stroke="#8a6230" stroke-opacity="0.35" stroke-width="0.9"/>`
+      + '</g>'
+      + `<g class="ps-type" filter="url(#${p}i)" fill="#16110d" font-family="'Courier New', Courier, monospace" font-weight="700" font-size="${fs}">${letters}</g>`
+      + '</svg>';
+  }
+  // colours: asked of main once per cover, then kept
+  const peakPalettes = new Map();
+  function paintPeak(el) {
+    const id = el.dataset.id;
+    const g = state.games.find((x) => String(x.id) === String(id));
+    const cover = g ? (g._cover || g.coverUrl || '') : '';
+    const src = cover ? toFileUrl(cover) : '';
+    const key = `${id}|${src}`;
+    if (el.dataset.ps === key && el.querySelector('svg')) return;
+    el.dataset.ps = key;
+    el.innerHTML = peakSvg(id, el.classList.contains('is-chip'));
+    const apply = (pal) => {
+      if (!pal || !pal.colors || !pal.colors.length || el.dataset.ps !== key) return;
+      // a colour close to the paper itself would vanish on it: those go last
+      const far = (hex) => {
+        const n = parseInt(String(hex).slice(1), 16);
+        return Math.hypot(((n >> 16) & 255) - 232, ((n >> 8) & 255) - 220, (n & 255) - 194) > 70;
+      };
+      const cols = [...pal.colors.filter(far), ...pal.colors.filter((c) => !far(c))];
+      for (let i = 0; i < 4; i++) el.style.setProperty(`--s${i + 1}`, cols[i % cols.length]);
+    };
+    if (!src || !api.palette) return;
+    const hit = peakPalettes.get(src);
+    if (hit === null) return;
+    if (hit && !(hit instanceof Promise)) { apply(hit); return; }
+    const job = hit || api.palette(src).catch(() => null).then((res) => { peakPalettes.set(src, res || null); return res; });
+    peakPalettes.set(src, job);
+    job.then(apply);
+  }
+  let peakPaintQ = 0;
+  function paintPeaksSoon() {
+    if (peakPaintQ) return;
+    peakPaintQ = requestAnimationFrame(() => {
+      peakPaintQ = 0;
+      for (const el of document.querySelectorAll('.peak-strap[data-id]')) paintPeak(el);
+    });
+  }
+  new MutationObserver(paintPeaksSoon).observe(document.body, { childList: true, subtree: true });
 
   function rateButtonHtml(g) {
     const r = Rating.value(g);
     const tier = Rating.tier(r);
+    if (r >= Rating.PEAK) return `<button class="gvx-rate peak-strap is-chip is-btn" data-rate data-id="${esc(String(g.id))}" title="Your rating: PEAK. Click to change">${PEAK_BAND}</button>`;
     const inner = !r
       ? `${STAR_ICON}<span>Rate</span>`
-      : r >= Rating.PEAK ? `<span class="peak-word">Peak</span>` : `${STAR_ICON}<span>${Rating.label(r)}</span><small>/10</small>`;
-    return `<button class="gvx-chip gvx-rate${tier ? ` tier-${tier}` : ''}${r >= Rating.PEAK ? ' peak-foil' : ''}" data-rate title="${r ? 'Your rating: click to change' : 'Rate this game'}">${inner}</button>`;
+      : `${STAR_ICON}<span>${Rating.label(r)}</span><small>/10</small>`;
+    return `<button class="gvx-chip gvx-rate${tier ? ` tier-${tier}` : ''}" data-rate title="${r ? 'Your rating: click to change' : 'Rate this game'}">${inner}</button>`;
   }
 
-  // ---- PEAK showcase: the pill grows into a big 3D plaque that catches the
-  // light, and the game gets the praise it has earned.
-  const PEAK_HYPE = [
-    'Some games are good. This one rewired your brain.',
-    'Ten out of ten is not a score here. It is a fact.',
-    'The bar every other game has to clear.',
-    'You don’t just play this one. You come back to it.',
-    'Every other game gets measured against this.',
-    'Hall of fame. First ballot. No debate.',
-    'If games had a summit, you are standing on it.',
-    'Nothing else on the shelf comes close, and they all know it.',
-  ];
-  function peakHype(g) {
-    let h = 0;
-    for (const ch of String(g.id) + String(g.name || '')) h = (h * 31 + ch.codePointAt(0)) >>> 0;
-    return PEAK_HYPE[h % PEAK_HYPE.length];
+  // ---- PEAK scroll: clicking a Peak scrap brings out an old paper, torn
+  // like the scrap and rolled up, that flies out of the scrap and unrolls
+  // down the page. Typed on it: PEAK; the
+  // game as a museum label (its own one-line description, who made it, the
+  // year); and where it stands on your shelf (how many Peak games there are,
+  // and the games it sits above). Nothing from GameVault's own hours,
+  // sessions or dates: those start when it was installed, so they say
+  // nothing true about an old favourite. "Roll it up" rolls it back.
+  function peakLabel(g) {
+    const m = g.steamMeta || {};
+    // SteamGridDB's year is the game's first release on any platform; Steam's
+    // is only its PC release (RDR2: 2018 vs 2019), so Steam is the fallback
+    const steamYear = m.release && !m.release.soon && (String(m.release.date || '').match(/\b(19|20)\d{2}\b/) || [])[0];
+    const year = Number(g.firstYear) > 1970 ? String(g.firstYear) : steamYear;
+    const line = [m.developer || g.developer || '', year || '', Array.isArray(m.genres) && m.genres[0] ? m.genres[0] : '']
+      .filter(Boolean).join(' · ');
+    return { line, about: String(m.about || '').trim() };
   }
-  function peakStory(g) {
-    const hours = Number(g.hours) || 0;
-    const sessions = gvSessions(g);
-    const st = Sessions.sessionStats(sessions);
-    const lines = [];
-    if (hours >= 1) lines.push(`${fmtHours(hours)} in, and you would still go back for more.`);
-    if (st.longestMinutes >= 30) lines.push(`Your longest run went ${Sessions.formatDuration(st.longestMinutes / 60)} without stopping.`);
-    if (g.status === 'Finished') lines.push('You saw it through to the credits, and it still holds the top spot.');
-    if (!lines.length) lines.push('It took the top spot before the clock even started. That says enough.');
-    return lines.slice(0, 2).join(' ');
+  function peakStanding(g) {
+    const owned = state.games.filter((x) => !gvIsWishlisted(x));
+    const peaks = owned.filter((x) => Rating.value(x) >= Rating.PEAK).length;
+    const head = peaks <= 1
+      ? `Your only Peak game, in a vault of ${owned.length}.`
+      : `One of ${peaks} Peak games in a vault of ${owned.length}.`;
+    const below = owned
+      .filter((x) => x !== g && Rating.value(x) > 0 && Rating.value(x) < Rating.PEAK)
+      .sort((a, b2) => Rating.value(b2) - Rating.value(a))
+      .slice(0, 3)
+      .map((x) => [x.name || 'Untitled', Rating.label(Rating.value(x))]);
+    return { head, below };
   }
-  function peakFacts(g) {
-    const sessions = gvSessions(g);
-    const st = Sessions.sessionStats(sessions);
-    const out = [];
-    const hours = Number(g.hours) || 0;
-    if (hours > 0) out.push([fmtHours(hours), 'played']);
-    if (st.count) out.push([String(st.count), st.count === 1 ? 'session' : 'sessions']);
-    if (st.longestMinutes > 0) out.push([Sessions.formatDuration(st.longestMinutes / 60), 'longest run']);
-    if (g.added) out.push([fmtDate(g.added), 'in your vault since']);
-    return out.slice(0, 4);
+  // the cover's colours for the letter, the same order the scrap uses
+  function peakColors(g) {
+    const cover = g._cover || g.coverUrl || '';
+    const src = cover ? toFileUrl(cover) : '';
+    if (!src || !api.palette) return Promise.resolve(null);
+    const hit = peakPalettes.get(src);
+    const job = hit && !(hit instanceof Promise) ? Promise.resolve(hit) : hit === null ? Promise.resolve(null)
+      : (hit || api.palette(src).catch(() => null));
+    return job.then((pal) => {
+      if (!pal || !pal.colors || !pal.colors.length) return null;
+      const far = (hex) => {
+        const n = parseInt(String(hex).slice(1), 16);
+        return Math.hypot(((n >> 16) & 255) - 232, ((n >> 8) & 255) - 220, (n & 255) - 194) > 70;
+      };
+      return [...pal.colors.filter(far), ...pal.colors.filter((c) => !far(c))];
+    });
+  }
+  // torn corner pieces for the letter, drawn over the whole sheet
+  function peakLetterArt(id, W, H) {
+    const rand = seededRand(seedOf(`${id}:letter`));
+    const r = (lo, hi) => lo + rand() * (hi - lo);
+    const f = (v) => v.toFixed(1);
+    const tear = (x0, y0, x1, y1, amp) => {
+      const out = [];
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const nx = -(y1 - y0) / len, ny = (x1 - x0) / len;
+      const steps = Math.max(3, Math.round(len / r(3, 4.6)));
+      let off = 0;
+      for (let i = 0; i < steps; i++) {
+        off = off * 0.6 + (rand() - 0.5) * amp + (rand() < 0.04 ? (rand() - 0.5) * amp * 2 : 0);
+        const t = i / steps;
+        out.push([x0 + (x1 - x0) * t + nx * off, y0 + (y1 - y0) * t + ny * off]);
+      }
+      return out;
+    };
+    const piece = (a, b, rest) => `M${[...tear(a[0], a[1], b[0], b[1], 4), ...rest].map(([x, y]) => `${f(x)} ${f(y)}`).join('L')}Z`;
+    // top right: a torn edge leaning across the corner
+    const tr0 = [W * r(0.64, 0.76), -6], tr1 = [W + 6, H * r(0.1, 0.17)];
+    const trS = [tr0[0] - r(6, 16), -6], trS1 = [W + 6, tr1[1] + r(6, 16)];
+    // bottom left
+    const bl0 = [W * r(0.2, 0.3), H + 6], bl1 = [-6, H * r(0.86, 0.92)];
+    const blS = [bl0[0] + r(6, 16), H + 6], blS1 = [-6, bl1[1] - r(6, 16)];
+    return `<svg class="pkl-art" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true">`
+      + `<path d="${piece(trS, trS1, [[W + 6, -6]])}" fill="var(--s3)"/>`
+      + `<path d="${piece(tr0, tr1, [[W + 6, -6]])}" fill="var(--s1)"/>`
+      + `<path d="${piece(blS, blS1, [[-6, H + 6]])}" fill="var(--s4)"/>`
+      + `<path d="${piece(bl0, bl1, [[-6, H + 6]])}" fill="var(--s2)"/>`
+      + '</svg>';
+  }
+
+  function peakLetterOutline(id, W, H) {
+    const rand = seededRand(seedOf(`${id}:sheet`));
+    const r = (lo, hi) => lo + rand() * (hi - lo);
+    const tear = (x0, y0, x1, y1, amp) => {
+      const out = [];
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const nx = -(y1 - y0) / len, ny = (x1 - x0) / len;
+      const steps = Math.max(3, Math.round(len / r(2.8, 4.4)));
+      let off = 0;
+      for (let i = 0; i < steps; i++) {
+        off = off * 0.6 + (rand() - 0.5) * amp + (rand() < 0.04 ? (rand() - 0.5) * amp * 2.2 : 0);
+        const t = i / steps;
+        out.push([x0 + (x1 - x0) * t + nx * off, y0 + (y1 - y0) * t + ny * off]);
+      }
+      return out;
+    };
+    // the corners, the edges wandering in between; one corner torn right off
+    const torn = Math.floor(rand() * 4);
+    const corner = (i, x, y, sx, sy) => (i === torn
+      ? [[x + sx * r(22, 40), y + sy * r(1, 5)], [x + sx * r(1, 5), y + sy * r(22, 40)]]
+      : [[x + sx * r(2, 9), y + sy * r(2, 9)]]);
+    const ring = [
+      ...corner(0, 0, 0, 1, 1).reverse(),
+      [W * r(0.3, 0.4), r(0, 9)], [W * r(0.6, 0.7), r(0, 9)],
+      ...corner(1, W, 0, -1, 1),
+      [W - r(0, 9), H * r(0.2, 0.3)], [W - r(0, 9), H * r(0.45, 0.55)], [W - r(0, 9), H * r(0.7, 0.8)],
+      ...corner(2, W, H, -1, -1).reverse(),
+      [W * r(0.6, 0.7), H - r(0, 9)], [W * r(0.3, 0.4), H - r(0, 9)],
+      ...corner(3, 0, H, 1, -1),
+      [r(0, 9), H * r(0.7, 0.8)], [r(0, 9), H * r(0.45, 0.55)], [r(0, 9), H * r(0.2, 0.3)],
+    ];
+    const outline = (amp, inset) => {
+      const cx = W / 2, cy = H / 2;
+      const c = ring.map(([x, y]) => [x + Math.sign(cx - x) * inset, y + Math.sign(cy - y) * inset]);
+      let pts = [];
+      for (let i = 0; i < c.length; i++) {
+        const [x0, y0] = c[i], [x1, y1] = c[(i + 1) % c.length];
+        pts = pts.concat(tear(x0, y0, x1, y1, amp));
+      }
+      return pts;
+    };
+    return { outer: outline(2.6, 0), inner: outline(2, 2.6) };
+  }
+
+  // the Steam AppID to read a game's description from: its own, or for a
+  // game added another way, a Steam store match on the exact title (an
+  // edition suffix like GOTY or Definitive is allowed, nothing else)
+  async function peakAppId(g) {
+    if (g.steamAppId) return g.steamAppId;
+    if (g.steamMeta && g.steamMeta.lookupAppId) return g.steamMeta.lookupAppId;
+    if (!api.steamSearch || !g.name) return null;
+    const key = (x) => String(x || '').toLowerCase().replace(/[\u2122\u00ae\u00a9]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+    const want = key(g.name);
+    const extra = /^(goty|gameoftheyear|definitive|complete|deluxe|ultimate|remastered|enhanced|directorscut|edition)+$/;
+    const res = await api.steamSearch(g.name).catch(() => null);
+    if (!res || !res.ok || !Array.isArray(res.data)) return null;
+    const hit = res.data.slice(0, 8).find((h) => {
+      const k = key(h.name);
+      return k === want || (k.startsWith(want) && extra.test(k.slice(want.length)));
+    });
+    if (!hit) return null;
+    g.steamMeta = { ...(g.steamMeta || {}), lookupAppId: hit.appId };
+    return hit.appId;
+  }
+
+  // the year a game first came out, from SteamGridDB: by its Steam AppID, else
+  // only an exact title match (never a guess)
+  async function peakFirstYear(g) {
+    const res = await api.sgdbResolve({ name: g.name, steamAppId: g.steamAppId || null }).catch(() => null);
+    const m = res && res.ok && res.data && res.data.match;
+    if (!m || (!g.steamAppId && Number(m.score) < 1000)) return 0;
+    const t = Number(m.releaseDate || m.release_date);
+    const y = t > 0 ? new Date(t * 1000).getFullYear() : 0;
+    return y > 1970 ? y : 0;
   }
 
   function openPeakShowcase(g, fromEl) {
     if (!g) return;
+    const W = 420, P = 156, H = P * 3, ROLL = 58;
+    const shape = peakLetterOutline(g.id, W, H);
+    const f = (v) => v.toFixed(1);
+    const d = (pts) => `M${pts.map(([x, y]) => `${f(x)} ${f(y)}`).join('L')}Z`;
+    const stand = peakStanding(g);
+    let label = peakLabel(g);
+    const writing = () => `
+      <div class="pkl-writing" style="width:${W}px;height:${H}px">
+        <svg class="pkl-paper" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true">
+          <path d="${d(shape.outer)}" fill="#f6efdf"/>
+          <path d="${d(shape.inner)}" fill="#e9dec4"/>
+          <path d="${d(shape.inner)}" fill="none" stroke="#8a6230" stroke-opacity="0.3" stroke-width="1"/>
+        </svg>
+        ${peakLetterArt(g.id, W, H)}
+        <div class="pkl-text">
+          <div class="pkl-row"><div class="pkl-word">PEAK</div><div class="pkl-rule"></div></div>
+          <div class="pkl-row"><div class="pkl-game">${esc(g.name || 'Untitled')}</div>${label.line ? `<div class="pkl-made">${esc(label.line)}</div>` : ''}${label.about ? `<p class="pkl-about">${esc(label.about)}</p>` : ''}</div>
+          <div class="pkl-row"><p class="pkl-stand">${esc(stand.head)}</p>${stand.below.length
+            ? `<div class="pkl-above">It sits above</div><div class="pkl-facts">${stand.below.map(([n, v]) => `<div class="pkl-fact"><span>${esc(n)}</span><i></i><b>${esc(v)}</b></div>`).join('')}</div>`
+            : '<p class="pkl-stand is-quiet">Nothing else is rated yet.</p>'}</div>
+        </div>
+      </div>`;
+    // An old scroll: it comes out of the scrap rolled up, then the roll runs
+    // down the page and the paper opens behind it. Motion off: just the page.
+    const still = prefersReducedMotion();
     const card = openModal(`
-      <div class="pk">
-        <div class="pk-stage">
-          <div class="pk-plaque" data-pk-plaque>
-            <div class="pk-face">
-            <div class="pk-glare" aria-hidden="true"></div>
-            <div class="pk-body">
-              <span class="pk-titles">
-                <span class="pk-word peak-word">Peak</span>
-                <span class="pk-game">${esc(g.name || 'Untitled')}</span>
-              </span>
+      <div class="pkl" style="--pkl-w:${W}px;--pkl-p:${P}px;--pkl-roll:${ROLL}px">
+        <div class="pkl-stage">
+          <div class="pkl-sheet" data-pkl-sheet${still ? '' : ' style="opacity:0"'}>
+            <div class="pkl-reveal" data-pkl-reveal${still ? '' : ' style="clip-path:inset(0 0 100% 0)"'}>
+              <div class="pkl-face" style="clip-path:path('${d(shape.outer)}')"><div class="pkl-window">${writing()}</div></div>
             </div>
-            </div>
+            ${still ? '' : '<div class="pkl-roll" data-pkl-roll aria-hidden="true"><i class="pkl-roll-lip"></i></div>'}
           </div>
         </div>
-        <div class="pk-glaze">
-          <p class="pk-hype">${esc(peakHype(g))}</p>
-          <p class="pk-story">${esc(peakStory(g))}</p>
-          <div class="pk-facts">${peakFacts(g).map(([v, l]) => `<div class="pk-fact"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>
-          <button type="button" class="pk-close" data-autofocus data-pk-close>Back</button>
-        </div>
+        <button type="button" class="pkl-close" data-autofocus data-pkl-close>Roll it up</button>
       </div>`, { className: 'peak-modal' });
     if (!card) return;
-    card.querySelector('[data-pk-close]').onclick = closeModal;
-    const plaque = card.querySelector('[data-pk-plaque]');
-    peakTilt(plaque, 16);
-    sfx('success');
-    if (prefersReducedMotion()) return;
-    // grow out of the pill that was clicked: start at its box, flipped a bit, then land
-    requestAnimationFrame(() => {
-      const to = plaque.getBoundingClientRect();
+    const root = card.querySelector('.pkl');
+    if (api.steamDetails && !(g.steamMeta && g.steamMeta.about)) {
+      peakAppId(g).then((appId) => (appId ? api.steamDetails(appId) : null)).then((res) => {
+        if (!res || !res.ok || !res.data) return;
+        g.steamMeta = { ...(g.steamMeta || {}), ...res.data, version: 3, at: Date.now() };
+        saveGamesSoon();
+        if (!root.isConnected) return;
+        label = peakLabel(g);
+        for (const w of root.querySelectorAll('.pkl-window')) w.innerHTML = writing();
+      }).catch(() => {});
+    }
+    if (!(Number(g.firstYear) > 0) && !g._yearTried && api.sgdbResolve && (g.steamAppId || g.name)) {
+      g._yearTried = true;
+      peakFirstYear(g).then((y) => {
+        if (!y) return;
+        g.firstYear = y;
+        saveGamesSoon();
+        if (!root.isConnected) return;
+        label = peakLabel(g);
+        for (const w of root.querySelectorAll('.pkl-window')) w.innerHTML = writing();
+      }).catch(() => {});
+    }
+    peakColors(g).then((cols) => {
+      if (!cols || !root.isConnected) return;
+      for (let i = 0; i < 4; i++) root.style.setProperty(`--s${i + 1}`, cols[i % cols.length]);
+    });
+    const sheet = card.querySelector('[data-pkl-sheet]');
+    const reveal = card.querySelector('[data-pkl-reveal]');
+    const roll = card.querySelector('[data-pkl-roll]');
+    const ease = 'cubic-bezier(0.32, 0.72, 0.18, 1)';
+    let busy = false;
+    // One clock drives both the roll and the paper's edge, so the edge is
+    // always under the roll. p is how much is unrolled (0 to 1).
+    const paint = (p) => {
+      const y = p * H;
+      reveal.style.clipPath = p >= 1 ? '' : `inset(-12px -12px ${f(H - y)}px -12px)`;
+      // the roll thins as paper comes off it, and is gone at the bottom
+      roll.style.transform = `translateY(${f(y)}px) scaleY(${(1 - 0.7 * p).toFixed(3)})`;
+      roll.style.opacity = p < 0.94 ? '1' : String(Math.max(0, (1 - p) / 0.06).toFixed(3));
+    };
+    let rafId = 0;
+    const run = (from, to, ms, curve) => new Promise((done) => {
+      cancelAnimationFrame(rafId);
+      const t0 = performance.now();
+      const step = (now) => {
+        const t = Math.min(1, (now - t0) / ms);
+        paint(from + (to - from) * curve(t));
+        if (t < 1 && root.isConnected) rafId = requestAnimationFrame(step); else done();
+      };
+      rafId = requestAnimationFrame(step);
+    });
+    // out: quick start, long gentle stop; back: slow start, quick finish
+    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+    const easeIn = (t) => t * t * (0.4 + 0.6 * t);
+    // where the scrap is, seen from the roll (the sheet turns about the roll)
+    const fromScrap = () => {
+      const to = roll.getBoundingClientRect();
       const from = fromEl && fromEl.isConnected ? fromEl.getBoundingClientRect() : null;
-      const start = from && from.width
-        ? `translate(${(from.left + from.width / 2) - (to.left + to.width / 2)}px, ${(from.top + from.height / 2) - (to.top + to.height / 2)}px) scale(${Math.max(0.05, from.width / to.width)}, ${Math.max(0.05, from.height / to.height)})`
-        : 'translateY(30px) scale(0.6)';
-      plaque.animate([
-        { transform: `${start} perspective(900px) rotateY(-40deg) rotateX(12deg)`, opacity: 0.4 },
-        { transform: 'perspective(900px) rotateY(8deg) rotateX(-3deg) scale(1.03)', opacity: 1, offset: 0.7 },
-        { transform: 'none', opacity: 1 },
-      ], { duration: 950, easing: 'cubic-bezier(0.2, 0.9, 0.25, 1)' });
-      plaque.classList.add('is-landing');
-      setTimeout(() => plaque.classList.remove('is-landing'), 1800);
-    });
-  }
+      if (!from || !from.width) return { dx: 0, dy: 40, sc: 0.5 };
+      return {
+        dx: (from.left + from.width / 2) - (to.left + to.width / 2),
+        dy: (from.top + from.height / 2) - (to.top + to.height / 2),
+        sc: Math.max(0.12, Math.min(0.6, from.width / to.width)),
+      };
+    };
 
-  // a foil surface that tilts toward the pointer, with the light following it
-  function peakTilt(el, deg = 14) {
-    if (!el || el._peakTilt || prefersReducedMotion()) return;
-    el._peakTilt = true;
-    el.addEventListener('pointermove', (e) => {
-      const r = el.getBoundingClientRect();
-      const px = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      const py = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
-      el.style.setProperty('--mx', `${(px * 100).toFixed(1)}%`);
-      el.style.setProperty('--my', `${(py * 100).toFixed(1)}%`);
-      el.style.setProperty('--ry', `${((px - 0.5) * deg).toFixed(2)}deg`);
-      el.style.setProperty('--rx', `${((0.5 - py) * deg * 0.8).toFixed(2)}deg`);
-      el.classList.add('is-lit');
-    });
-    el.addEventListener('pointerleave', () => {
-      el.classList.remove('is-lit');
-      el.style.setProperty('--rx', '0deg');
-      el.style.setProperty('--ry', '0deg');
-    });
+    const unroll = async () => {
+      if (still) { sfx('success'); return; }
+      busy = true;
+      paint(0);
+      const { dx, dy, sc } = fromScrap();
+      await sheet.animate([
+        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(-9deg)`, opacity: 0.3 },
+        { transform: 'translate(0, -8px) scale(1.03) rotate(1.5deg)', opacity: 1, offset: 0.75 },
+        { transform: 'rotate(-1.2deg)', opacity: 1 },
+      ], { duration: 560, easing: ease, fill: 'both' }).finished.catch(() => {});
+      sheet.style.opacity = '';
+      if (!root.isConnected) return;
+      await run(0, 1, 1250, easeOut);
+      busy = false;
+      if (root.isConnected) sfx('success');
+    };
+
+    const rollUp = async () => {
+      if (busy) return;
+      if (still) { closeModal(); return; }
+      busy = true;
+      await run(1, 0, 760, easeIn);
+      if (!root.isConnected) return;
+      const { dx, dy, sc } = fromScrap();
+      sheet.animate([
+        { transform: 'rotate(-1.2deg)', opacity: 1 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${sc}) rotate(-9deg)`, opacity: 0 },
+      ], { duration: 420, easing: 'cubic-bezier(0.5, 0, 0.75, 0)', fill: 'forwards' })
+        .finished.then(() => closeModal()).catch(() => closeModal());
+    };
+
+    card.querySelector('[data-pkl-close]').onclick = rollUp;
+    requestAnimationFrame(unroll);
   }
-  // every PEAK pill anywhere: shine on hover, open the showcase on click
-  document.addEventListener('pointerover', (e) => {
-    const pill = e.target.closest && e.target.closest('.peak-foil');
-    if (pill) peakTilt(pill, 22);
-  });
   document.addEventListener('click', (e) => {
     const pill = e.target.closest && e.target.closest('[data-peak-open]');
     if (!pill) return;
@@ -3690,7 +4230,7 @@
       const tier = Rating.tier(r);
       score.dataset.tier = tier;
       score.innerHTML = !r ? '<span class="rt-none">Not rated</span>'
-        : r >= Rating.PEAK ? peakChip(' is-lg')
+        : r >= Rating.PEAK ? strapHtml(g, ' is-lg', false)
           : `<b>${Rating.label(r)}</b><small>/ 10</small>`;
       for (const b of stepBtns) b.classList.toggle('is-lit', Number(b.dataset.rt) <= Math.round(r) && r > 0);
     };
@@ -3932,6 +4472,21 @@
       drawSidePill(pill);
     };
     S.raf = requestAnimationFrame(step);
+  }
+
+  // the game already in the vault that a new entry would duplicate: the same
+  // Steam AppID, or the same title ignoring case, symbols and spacing
+  function findSameGame({ name, steamAppId }) {
+    const key = (x) => String(x || '').toLowerCase().replace(/[\u2122\u00ae\u00a9]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
+    const app = Number(steamAppId) || 0;
+    if (app) {
+      const hit = state.games.find((x) => Number(x.steamAppId) === app);
+      if (hit) return hit;
+    }
+    const k = key(name);
+    if (!k) return null;
+    // a different AppID on both sides means two different games
+    return state.games.find((x) => key(x.name) === k && !(app && x.steamAppId && Number(x.steamAppId) !== app)) || null;
   }
 
   function openGameModal(game) {
@@ -4213,7 +4768,7 @@
         if (stale()) return;
         if (res && res.ok) {
           steamHits = res.data.slice(0, 6).map((hit) => ({
-            kind: 'steam', appId: hit.appId, name: hit.name, meta: wishPriceText(hit.price) || 'Steam',
+            kind: 'steam', appId: hit.appId, name: hit.name, meta: 'Steam',
           }));
         }
       }
@@ -4255,6 +4810,8 @@
         const src = item.game;
         nameInput.value = src.name;
         card.querySelector('#f-exe').value = src.exePath || '';
+        const appEl = card.querySelector('#f-steam');
+        if (appEl && src.steamAppId) appEl.value = String(src.steamAppId);
         if (src.coverUrl) setSlot('cover', src.coverUrl);
         if (src.heroUrl) setSlot('hero', src.heroUrl);
         if (src.logoUrl) setSlot('logo', src.logoUrl);
@@ -4308,7 +4865,9 @@
       const wantName = nameInput.value.trim();
       if (artStatus) artStatus.textContent = 'Fetching artwork…';
       const res = await api.sgdbAutofill(steamAppId && !id
-        ? { name, steamAppId, slots: ['cover', 'hero', 'logo'] }
+        // all four: Steam's own art wins where it has it, SteamGridDB fills
+        // the rest (Steam has no icon, and often no logo)
+        ? { name, steamAppId, slots: ['cover', 'hero', 'logo', 'icon'] }
         : { id, name }).catch(() => null);
       // stale: a newer pick, a closed dialog, or the title was edited since
       if (seq !== autofillSeq || !alive() || nameInput.value.trim() !== wantName) {
@@ -4434,26 +4993,56 @@
       artPanel.hidden = false;
       artPanel.closest('.ge-art-sec')?.classList.add('is-picking');   // current picks stay pinned above the grid
       if (expand) expand.textContent = 'Hide artwork';
-      if (artMatch && !artMatch.textContent) {
+      if (artMatch && !artMatch.textContent && chosen && chosen.id) {
         artMatch.textContent = `Matched: ${(chosen && chosen.name) || g.name || nameInput.value}`;
       }
       // keep the row of current picks in view above the picker
       (card.querySelector('#art-summary') || artPanel).scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
 
-      // Editing a game that never matched: resolve it on demand.
+      // A game with no SteamGridDB match yet: find which game it is, but never
+      // change any art here (opening the picker is not a pick). With a Steam
+      // AppID the match is exact; by name alone, ask which game is meant
+      // ("God of War" is two games).
       if (!chosen || !chosen.id) {
         const name = (nameInput.value || g.name || '').trim();
-        if (name) {
-          await autofill(null, name);
-          if (!alive() || !art.expanded) return;
-          if (!chosen || !chosen.id) {
-            artResults.innerHTML = '<div class="art-empty">No SteamGridDB match. Pick the game from the title dropdown.</div>';
-            return;
-          }
-        } else {
+        if (!name) {
           artResults.innerHTML = '<div class="art-empty">Search for the game above first.</div>';
           return;
         }
+        artResults.innerHTML = '<div class="art-empty">Finding the game…</div>';
+        const steamId = ((card.querySelector('#f-steam') || {}).value || g.steamAppId || '').toString().trim();
+        if (/^\d+$/.test(steamId) && api.sgdbResolve) {
+          const res = await api.sgdbResolve({ name, steamAppId: steamId }).catch(() => null);
+          if (!alive() || !art.expanded) return;
+          const m = res && res.ok && res.data && res.data.match;
+          if (m && m.id && (m.score == null || m.score >= 1000)) {
+            chosen = { id: m.id, name: m.name || name };
+            if (artMatch) artMatch.textContent = `Matched: ${chosen.name}`;
+            loadArtTab(art.tab, 0, false);
+            return;
+          }
+        }
+        const hits = api.sgdbGames ? await api.sgdbGames(name).catch(() => null) : null;
+        if (!alive() || !art.expanded) return;
+        const list = hits && hits.ok && Array.isArray(hits.data) ? hits.data.filter((h) => h && h.id).slice(0, 8) : [];
+        if (!list.length) {
+          artResults.innerHTML = '<div class="art-empty">No SteamGridDB match. Pick the game from the title dropdown.</div>';
+          return;
+        }
+        const year = (h) => {
+          const t = Number(h.releaseDate || h.release_date);
+          return t > 0 ? ` (${new Date(t * 1000).getFullYear()})` : '';
+        };
+        artResults.innerHTML = `<div class="art-which"><div class="art-empty">Which game is it?</div>${list.map((h, i) => `<button type="button" class="btn art-which-btn" data-which="${i}">${esc(h.name)}${year(h)}</button>`).join('')}</div>`;
+        for (const b of artResults.querySelectorAll('[data-which]')) {
+          b.onclick = () => {
+            const h = list[Number(b.dataset.which)];
+            chosen = { id: h.id, name: h.name };
+            if (artMatch) artMatch.textContent = `Matched: ${h.name}${year(h)}`;
+            loadArtTab(art.tab, 0, false);
+          };
+        }
+        return;
       }
       loadArtTab(art.tab, 0, false);
     }
@@ -4636,6 +5225,42 @@
 
       const isWish = !!wishlisted && !finished;
       const nextStatus = finished ? 'Finished' : 'Playing';
+
+      // Already have it? The same Steam AppID, or the same title once case
+      // and punctuation are ignored. A wishlist entry moves to the library
+      // (keeping its art); anything else is not added a second time.
+      const dupe = isNew ? findSameGame({ name, steamAppId }) : null;
+      if (dupe) {
+        const dupeWish = gvIsWishlisted(dupe);
+        if (isWish || !dupeWish) {
+          closeModal();
+          saving = false;
+          toast(`${dupe.name} is already ${dupeWish ? 'on your wishlist' : 'in your library'}`, 'error');
+          if (!dupeWish) openDetail(dupe.id);
+          return;
+        }
+        const fresh = { cover: coverLocal, hero: heroLocal, logo: logoLocal, icon: iconLocal };
+        for (const [slot, field] of [['cover', 'coverUrl'], ['hero', 'heroUrl'], ['logo', 'logoUrl'], ['icon', 'iconUrl']]) {
+          if (!dupe[field] && fresh[slot]) { dupe[field] = fresh[slot]; delete dupe['_' + slot]; }
+        }
+        dupe.wishlisted = false;
+        dupe.status = nextStatus;
+        delete dupe.wishRank;
+        if (!dupe.steamAppId && steamAppId) dupe.steamAppId = steamAppId;
+        if (!dupe.sgdbId && chosen) dupe.sgdbId = chosen.id;
+        if (exePath) dupe.exePath = exePath;
+        if (launchTarget) dupe.launchTarget = launchTarget;
+        if (trackMode) { dupe.trackMode = trackMode; dupe.trackExe = trackExe; }
+        if (notes && !dupe.notes) dupe.notes = notes;
+        if (typedHours > 0) { dupe.hours = typedHours; dupe.hoursSetAt = Date.now(); }
+        closeModal();
+        saveGamesSoon();
+        state._shelfKey = '';
+        refreshArt(dupe, { focus: true });
+        toast(`${dupe.name} moved from your wishlist to your library`, 'ok');
+        saving = false;
+        return;
+      }
 
       if (isNew) {
         state.games.unshift({
@@ -8433,6 +9058,9 @@
       title: g.name || 'Untitled',
       status: gvIsWishlisted(g) ? 'Wishlist' : gvStatusOf(g),
       h: Number.isFinite(Number(g.hours)) ? Number(g.hours) : null,
+      // the icon slot is made for small square spots like this one; the
+      // cover is only the fallback for games without an icon
+      gicon: g.iconUrl || '',
       cover: g._cover || g.coverUrl || g.heroUrl || '',
       last: g.lastPlayed || 0,
     }));
@@ -8459,6 +9087,8 @@
     function rowHTML(it, i, q) {
       const thumb = it.icon
         ? `<span class="thumb act"><svg viewBox="0 0 24 24">${ICON[it.icon]}</svg></span>`
+        : it.gicon
+          ? `<span class="thumb is-icon"><img src="${esc(toFileUrl(it.gicon))}" data-alt="${esc(it.cover ? toFileUrl(it.cover) : '')}" alt="" loading="lazy"></span>`
         : it.cover
           ? `<span class="thumb"><img src="${esc(toFileUrl(it.cover))}" alt="" loading="lazy"></span>`
           : `<span class="thumb">${esc(initials(it.title))}</span>`;
@@ -8483,6 +9113,17 @@
       });
       if (!flat.length) html = `<div class="empty" role="presentation">No results for “${esc(q)}”</div>`;
       rowsEl.innerHTML = html;
+      // an icon file that's gone falls back to the cover, then to initials
+      for (const img of rowsEl.querySelectorAll('.thumb.is-icon img')) {
+        img.addEventListener('error', () => {
+          const t = img.parentElement;
+          const alt = img.dataset.alt;
+          if (alt) { t.classList.remove('is-icon'); img.removeAttribute('data-alt'); img.src = alt; return; }
+          const it = flat[Number(t.closest('.item')?.dataset.i)];
+          t.classList.remove('is-icon');
+          t.textContent = initials(it ? it.title : '');
+        });
+      }
       countEl.textContent = !flat.length ? ''
         : matched > flat.length ? `${flat.length} of ${matched} results`
           : `${flat.length} result${flat.length > 1 ? 's' : ''}`;

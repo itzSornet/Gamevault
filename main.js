@@ -20,6 +20,7 @@ const { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAl
 const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
 const { createArtCache, installSgdbImageCaching } = require('./src/backend/art-cache.js');
+const { createPrices } = require('./src/backend/prices.js');
 const { cloudConfig } = require('./src/backend/cloud-config.js');
 const { createAccount } = require('./src/backend/account.js');
 const { createCloud } = require('./src/backend/cloud.js');
@@ -520,6 +521,7 @@ const backgroundMode = process.env.GV_BACKGROUND === '1';
 // src/lib/bigpicture.js). The renderer owns the mode; main only does the window.
 const BigPicture = require('./src/lib/bigpicture.js');
 const UiPrefs = require('./src/lib/uiprefs.js');
+const Palette = require('./src/lib/palette.js');
 let bigPictureOn = false;
 // Settings → Appearance → Size: the normal window's page zoom (Big Picture
 // uses its own). Read at start so the first paint already has it.
@@ -852,6 +854,47 @@ function createWindow() {
       const resized = size.width > width ? img.resize({ width, quality: 'good' }) : img;
       fs.writeFileSync(out, isLogo ? resized.toPNG() : resized.toJPEG(88));
       return require('url').pathToFileURL(out).href;
+    } catch (_) {
+      return null;
+    }
+  });
+
+  // The main colours of a cover (for the PEAK strap). Local files and web
+  // art both work; answers are kept in userData/palettes.json.
+  const palettes = { map: null, file: () => path.join(app.getPath('userData'), 'palettes.json'), saveT: null };
+  ipcMain.handle('img:palette', async (_e, src) => {
+    try {
+      if (!src || typeof src !== 'string') return null;
+      if (!palettes.map) {
+        try { palettes.map = JSON.parse(fs.readFileSync(palettes.file(), 'utf8')) || {}; } catch (_) { palettes.map = {}; }
+      }
+      let img = null, key = src;
+      if (/^https?:/i.test(src)) {
+        if (palettes.map[key]) return palettes.map[key];
+        const res = await require('electron').net.fetch(src);
+        if (!res.ok) return null;
+        img = nativeImage.createFromBuffer(Buffer.from(await res.arrayBuffer()));
+      } else {
+        let file = src;
+        if (file.startsWith('file://')) {
+          try { file = require('url').fileURLToPath(file); } catch (_) { file = file.replace('file://', ''); }
+        }
+        if (!fs.existsSync(file)) return null;
+        key = `${file}:${fs.statSync(file).mtimeMs}`;
+        if (palettes.map[key]) return palettes.map[key];
+        img = nativeImage.createFromPath(file);
+      }
+      if (!img || img.isEmpty()) return null;
+      const small = img.resize({ width: 48, quality: 'good' });
+      const colors = Palette.extract(small.toBitmap(), { count: 4 });
+      if (!colors.length) return null;
+      const out = { colors, ink: Palette.ink(colors) };
+      palettes.map[key] = out;
+      const keys = Object.keys(palettes.map);
+      if (keys.length > 2000) for (const k of keys.slice(0, keys.length - 2000)) delete palettes.map[k];
+      clearTimeout(palettes.saveT);
+      palettes.saveT = setTimeout(() => { try { fs.writeFileSync(palettes.file(), JSON.stringify(palettes.map)); } catch (_) {} }, 1500);
+      return out;
     } catch (_) {
       return null;
     }
@@ -1549,15 +1592,18 @@ function createWindow() {
       }
       const data = entry.data;
       const rel = data.release_date || null;
-      const po = data.price_overview || null;
       return {
         ok: true,
         data: {
-          // wishlist cards: is it out, and what does it cost right now
+          // wishlist cards: is it out yet (prices come from IsThereAnyDeal)
           release: rel ? { soon: !!rel.coming_soon, date: String(rel.date || '') } : null,
-          price: po ? { final: String(po.final_formatted || ''), initial: String(po.initial_formatted || ''), discount: Number(po.discount_percent) || 0 } : null,
           free: !!data.is_free,
           metacritic: data.metacritic ? { score: data.metacritic.score, url: data.metacritic.url } : null,
+          // the PEAK letter: who made it and what it is
+          developer: Array.isArray(data.developers) && data.developers.length ? String(data.developers[0]).slice(0, 80) : '',
+          genres: Array.isArray(data.genres) ? data.genres.map((x) => String((x && x.description) || '')).filter(Boolean).slice(0, 3) : [],
+          // the game's own one-line description, as plain text
+          about: String(data.short_description || '').replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim().slice(0, 300),
           minimum: parseSteamRequirements(data.pc_requirements && data.pc_requirements.minimum),
           recommended: parseSteamRequirements(data.pc_requirements && data.pc_requirements.recommended),
         },
@@ -1580,9 +1626,6 @@ function createWindow() {
           appId: Number(it.id),
           name: it.name,
           image: typeof it.tiny_image === 'string' ? it.tiny_image : '',
-          price: it.price && typeof it.price.final === 'number'
-            ? { final: it.price.final, initial: Number(it.price.initial) || it.price.final, currency: String(it.price.currency || 'USD') }
-            : null,
         }));
       return { ok: true, data: items };
     } catch (err) {
@@ -1591,6 +1634,63 @@ function createWindow() {
   });
 
   const unwrap = (res) => { if (!res.ok) throw cloudError(res); return res.data; };
+
+  // Wishlist prices: IsThereAnyDeal through GameVault Cloud (the key stays
+  // on the server), cached on disk for 6 hours, in the user's own country.
+  let pricesInstance = null;
+  // Prices for the region the user actually shops in: Steam's own store
+  // country (its steamCountry cookie, e.g. IQ), which is what their Steam
+  // store shows. Windows' region is only the fallback: an en-US PC in Iraq
+  // would otherwise get US prices, higher than their Steam store.
+  let countryCache = null;
+  function storeCountry() {
+    if (countryCache && Date.now() - countryCache.at < 12 * 3600000) return Promise.resolve(countryCache.cc);
+    let fallback = 'US';
+    try { fallback = (app.getLocaleCountryCode && app.getLocaleCountryCode()) || 'US'; } catch (_) {}
+    return new Promise((resolve) => {
+      const done = (cc) => { countryCache = { cc, at: Date.now() }; resolve(cc); };
+      const req = require('https').get('https://store.steampowered.com/', { timeout: 8000 }, (res) => {
+        const cookies = [].concat(res.headers['set-cookie'] || []);
+        const m = cookies.map((c) => /steamCountry=([A-Za-z]{2})/.exec(c)).find(Boolean);
+        res.resume();
+        if (m) done(m[1].toUpperCase()); else { countryCache = null; resolve(fallback); }
+      });
+      req.on('timeout', () => req.destroy());
+      req.on('error', () => resolve(fallback));
+    });
+  }
+  // Steam's own price in the user's store region (no key; one call for many
+  // games). IsThereAnyDeal misses regional prices such as Iraq's.
+  async function steamRegionPrices(ids, cc) {
+    const url = `https://store.steampowered.com/api/appdetails?appids=${ids.join(',')}&cc=${encodeURIComponent(cc)}&filters=price_overview`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return {};
+    const body = await res.json().catch(() => null);
+    const out = {};
+    for (const id of ids) {
+      const p = body && body[id] && body[id].success && body[id].data && body[id].data.price_overview;
+      if (!p || typeof p.final !== 'number') continue;
+      out[id] = { amount: p.final / 100, regular: p.initial / 100, cut: Number(p.discount_percent) || 0, currency: String(p.currency || '') };
+    }
+    return out;
+  }
+
+  ipcMain.handle('prices:get', async (_e, { steamAppIds, fresh } = {}) => {
+    if (!pricesInstance) {
+      const { url, anonKey } = cloudConfig();
+      pricesInstance = createPrices({
+        file: path.join(app.getPath('userData'), 'prices.json'), cloudUrl: url, anonKey,
+        token: async (o) => (await account().token(o).catch(() => null)) || artCache().token(o),
+        steam: steamRegionPrices,
+      });
+    }
+    const country = await storeCountry();
+    try {
+      return await pricesInstance.get({ steamAppIds, country, fresh });
+    } catch (err) {
+      return { ok: false, error: { code: 'SERVER', message: err.message } };
+    }
+  });
 
   ipcMain.handle('sgdb:games', sgdbWrap(async (term) => {
     if (!term || !String(term).trim()) return [];
@@ -1671,12 +1771,19 @@ function createWindow() {
     const keep = (slot) => !want || want.has(slot);
     // A Steam game whose own art covers every slot asked for never touches
     // SteamGridDB: no lookup, no rate limit, just Steam's CDN.
+    let steam = null;
     if (steamAppId && want) {
-      const steam = await steamPicks(steamAppId, keep);
+      steam = await steamPicks(steamAppId, keep);
       if ([...want].every((s) => steam[s])) return { match: null, assets: await cacheAssets(steam) };
     }
     const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId, fresh }), () => autofillWithKey({ id, name, steamAppId, keep }));
     if (cloud.viaKey) return cloud.data;
+    // SteamGridDB doesn't know it, or can't answer right now (busy, hourly
+    // limit): keep whatever Steam's own art had instead of nothing
+    if (!cloud.ok && steamAppId) {
+      const own = steam || await steamPicks(steamAppId, keep);
+      if (Object.keys(own).length || cloud.error.code === 'NOT_FOUND') return { match: null, assets: await cacheAssets(own) };
+    }
     if (!cloud.ok && cloud.error.code === 'NOT_FOUND') return { match: null, assets: {} };
     const data = unwrap(cloud);
     const game = data.game || {};

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   isMaximized: () => ipcRenderer.invoke('win:is-maximized'),
   getPlatformInfo: () => ipcRenderer.invoke('app:platform-info'),
   thumb: (src, width, kind) => ipcRenderer.invoke('img:thumb', { src, width, kind }),
+  palette: (src) => ipcRenderer.invoke('img:palette', src),
   onMaximizedChange: (cb) => ipcRenderer.on('win:maximized', (_, isMax) => cb(isMax)),
   // Big Picture: fullscreen + page zoom (main), and requests to enter it
   // from a second launch with --bigpicture
@@ -105,6 +106,7 @@ contextBridge.exposeInMainWorld('api', {
   // SteamGridDB search
   sgdbGames: (term) => ipcRenderer.invoke('sgdb:games', term),
   steamDetails: (appId) => ipcRenderer.invoke('steam:details', appId),
+  prices: (steamAppIds, fresh) => ipcRenderer.invoke('prices:get', { steamAppIds, fresh }),
   steamSearch: (term) => ipcRenderer.invoke('steam:search', term),
   sgdbResolve: (payload) => ipcRenderer.invoke('sgdb:resolve', payload),
   sgdbAssets: (payload) => ipcRenderer.invoke('sgdb:assets', payload),

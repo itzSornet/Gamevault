@@ -1855,6 +1855,8 @@ html[data-ui-motion='off'] * { animation-duration: 0.001ms !important; animation
 .art-results::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: calc(3px * var(--radius-k, 1)); }
 
 .art-empty { color: var(--text-mute); font-size: 12px; padding: 6px; }
+.art-which { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 4px; }
+.art-which .art-empty { flex-basis: 100%; }
 
 .art-hits {
   display: grid;
@@ -3219,6 +3221,8 @@ body > .scrim.open { opacity: 1; pointer-events: auto; -webkit-backdrop-filter: 
 .spot .item:active .in { transform: scale(0.985); }
 .spot .thumb { flex: none; width: 32px; height: 32px; border-radius: calc(9px * var(--radius-k, 1)); display: grid; place-items: center; overflow: hidden; font: 600 11px var(--font-body); color: rgba(var(--ink-rgb), 0.92); box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.12); background: var(--surface-2); }
 .spot .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.spot .thumb.is-icon { background: transparent; box-shadow: none; }
+.spot .thumb.is-icon img { object-fit: contain; }
 .spot .thumb.act { background: rgba(var(--ink-rgb), 0.07); color: var(--text); }
 .spot .thumb svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .spot .name { flex: 1; min-width: 0; font: 500 14.5px var(--font-body); color: color-mix(in srgb, var(--text) 78%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color 0.15s; }
@@ -4398,8 +4402,10 @@ img.acct-avatar { object-fit: cover; padding: 0; }
    The mask stays put; the light layer inside it slides (transform only). */
 .gv-logo-sheen {
   position: absolute; inset: 0; pointer-events: none; opacity: 0; overflow: hidden;
-  -webkit-mask: var(--logo) center / 100% 100% no-repeat;
-  mask: var(--logo) center / 100% 100% no-repeat;
+  /* fitted like the logo image (contain), never stretched over its box: a
+     box wider than the drawn logo made a stretched ghost copy of it */
+  -webkit-mask: var(--logo) left center / contain no-repeat;
+  mask: var(--logo) left center / contain no-repeat;
   transition: opacity 0.3s ease;
 }
 .gv-logo-sheen > b {
@@ -4571,7 +4577,8 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
 }
 .wl-name { all: unset; display: block; cursor: pointer; max-width: 100%; }
 .wl-name:focus-visible { outline: 2px solid rgba(245, 196, 81, 0.8); outline-offset: 4px; border-radius: calc(6px * var(--radius-k, 1)); }
-.wl-logo { display: inline-block; position: relative; }
+.wl-logo { display: inline-block; position: relative; width: fit-content; max-width: 100%; }
+.wl-logo .gv-logo-sheen { -webkit-mask-position: left bottom; mask-position: left bottom; }
 .wl-logo img { display: block; object-fit: contain; object-position: left bottom; }
 .wl-top .wl-logo img { max-height: 116px; max-width: min(440px, 100%); filter: drop-shadow(0 6px 24px rgba(0, 0, 0, 0.55)); }
 .wl-name-text {
@@ -4593,10 +4600,33 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
 .wl-chip.is-soon { color: #f5c451; background: rgba(245, 196, 81, 0.16); }
 .wl-price { font-weight: 600; font-variant-numeric: tabular-nums; }
 .wl-price s { opacity: 0.55; margin-right: 6px; font-weight: 500; }
+/* a price is a link to its deal (IsThereAnyDeal's own link) */
+.wl-deal {
+  display: inline-flex; align-items: center; gap: 6px 8px;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; line-height: 1; cursor: pointer;
+}
+.wl-deal:hover .wl-price { text-decoration: underline; text-underline-offset: 3px; }
+.wl-deal:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.wl-shop { opacity: 0.6; }
+.wl-deal { white-space: nowrap; }
+/* small cards: the shop is in the tooltip, so the price never wraps into the buttons */
+.wl-card .wl-shop { display: none; }
+/* drag to reorder */
+.wl-card, .wl-top { cursor: grab; }
+.wl-card img, .wl-top img { -webkit-user-drag: none; }
+.wl-card.is-dragging, .wl-top.is-dragging { opacity: 0.35; cursor: grabbing; }
+.is-sorting .wl-card:not(.is-dragging), .is-sorting .wl-top:not(.is-dragging) { transition: box-shadow 0.12s ease; }
+.wl-card.is-drop-before { box-shadow: -4px 0 0 0 var(--accent); }
+.wl-card.is-drop-after { box-shadow: 4px 0 0 0 var(--accent); }
+.wl-top.is-drop-top { box-shadow: 0 0 0 2px var(--accent); }
+.wl-credit { margin: 18px 0 0; font-size: 11.5px; opacity: 0.55; text-align: right; }
+.wl-credit-link { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.wl-credit-link:hover { opacity: 1; color: var(--text); }
 .wl-top .wl-facts { color: rgba(255, 255, 255, 0.78); }
 .wl-top .wl-chip:not(.is-sale):not(.is-soon) { color: #fff; background: rgba(255, 255, 255, 0.14); }
 .wl-top .wl-price { color: #fff; }
 .wl-top .wl-since { color: rgba(255, 255, 255, 0.62); }
+.wl-top .wl-shop { color: rgba(255, 255, 255, 0.7); opacity: 1; }
 .wl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
 .wl-btn {
   height: 36px; padding: 0 14px;
@@ -4654,8 +4684,16 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
   color: #fff;
   background: rgba(0, 0, 0, 0.55);
 }
-.wl-card-foot { display: flex; align-items: center; gap: 8px; padding: 10px 8px 11px 14px; }
-.wl-card-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* name and buttons share the first row; the price line gets the whole width
+   below them, so it never runs under the buttons */
+.wl-card-foot {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  column-gap: 8px; row-gap: 6px; padding: 10px 8px 11px 14px;
+}
+.wl-card-info { display: contents; }
+.wl-card-name { grid-column: 1; grid-row: 1; }
+.wl-card-acts { grid-column: 2; grid-row: 1; }
+.wl-card .wl-facts { grid-column: 1 / -1; grid-row: 2; }
 .wl-card-name { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wl-card .wl-facts { color: var(--text-dim); font-size: 11.5px; min-height: 22px; }
 .wl-card .wl-chip:not(.is-sale):not(.is-soon) { color: var(--text); background: var(--surface-3); }
@@ -4676,6 +4714,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
 .wl-icon:hover { background: var(--surface-2); }
 .wl-icon:active { transform: scale(0.92); transition-duration: 80ms; }
 .wl-icon.is-top:hover { color: var(--wish); }
+.wl-icon.is-buy:hover { color: var(--accent); }
 .wl-icon.is-got:hover { color: var(--ok); }
 .wl-icon.is-remove:hover { color: var(--bad); }
 .wl-icon:focus-visible { outline: 2px solid rgba(var(--wish-rgb), 0.7); outline-offset: 1px; }
@@ -5863,7 +5902,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .pk-plaque { transit
 .gvx-rate.tier-peak.peak-foil, .card-rating[data-tier='peak'].peak-foil, #grid .card-rating[data-tier='peak'].peak-foil { background: var(--gold); color: #4b3108 !important; }
 
 /* numeric ratings sit where PEAK does: centered on top of the cover, same size */
-#grid .card-rating:not(.peak-foil), .card-rating:not(.peak-foil) {
+#grid .card-rating:not(.peak-strap), .card-rating:not(.peak-strap) {
   top: 10px; left: 50%; right: auto;
   translate: -50% 0;
   padding: 5px 13px 5px 11px;
@@ -5871,7 +5910,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .pk-plaque { transit
   font-size: 13px;
   z-index: 4;
 }
-.card-rating:not(.peak-foil) svg { width: 13px; height: 13px; }
+.card-rating:not(.peak-strap) svg { width: 13px; height: 13px; }
 .tile-rating { left: 50%; right: auto; translate: -50% 0; }
 .tile-rating .rate-chip { padding: 5px 13px 5px 11px; gap: 5px; font-size: 13px; }
 .tile-rating .rate-chip svg { width: 13px; height: 13px; }
@@ -5883,11 +5922,86 @@ html.is-bigpicture .tile-rating { transform-origin: top center; }
 .shelf-meta .rate-chip svg { width: 15px; height: 15px; }
 .shelf-meta .peak-foil.is-sm { padding: 5px 16px 6px; font-size: 15px; }
 .shelf-meta .rate-chip, .shelf-meta .peak-foil { margin-left: 10px; }
-#grid .card-rating:not(.peak-foil), .card-rating:not(.peak-foil),
+#grid .card-rating:not(.peak-strap), .card-rating:not(.peak-strap),
 .tile-rating .rate-chip { padding: 6px 15px 6px 12px; gap: 6px; font-size: 15px; }
-.card-rating:not(.peak-foil) svg, .tile-rating .rate-chip svg { width: 15px; height: 15px; }
+.card-rating:not(.peak-strap) svg, .tile-rating .rate-chip svg { width: 15px; height: 15px; }
 #grid .card-rating.peak-foil, .card-rating.peak-foil,
 .tile-rating.is-peak .peak-foil { padding: 5px 17px 6px; font-size: 14px; }
+
+/* ---- PEAK: a scrap of ripped paper with PEAK typed on it and rough
+   patches of the cover's colours (drawn as SVG in app.js; --s1..--s4 come
+   from the cover). Until the colours arrive, and with no cover, the patches
+   use these. Hover: the colour pieces slide and settle. */
+.peak-strap {
+  --s1: #a8543a; --s2: #3e5872; --s3: #d2a24c; --s4: #5d4330;
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 0;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.peak-strap .ps-svg.ps-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5)) drop-shadow(0 3px 6px rgba(0, 0, 0, 0.25));
+}
+.ps-b {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 1.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* the torn colour pieces slide in a little toward the word, then stop */
+.peak-strap:hover .ps-b1, .peak-strap:focus-visible .ps-b1 { transform: translateX(-4px); }
+.peak-strap:hover .ps-b2, .peak-strap:focus-visible .ps-b2 { transform: translateX(4px); }
+.peak-strap:hover .ps-b3, .peak-strap:focus-visible .ps-b3 { transform: translateX(-7px); }
+.peak-strap:hover .ps-b4, .peak-strap:focus-visible .ps-b4 { transform: translateX(7px); }
+.peak-strap:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* on a cover: wider than the cover, so the ends run off its edges */
+#grid .card-rating.peak-strap.peak-strap, .card-rating.peak-strap.peak-strap,
+.tile-rating.peak-strap.is-peak {
+  position: absolute;
+  top: 10px; left: -4%; right: -4%;
+  width: auto; height: auto;
+  translate: none;
+  display: block;
+  padding: 0; gap: 0;
+  border-radius: 0;
+  background: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  z-index: 4;
+  pointer-events: auto;
+}
+html.is-bigpicture .tile-rating.peak-strap.is-peak { top: 14px; transform: none; }
+/* the card's status pill (Running, Finished) moves below the scrap */
+#grid .card:has(> .card-media > .card-rating.peak-strap:not([hidden])) .card-status { top: 60px; }
+
+/* small scraps: the shelf banner (beside the play date), the game page's
+   Rate button and the rating dialog */
+.peak-strap.is-sm { width: 104px; }
+.shelf-meta .peak-strap.is-chip { margin-left: 14px; }
+html.is-bigpicture .shelf-meta .peak-strap.is-chip { width: 128px; margin-left: 16px; }
+.peak-strap.is-lg { width: 210px; }
+.peak-strap.is-btn {
+  width: 96px;
+  align-self: center;
+  margin: 0 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+html.is-bigpicture .peak-strap.is-btn { width: 116px; }
+
+html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .ps-b { transition: none; transform: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .ps-b { transition: none; transform: none !important; }
+}
 
 /* the shelf logo's box can be wider than the drawn logo (the image keeps its
    ratio inside it), so the sheen's mask must be fitted the same way as the
@@ -6474,3 +6588,159 @@ html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf-hero { min-height: 2
 html[data-ui-nav='dock']:not([data-ui-dock-pos='top']):not(.is-bigpicture) :is(.pad-hints, .toasts) { bottom: 84px; }
 html[data-ui-search='floating']:not(.is-bigpicture) .pad-hints { bottom: calc(var(--shell-gap, 12px) + 14px + 60px); }
 html[data-ui-search='floating'][data-ui-nav='dock'][data-ui-dock-style='attached']:not([data-ui-dock-pos='top']):not([data-ui-dock-auto-hide='1']):not(.is-bigpicture) .pad-hints { bottom: 150px; }
+
+/* ---- PEAK letter: an old letter folded in three that unfolds (app.js
+   openPeakShowcase). Each panel shows its own third of one sheet of writing;
+   the top flap folds down from its bottom edge, the bottom flap up from its
+   top edge. --s1..--s4 are the cover's colours for the torn corner pieces. */
+.pkl {
+  --s1: #a8543a; --s2: #3e5872; --s3: #d2a24c; --s4: #5d4330;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  padding: 10px 0 4px;
+}
+.pkl-stage { filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.35)) drop-shadow(0 22px 40px rgba(0, 0, 0, 0.45)); }
+.pkl-sheet {
+  position: relative;
+  width: var(--pkl-w);
+  height: calc(var(--pkl-p) * 3);
+  transform: rotate(-1.2deg);
+  transform-origin: 50% 0;
+}
+.pkl-reveal { position: absolute; inset: 0; }
+.pkl-face { position: absolute; inset: 0; overflow: hidden; }
+/* grain, fibres, a curl left along the top and bottom from being rolled,
+   and age toward the edges, laid over the paper and the typing */
+.pkl-face::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  background:
+    linear-gradient(to bottom, rgba(96, 64, 24, 0.3), rgba(96, 64, 24, 0) 16px),
+    linear-gradient(to top, rgba(96, 64, 24, 0.3), rgba(96, 64, 24, 0) 16px),
+    repeating-linear-gradient(to bottom, rgba(96, 64, 24, 0) 0 52px, rgba(96, 64, 24, 0.05) 60px, rgba(96, 64, 24, 0) 70px),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.36 0 0 0 0 0.27 0 0 0 0 0.16 0 0 0 0.34 -0.04'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='160'><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='0.012 0.3' numOctaves='2' seed='5'/><feColorMatrix values='0 0 0 0 0.45 0 0 0 0 0.34 0 0 0 0 0.2 0 0 0 0.2 -0.06'/></filter><rect width='100%' height='100%' filter='url(%23f)'/></svg>");
+}
+/* the rolled-up part: a paper tube, lit from above, with the spiral of
+   paper showing at each end; it runs down the page as the paper comes off */
+.pkl-roll {
+  position: absolute;
+  left: -6px;
+  right: -6px;
+  top: calc(var(--pkl-roll) / -2);
+  height: var(--pkl-roll);
+  border-radius: calc(var(--pkl-roll) / 2) / 50%;
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='60'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9 0.5' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.36 0 0 0 0 0.27 0 0 0 0 0.16 0 0 0 0.3 -0.04'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"),
+    linear-gradient(to bottom, #8d7650 0%, #cdb98f 14%, #f3e9d1 38%, #fbf5e6 48%, #e6d8b7 66%, #b39c70 86%, #6f5a37 100%);
+  box-shadow: 0 10px 14px -6px rgba(30, 18, 6, 0.55), 0 -3px 6px -3px rgba(30, 18, 6, 0.25);
+}
+.pkl-roll::before, .pkl-roll::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(ellipse at 50% 50%, #e9dcbc 0 2px, #a88f62 2.6px, #e9dcbc 3.4px),
+    #e9dcbc;
+  box-shadow: inset 0 0 0 1px rgba(80, 58, 28, 0.45);
+}
+.pkl-roll::before { left: -4px; }
+.pkl-roll::after { right: -4px; }
+/* the edge of the paper as it leaves the roll */
+.pkl-roll-lip {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: -1px;
+  height: 3px;
+  background: linear-gradient(to bottom, rgba(70, 48, 20, 0.35), rgba(70, 48, 20, 0));
+}
+.pkl-paper { position: absolute; inset: 0; display: block; }
+.pkl-window { position: absolute; left: 0; top: 0; }
+.pkl-writing { position: relative; }
+.pkl-art { position: absolute; inset: 0; display: block; }
+.pkl-text {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: repeat(3, var(--pkl-p));
+  padding: 0 46px;
+  color: #1d1712;
+  font-family: 'Courier New', Courier, monospace;
+  text-shadow: 0 0 0.6px rgba(29, 23, 18, 0.55);
+}
+.pkl-row { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; min-width: 0; }
+.pkl-word { font-size: 54px; font-weight: 700; letter-spacing: 0.34em; margin-right: -0.34em; line-height: 1; }
+.pkl-rule { width: 46%; margin-top: 18px; border-top: 1.5px solid rgba(29, 23, 18, 0.55); }
+.pkl-game { font-size: 22px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.pkl-made { margin-top: 6px; font-size: 12.5px; opacity: 0.75; }
+.pkl-about {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  font-style: italic;
+  opacity: 0.9;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pkl-stand { margin: 0; font-size: 14px; line-height: 1.4; }
+.pkl-stand.is-quiet { margin-top: 10px; opacity: 0.7; }
+.pkl-above { margin: 12px 0 6px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; }
+.pkl-facts { width: 100%; display: flex; flex-direction: column; gap: 7px; font-size: 14px; }
+.pkl-fact span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%; }
+.pkl-fact { display: flex; align-items: baseline; gap: 8px; }
+.pkl-fact i { flex: 1; border-bottom: 1.5px dotted rgba(29, 23, 18, 0.5); transform: translateY(-4px); }
+.pkl-fact b { font-weight: 700; }
+.pkl-close {
+  font: 700 14px/1 'Courier New', Courier, monospace;
+  letter-spacing: 0.08em;
+  color: #efe6d2;
+  background: none;
+  border: 1px solid rgba(239, 230, 210, 0.35);
+  border-radius: calc(4px * var(--radius-k, 1));
+  padding: 10px 18px;
+  cursor: pointer;
+}
+.pkl-close:hover { border-color: rgba(239, 230, 210, 0.7); }
+.pkl-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+html.is-bigpicture .pkl { zoom: 1.25; }
+
+/* ============================================================================
+   Wishlist "Buy": every store's price, cheapest first
+   ========================================================================= */
+.wb-modal { width: min(560px, calc(100vw - 48px)); }
+.wb { display: flex; flex-direction: column; gap: 14px; padding: 20px 20px 16px; overflow: auto; }
+.wb-kicker { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); }
+.wb-game { margin-top: 4px; font-size: 20px; font-weight: 600; color: var(--text); }
+.wb-list { display: flex; flex-direction: column; gap: 4px; max-height: min(420px, 60vh); overflow: auto; }
+.wb-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto 16px; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 0; border-radius: calc(10px * var(--radius-k, 1));
+  background: var(--surface-2); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: background 0.15s;
+}
+.wb-row:hover { background: var(--surface-3); }
+.wb-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wb-row.is-best { box-shadow: inset 0 0 0 1px rgba(110, 170, 30, 0.55); }
+.wb-shop { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.wb-shop b { font-weight: 600; }
+.wb-shop small { width: 100%; font-size: 11px; color: var(--text-mute); }
+.wb-best { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8fd43a; }
+.wb-price { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wb-price s { margin-right: 6px; font-weight: 500; opacity: 0.5; }
+.wb-go { color: var(--text-mute); display: grid; place-items: center; }
+.wb-empty { margin: 6px 0; color: var(--text-dim); font-size: 13.5px; }
+.wb-foot { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-mute); }
+.wb-links button { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.wb-links button:hover { color: var(--text); }
+
