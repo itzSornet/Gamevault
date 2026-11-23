@@ -4701,11 +4701,22 @@
     ms: Math.min(120, 40 + rows * 16),
   });
 
+  // the dock and top tabs lay their buttons out in a row: the pill runs
+  // sideways there (same springs, measured on x)
+  const pillAcross = () => !!state.ui && (state.ui.nav === 'dock' || state.ui.nav === 'top');
+
   function drawSidePill(pill) {
     const t = pillSpring.top.x;
     const h = Math.max(10, pillSpring.bot.x - t);
-    pill.style.transform = `translateY(${t.toFixed(2)}px)`;
-    pill.style.height = `${h.toFixed(2)}px`;
+    if (pillSpring.across) {
+      pill.style.transform = `translate(${t.toFixed(2)}px, ${pillSpring.crossAt}px)`;
+      pill.style.width = `${h.toFixed(2)}px`;
+      pill.style.height = `${pillSpring.crossSize}px`;
+    } else {
+      pill.style.transform = `translateY(${t.toFixed(2)}px)`;
+      pill.style.height = `${h.toFixed(2)}px`;
+      pill.style.width = '';
+    }
   }
 
   function syncSidePill() {
@@ -4720,9 +4731,19 @@
     // from rects, not offsetTop: while the rail folds its rows are layers
     // (will-change), which would make them the items' offsetParent.
     const sr = side.getBoundingClientRect(), ar = active.getBoundingClientRect();
-    const top = Math.round(ar.top - sr.top - side.clientTop + side.scrollTop);
-    const bot = top + active.offsetHeight;
     const S = pillSpring;
+    const across = pillAcross();
+    if (across !== !!S.across) { S.across = across; S.init = false; }
+    let top, bot;
+    if (across) {
+      top = Math.round(ar.left - sr.left - side.clientLeft + side.scrollLeft);
+      bot = top + active.offsetWidth;
+      S.crossAt = Math.round(ar.top - sr.top - side.clientTop);
+      S.crossSize = active.offsetHeight;
+    } else {
+      top = Math.round(ar.top - sr.top - side.clientTop + side.scrollTop);
+      bot = top + active.offsetHeight;
+    }
 
     if (!S.init || prefersReducedMotion() || !pill.offsetParent) {
       if (S.raf) { cancelAnimationFrame(S.raf); S.raf = null; }
@@ -4739,7 +4760,7 @@
     // pull the slingshot back: for a moment the trailing edge is aimed a few
     // px away from the target, then released
     const trailEdge = S.down ? S.top : S.bot;
-    const rows = Math.abs(top - S.top.x) / Math.max(1, active.offsetHeight);
+    const rows = Math.abs(top - S.top.x) / Math.max(1, across ? active.offsetWidth : active.offsetHeight);
     const w = pillWindup(rows);
     S.windupTo = trailEdge.x + (S.down ? -w.px : w.px);
     S.windupUntil = performance.now() + w.ms;
@@ -9161,9 +9182,32 @@
     if (corner && brand && winCtl.parentElement !== brand) brand.appendChild(winCtl);
     else if (!corner && winCtl.parentElement !== winHome) winHome.appendChild(winCtl);
   };
+  // the dock shows each button's name in its own label above it; elsewhere
+  // the system tooltip stays
+  const dockLabels = (on) => {
+    if (!sideEl) return;
+    for (const b of sideEl.querySelectorAll('.side-item, .side-account')) {
+      if (on && b.title) { b.dataset.tip = b.title; b.removeAttribute('title'); }
+      else if (!on && b.dataset.tip) { b.title = b.dataset.tip; delete b.dataset.tip; }
+    }
+  };
+  // a new layout arrives: the navigation slides in from where it now lives
+  let lastNav = null;
+  const playNavIn = (ui) => {
+    const from = lastNav;
+    lastNav = `${ui.nav}|${ui.navSide}|${ui.dockStyle}`;
+    if (!from || from === lastNav || prefersReducedMotion() || !sideEl || !sideEl.offsetParent) return;
+    const ease = 'cubic-bezier(0.2, 0.9, 0.25, 1)';
+    const off = ui.nav === 'dock' ? 'translateY(26px)' : ui.nav === 'top' ? 'translateY(-10px)'
+      : ui.navSide === 'right' ? 'translateX(22px)' : 'translateX(-22px)';
+    sideEl.animate([{ opacity: 0, transform: off }, { opacity: 1, transform: 'none' }], { duration: 340, easing: ease });
+    if (mainEl) mainEl.animate([{ opacity: 0.55 }, { opacity: 1 }], { duration: 260, easing: 'ease-out' });
+  };
   navHooks.apply = (ui) => {
     const nav = ui.nav;
     placeNav(ui);
+    dockLabels(nav === 'dock');
+    playNavIn(ui);
     if (nav === 'sidebar') applySidebar(storedSideOpen(), false, false);
     else applySidebar(true, false, false);
     if (sideToggle) {
