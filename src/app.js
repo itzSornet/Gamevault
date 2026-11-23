@@ -3196,8 +3196,15 @@
     if (total > 0) parts.push(`${fmtHours(total)} played`);
     else parts.push('Not played yet');
     if (g.lastPlayed && !running) parts.push(`<span title="${esc(fmtDate(g.lastPlayed))}">last played ${wishAgo(g.lastPlayed)}</span>`);
-    const critic = g.steamMeta && g.steamMeta.metacritic && g.steamMeta.metacritic.score;
-    if (critic) parts.push(`<span class="gvx-mc${critic >= 75 ? '' : critic >= 50 ? ' is-mid' : ' is-low'}" title="Critics' score on Metacritic"><b>${esc(String(critic))}</b> Metacritic</span>`);
+    // critics: OpenCritic's average over every platform; Steam's Metacritic
+    // score (its PC version only) until OpenCritic has answered
+    const oc = criticsOf(g);
+    const mc = g.steamMeta && g.steamMeta.metacritic && g.steamMeta.metacritic.score;
+    const critic = oc && oc.score ? oc.score : mc;
+    if (critic) {
+      const from = oc && oc.score ? ['OpenCritic', 'Top critics on OpenCritic, every platform'] : ['Metacritic', "Critics' score on Metacritic (PC)"];
+      parts.push(`<span class="gvx-mc${critic >= 75 ? '' : critic >= 50 ? ' is-mid' : ' is-low'}" title="${from[1]}"><b>${esc(String(critic))}</b> ${from[0]}</span>`);
+    }
     return parts.join('<span class="gvx-dot">·</span>');
   }
 
@@ -3263,6 +3270,7 @@
       <div class="gvx-card">
         <h3 class="gvx-card-head">About this game</h3>
         ${meta.about ? `<p class="gvx-about">${esc(unshout(meta.about))}</p>` : ''}
+        ${(() => { const c = criticsOf(g); return c && c.by && c.line ? `<blockquote class="gvx-quote">“${esc(c.line)}”<cite>— ${esc(c.by)}</cite></blockquote>` : ''; })()}
         ${facts.length ? `<dl class="gvx-specs">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : ''}
       </div>
       ${specs.length ? `<div class="gvx-card">
@@ -3433,6 +3441,7 @@
     startDetailTick(g);
     state._detailRunning = { id: String(g.id), running: typeof state.live[String(g.id)] === 'number' };
     if (!wish) loadSteamMeta(g);
+    if (!wish && Rating.value(g) > 0) loadCritics(g);
   }
 
   const SES_WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -4105,10 +4114,43 @@
     const year = Number(g.firstYear) > 1970 ? String(g.firstYear) : steamYear;
     const line = [m.developer || g.developer || '', year || '', Array.isArray(m.genres) && m.genres[0] ? m.genres[0] : '']
       .filter(Boolean).join(' · ');
-    // one line for someone who already loves the game (peak-line, in the
-    // cloud), never the store's pitch
-    const about = (state._peakLines || {})[peakLineKey(g)] || '';
-    return { line, about };
+    // a critic's line (or, when none fits, one written for someone who
+    // already loves the game), never the store's pitch
+    const c = criticsOf(g);
+    return { line, about: (c && c.line) || '', by: (c && c.by) || '' };
+  }
+  // What critics said about a game: OpenCritic's score and one line, from
+  // the cloud (peak-line), once per game. Asked for when a game first
+  // becomes PEAK and when a rated game's page opens.
+  function criticsOf(g) {
+    const v = (state._peakLines || {})[peakLineKey(g)];
+    return v && typeof v === 'object' ? v : null;
+  }
+  const criticsAsked = new Map();
+  function loadCritics(g) {
+    if (!api.peakLine || !g) return Promise.resolve(null);
+    const id = String(g.id);
+    if (criticsAsked.has(id)) return criticsAsked.get(id);
+    const p = (peakLineKey(g) ? Promise.resolve() : peakAppId(g).catch(() => null)).then(() => {
+      const key = peakLineKey(g);
+      if (!key) return null;
+      return api.peakLine([{ steamAppId: storeAppId(g) || undefined, itadId: g.itadId || undefined }]).then((res) => {
+        const v = res && res.ok && res.data ? res.data[key] : null;
+        if (!v) return null;
+        state._peakLines = { ...(state._peakLines || {}), [key]: v };
+        // the game's page, if it is open: score in the hero line, quote in About
+        if (state.selectedId === id && !gvIsWishlisted(g)) {
+          const metaEl = document.querySelector('#game-view .gvx-meta');
+          if (metaEl) metaEl.innerHTML = detailMeta(g);
+          paintRail(g);
+        }
+        return v;
+      });
+    }).catch(() => null);
+    criticsAsked.set(id, p);
+    // asked again on the next visit after a while (a stand-in may be replaced)
+    p.then(() => setTimeout(() => criticsAsked.delete(id), 10 * 60 * 1000));
+    return p;
   }
   function peakLineKey(g) {
     const n = storeAppId(g);
@@ -4278,7 +4320,7 @@
         ${peakLetterArt(g.id, W, H)}
         <div class="pkl-text">
           <div class="pkl-row"><div class="pkl-word">PEAK</div><div class="pkl-rule"></div></div>
-          <div class="pkl-row"><div class="pkl-game">${esc(g.name || 'Untitled')}</div>${label.line ? `<div class="pkl-made">${esc(label.line)}</div>` : ''}${label.about ? `<p class="pkl-about">${esc(label.about)}</p>` : ''}</div>
+          <div class="pkl-row"><div class="pkl-game">${esc(g.name || 'Untitled')}</div>${label.line ? `<div class="pkl-made">${esc(label.line)}</div>` : ''}${label.about ? `<p class="pkl-about">${label.by ? `“${esc(label.about)}”<span class="pkl-by">— ${esc(label.by)}</span>` : esc(label.about)}</p>` : ''}</div>
           <div class="pkl-row"><p class="pkl-stand">${esc(stand.head)}</p>${stand.below.length
             ? `<div class="pkl-above">It sits above</div><div class="pkl-facts">${stand.below.map(([n, v]) => `<div class="pkl-fact"><span>${esc(n)}</span><i></i><b>${esc(v)}</b></div>`).join('')}</div>`
             : '<p class="pkl-stand is-quiet">Nothing else is rated yet.</p>'}</div>
@@ -4317,20 +4359,8 @@
       fitAbout();
     };
     fitAbout();
-    // the line: from disk when seen before, else written once in the cloud.
-    // A game with no store id yet is found by its title first.
-    if (api.peakLine && !((state._peakLines || {})[peakLineKey(g)])) {
-      (peakLineKey(g) ? Promise.resolve() : peakAppId(g).catch(() => null)).then(() => {
-        const key = peakLineKey(g);
-        if (!key) return null;
-        return api.peakLine([{ steamAppId: storeAppId(g) || undefined, itadId: g.itadId || undefined }]).then((res) => {
-          const line = res && res.ok && res.data ? res.data[key] : null;
-          if (!line) return;
-          state._peakLines = { ...(state._peakLines || {}), [key]: line };
-          repaint();
-        });
-      }).catch(() => {});
-    }
+    // the line: from disk when seen before, else fetched once in the cloud
+    loadCritics(g).then((v) => { if (v) repaint(); });
     if (api.steamDetails && !(g.steamMeta && g.steamMeta.about)) {
       peakAppId(g).then((appId) => (appId ? api.steamDetails(appId) : null)).then((res) => {
         if (!res || !res.ok || !res.data) return;
@@ -4445,6 +4475,7 @@
     saveGamesSoon();
     state._shelfKey = '';
     const peakChanged = (next >= Rating.PEAK) !== (prevRating >= Rating.PEAK);
+    if (next > 0 && !criticsOf(g)) loadCritics(g);
     // PEAK, or rated at all, changes the top row (the "Your rating" label)
     if (state.selectedId === String(g.id) && (peakChanged || !prevRating !== !next)) {
       renderDetail();

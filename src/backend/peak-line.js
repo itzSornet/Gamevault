@@ -1,16 +1,19 @@
-/* The Peak scroll's line about a game, desktop side.
+/* What critics said about a game (its score and one line), desktop side.
  *
- * Asks GameVault Cloud's `peak-line` Edge Function (which holds the DeepSeek
- * key; see cloud/supabase/functions/peak-line/index.ts) and keeps each line on
- * disk for good, so a scroll opens with its line straight away and offline.
- * A game with no line yet is asked again after a day.
+ * Asks GameVault Cloud's `peak-line` Edge Function (which holds the
+ * OpenCritic and DeepSeek keys; see cloud/supabase/functions/peak-line) and
+ * keeps each answer on disk, so a scroll or game page opens with it straight
+ * away and offline. A final answer with a line is kept for good; a stand-in
+ * (written while OpenCritic couldn't be asked) or no line is asked again
+ * after a day, so OpenCritic's answer replaces it.
  * Self-contained: no Electron imports, unit-tested in tests/peak-line.test.js.
  *
  * On disk, under `file` (e.g. <userData>/peak-lines.json):
- *   { "steam:1245620": { savedAt, line: string | null }, ... }
+ *   { "steam:1245620": { savedAt, line, by, score, final }, ... }
  *
- * get() resolves to { ok: true, data: { [key]: string | null } } or
- * { ok: false, error: { code, message } }; key is "steam:<appid>" or "itad:<id>".
+ * get() resolves to { ok: true, data: { [key]: { line, by, score } | null } }
+ * or { ok: false, error: { code, message } }; key is "steam:<appid>" or
+ * "itad:<id>"; by = the outlet a quoted line is from, score = OpenCritic's.
  */
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +21,8 @@ const path = require('path');
 const DAY = 24 * 3600 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const fail = (code, message) => ({ ok: false, error: { code, message } });
+// what the app sees of a stored answer; null = nothing to show
+const view = (hit) => (hit && (hit.line || hit.score) ? { line: hit.line || null, by: hit.by || null, score: Number.isFinite(hit.score) ? hit.score : null } : null);
 
 /** "steam:<appid>" or "itad:<id>" for a { steamAppId, itadId }; "" for neither. */
 function keyOf(g) {
@@ -79,8 +84,8 @@ function createPeakLines(opts = {}) {
       const k = keyOf(g);
       if (!k || k in out) continue;
       const hit = s[k];
-      if (hit && (hit.line || now() - hit.savedAt < DAY)) out[k] = hit.line;
-      else { out[k] = null; need.push(k); }
+      if (hit && ((hit.final === true && hit.line) || now() - hit.savedAt < DAY)) out[k] = view(hit);
+      else { out[k] = hit ? view(hit) : null; need.push(k); }
     }
     let error = null;
     for (let i = 0; i < need.length; i += 10) {
@@ -89,9 +94,15 @@ function createPeakLines(opts = {}) {
       if (res.ok && res.data && res.data.lines) {
         for (const k of chunk) {
           if (!(k in res.data.lines)) continue;
-          const line = typeof res.data.lines[k] === 'string' ? res.data.lines[k] : null;
-          s[k] = { savedAt: now(), line };
-          out[k] = line;
+          const v = res.data.lines[k] || {};
+          s[k] = {
+            savedAt: now(),
+            line: typeof v.line === 'string' ? v.line : null,
+            by: typeof v.by === 'string' ? v.by : null,
+            score: Number.isFinite(v.score) ? v.score : null,
+            final: v.final !== false,
+          };
+          out[k] = view(s[k]);
         }
         save();
       } else error = res.error || { code: 'SERVER', message: 'No lines' };

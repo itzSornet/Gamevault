@@ -1,6 +1,14 @@
-/* peak-line: one line about a game for its Peak scroll, written by DeepSeek
- * through GameVault Cloud. Written once per game and shared: everyone with
- * the same game at PEAK reads the same line.
+/* peak-line: what critics said about a game, for its Peak scroll and its
+ * page. Fetched once per game and shared: everyone with the game reads the
+ * same score and line.
+ *
+ * OpenCritic comes first: its Top Critic Average (all platforms) and a line
+ * from a real review, picked by DeepSeek as the one that fits someone who
+ * already loves the game ("... - IGN"). When no review line fits, or the
+ * game isn't on OpenCritic, DeepSeek writes the line itself from the store
+ * facts. When OpenCritic can't be asked (its daily limit, no key, down), the
+ * line DeepSeek writes is a stand-in: kept for a day, then OpenCritic is
+ * asked again and its answer replaces it.
  *
  * POST /functions/v1/peak-line
  *   Authorization: Bearer <user access token>   (anonymous sign-in is fine)
@@ -8,30 +16,33 @@
  *   Body: { games: [{ steamAppId?: number, itadId?: string }] (1..10) }
  *
  * Response (HTTP 200):
- *   { ok: true, data: { lines: { ["steam:<appid>" | "itad:<id>"]: string | null } } }
- *   null = no line (no facts about the game, or no draft passed the checks);
- *   asked again after a day. A game left out = no answer this time (no key
- *   on the server yet, or a limit reached).
+ *   { ok: true, data: { lines: { ["steam:<appid>" | "itad:<id>"]:
+ *       { line: string | null, by: string | null, score: number | null, final: boolean } } } }
+ *   by = the outlet a quoted line is from (null: written by DeepSeek);
+ *   score = OpenCritic's Top Critic Average (null: none);
+ *   final = false: a stand-in, asked again after a day.
+ *   A game left out = no answer this time (no DeepSeek key yet, today's cap).
  *
- * The facts come from here, never from the app (Steam's store page, and
- * IsThereAnyDeal's tags), so no one can plant a line for everyone else.
- * Nothing about the user is sent to DeepSeek: only the game's facts.
+ * The facts come from here, never from the app (Steam's store page,
+ * IsThereAnyDeal, OpenCritic), so no one can plant a line for everyone else.
+ * Nothing about the user is sent to DeepSeek or OpenCritic.
  *
  * Failure: { ok: false, error: { code, message } } with 400 BAD_REQUEST,
  *   401 UNAUTHENTICATED, 429 RATE_LIMIT (+ Retry-After), 500 SERVER.
  *
- * Caching: a line is kept for good; a game with no line is asked again after
- * a day. Limits count only new lines: PEAK_HOURLY_LIMIT per user (default
- * 30), PEAK_DAILY_CAP overall (default 3000, about $1 a day at most).
+ * No limit per user. PEAK_DAILY_CAP (default 3000) caps new lines a day
+ * overall, so DeepSeek can never cost more than about $1 a day.
  *
  * Env (Dashboard -> Edge Functions -> Secrets): DEEPSEEK_KEY (required for
- * new lines), ITAD_KEY (optional: tags). SUPABASE_URL /
- * SUPABASE_SERVICE_ROLE_KEY are injected by Supabase.
+ * new lines), OPENCRITIC_KEY (RapidAPI key for OpenCritic; optional),
+ * ITAD_KEY (optional: tags). SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are
+ * injected by Supabase.
  */
 import { createClient } from "@supabase/supabase-js";
 
 const DAY = 24 * 3600 * 1000;
 const MODEL = "deepseek-flash";
+const OC_HOST = "opencritic-api.p.rapidapi.com";
 
 function intEnv(name: string, fallback: number): number {
   const n = Number(Deno.env.get(name));
@@ -42,8 +53,8 @@ const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPAB
   auth: { persistSession: false, autoRefreshToken: false },
 });
 const DEEPSEEK_KEY = Deno.env.get("DEEPSEEK_KEY") ?? "";
+const OPENCRITIC_KEY = Deno.env.get("OPENCRITIC_KEY") ?? "";
 const ITAD_KEY = Deno.env.get("ITAD_KEY") ?? "";
-const HOUR_LIMIT = intEnv("PEAK_HOURLY_LIMIT", 30);
 const DAILY_CAP = intEnv("PEAK_DAILY_CAP", 3000);
 
 class Fail extends Error {
@@ -67,12 +78,24 @@ const RULES = `You write one line for a keepsake card about a video game. The re
 8. Speak to the reader as you; never write I, me, my or we.
 9. Reply with the sentence only.`;
 
+const PICK = `You choose a line from real critics' reviews of a video game for a keepsake card. The reader has already finished the game and loves it. Choose the one quote that:
+- says something true and specific about how the game plays or feels,
+- still reads well on its own, out of its review,
+- is not a buying tip or a verdict for newcomers (no "buy it", "a must", "worth your money", "if you like X"),
+- has no spoilers: no endings, twists, deaths or late-game events,
+- does not complain about the game.
+Reply with the quote's number only. Reply 0 when no quote fits all of these.`;
+
 const BANNED = /\b(epic|award|acclaimed|masterpiece|must-?play|experience|journey|immersive|stunning|breathtaking|unforgettable|ultimate|iconic|legendary|groundbreaking)\b/i;
 const norm = (t: string) => String(t || "").toLowerCase().replace(/[™®©]/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
 const text = (h: string) => String(h || "").replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"')
   .replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+const words = (t: string) => t.split(/\s+/).filter(Boolean).length;
 
 type Facts = { title: string; developer: string[]; publisher: string[]; genres: string[]; tags: string[]; about: string };
+type Quote = { text: string; by: string };
+type Critics = { status: "ok" | "none" | "later"; id?: number; score?: number | null; quotes?: Quote[] };
+type Row = { key: string; line: string | null; by: string | null; score: number | null; oc_id: number | null; final: boolean; model: string | null; created_at: string };
 
 async function getJson(url: string, init: RequestInit = {}) {
   try {
@@ -118,16 +141,93 @@ async function factsFor(key: string): Promise<Facts | null> {
   return { title: it.title, developer: it.developer, publisher: [], genres: [], tags: it.tags, about: "" };
 }
 
+// OpenCritic takes 4 requests a second: calls go one after another, 300ms
+// apart, and one that is still refused waits a second and tries once more
+let ocTurn: Promise<void> = Promise.resolve();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function ocSlot(): Promise<void> {
+  const mine = ocTurn.then(() => sleep(300));
+  ocTurn = mine.catch(() => {});
+  return ocTurn.then(() => {});
+}
+
+/** OpenCritic, through RapidAPI. later = can't ask now (daily limit, down). */
+async function oc(path: string, again = true): Promise<{ later: boolean; body: unknown }> {
+  try {
+    await ocSlot();
+    const res = await fetch(`https://${OC_HOST}${path}`, {
+      headers: { "x-rapidapi-host": OC_HOST, "x-rapidapi-key": OPENCRITIC_KEY },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 429 && again) {
+      await res.body?.cancel();
+      await sleep(1100);
+      return oc(path, false);
+    }
+    if (res.status === 404) return { later: false, body: null };
+    if (!res.ok) {
+      console.warn("opencritic", path.split("?")[0], res.status, (await res.text().catch(() => "")).slice(0, 160));
+      return { later: true, body: null };
+    }
+    return { later: false, body: await res.json() };
+  } catch (err) {
+    console.warn("opencritic", (err as Error).message);
+    return { later: true, body: null };
+  }
+}
+
+// "The Witcher 3: Wild Hunt - Game of the Year Edition" -> "thewitcher3wildhunt"
+const EDITION = /\s*[-:–—]?\s*(game of the year|goty|complete|definitive|deluxe|ultimate|enhanced|director'?s cut|remastered|anniversary|gold|premium|standard)( edition)?\s*$/i;
+const plain = (t: string) => norm(String(t || "").replace(EDITION, ""));
+
+/** The game's OpenCritic score and its review lines. */
+async function critics(title: string, knownId: number | null): Promise<Critics> {
+  if (!OPENCRITIC_KEY) return { status: "later" };
+  let id = knownId;
+  if (!id) {
+    const found = await oc(`/game/search?${new URLSearchParams({ criteria: title.replace(/[™®©]/g, "") })}`);
+    if (found.later) return { status: "later" };
+    const list = Array.isArray(found.body) ? found.body as { id?: number; name?: string; dist?: number }[] : [];
+    // the same name, with or without an edition ("The Witcher 3: Wild Hunt",
+    // "... Complete Edition"): the oldest entry, the original release; else a
+    // near miss
+    const want = plain(title);
+    const same = list.filter((x) => x && Number(x.id) > 0 && plain(String(x.name ?? "")) === want)
+      .sort((a, b) => Number(a.id) - Number(b.id));
+    const hit = same[0] ?? list.find((x) => x && typeof x.dist === "number" && x.dist < 0.1);
+    if (!hit || !Number.isSafeInteger(Number(hit.id))) return { status: "none" };
+    id = Number(hit.id);
+  }
+  const [game, reviews] = await Promise.all([oc(`/game/${id}`), oc(`/reviews/game/${id}`)]);
+  if (game.later || reviews.later) return { status: "later", id };
+  const g = (game.body ?? {}) as { topCriticScore?: number };
+  const score = Number(g.topCriticScore) > 0 ? Math.round(Number(g.topCriticScore)) : null;
+  const seen = new Set<string>();
+  const quotes: Quote[] = [];
+  for (const r of Array.isArray(reviews.body) ? reviews.body as Record<string, unknown>[] : []) {
+    const outlet = (r?.Outlet ?? r?.outlet) as { name?: string } | undefined;
+    const by = String(outlet?.name ?? "").trim();
+    const line = text(String(r?.snippet ?? "")).replace(/^["“]+|["”]+$/g, "");
+    const lang = String(r?.language ?? "en").toLowerCase();
+    if (!by || !line || !lang.startsWith("en") || seen.has(line)) continue;
+    const n = words(line);
+    if (n < 6 || n > 30) continue;   // it has to fit on the Peak paper
+    seen.add(line);
+    quotes.push({ text: line, by });
+  }
+  return { status: "ok", id, score, quotes: quotes.slice(0, 15) };
+}
+
 /** Why a draft breaks the rules, or "" when it is fine. */
 function problem(line: string, f: Facts): string {
-  const words = line.split(/\s+/).filter(Boolean).length;
-  if (words < 8 || words > 30) return "It must be one sentence of 12 to 25 words.";
+  const n = words(line);
+  if (n < 8 || n > 30) return "It must be one sentence of 12 to 25 words.";
   if ((line.match(/[.!?](\s|$)/g) || []).length > 1) return "It must be a single sentence.";
   if (/[!#"“”]|\p{Extended_Pictographic}/u.test(line)) return "No exclamation marks, quotation marks, hashtags or emoji.";
   if (BANNED.test(line)) return `Do not use the word "${line.match(BANNED)![0]}".`;
   if (/\b(I|me|my|mine|we|our|us)\b/i.test(line)) return "Speak to the reader as you; never I, me, my or we.";
   const all = `${f.title} ${f.about} ${f.tags.join(" ")} ${f.genres.join(" ")}`;
-  for (const n of line.match(/\d+/g) || []) if (!all.includes(n)) return `Do not use the number ${n}; it is not in the facts.`;
+  for (const num of line.match(/\d+/g) || []) if (!all.includes(num)) return `Do not use the number ${num}; it is not in the facts.`;
   const l = norm(line);
   for (const name of [f.title, ...f.developer, ...f.publisher]) {
     const k = norm(name);
@@ -154,7 +254,16 @@ async function deepseek(messages: { role: string; content: string }[]): Promise<
   return typeof out === "string" ? out.replace(/\s+/g, " ").trim().replace(/^["'“]+|["'”]+$/g, "") : "";
 }
 
-/** A line that passed the checks, in at most two tries; null when none did. */
+/** The review line that fits, word for word as the critic wrote it; null = none fits. */
+async function pick(title: string, quotes: Quote[]): Promise<Quote | null> {
+  if (!quotes.length) return null;
+  const list = quotes.map((q, i) => `${i + 1}. ${q.text}`).join("\n");
+  const reply = await deepseek([{ role: "system", content: PICK }, { role: "user", content: `Game: ${title}\nQuotes:\n${list}` }]);
+  const n = Number((reply.match(/\d+/) || [])[0]);
+  return n >= 1 && n <= quotes.length ? quotes[n - 1] : null;
+}
+
+/** A line DeepSeek wrote that passed the checks, in at most two tries; null when none did. */
 async function write(f: Facts): Promise<string | null> {
   const facts = JSON.stringify({ title: f.title, developer: f.developer, genres: f.genres, tags: f.tags, store_text: f.about });
   const messages = [{ role: "system", content: RULES }, { role: "user", content: `Facts:\n${facts}` }];
@@ -167,6 +276,27 @@ async function write(f: Facts): Promise<string | null> {
   }
   return null;
 }
+
+/** One game's row; null = no answer this time (DeepSeek can't be reached). */
+async function make(key: string, old: Row | undefined): Promise<Row | null> {
+  const f = await factsFor(key);
+  const now = new Date().toISOString();
+  if (!f) return { key, line: null, by: null, score: null, oc_id: old?.oc_id ?? null, final: true, model: null, created_at: now };
+  const c = await critics(f.title, old?.oc_id ?? null);
+  try {
+    const q = c.status === "ok" ? await pick(f.title, c.quotes ?? []) : null;
+    const line = q ? q.text : await write(f);
+    return {
+      key, line, by: q ? q.by : null, score: c.score ?? null, oc_id: c.id ?? null,
+      final: c.status !== "later", model: q ? `opencritic+${MODEL}` : (line ? MODEL : null), created_at: now,
+    };
+  } catch (err) {
+    console.warn("peak-line:", (err as Error).message);
+    return null;
+  }
+}
+
+const out = (r: Row) => ({ line: r.line, by: r.by, score: r.score, final: r.final });
 
 async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") throw new Fail("BAD_REQUEST", "Use POST", 405);
@@ -186,38 +316,33 @@ async function handle(req: Request): Promise<Response> {
   }).filter(Boolean))];
   if (!keys.length || keys.length > 10) throw new Fail("BAD_REQUEST", "Send 1 to 10 games", 400);
 
-  const lines: Record<string, string | null> = {};
-  const { data: rows, error } = await supabase.from("peak_lines").select("key, line, created_at").in("key", keys);
+  const lines: Record<string, ReturnType<typeof out>> = {};
+  const { data: rows, error } = await supabase.from("peak_lines")
+    .select("key, line, by, score, oc_id, final, model, created_at").in("key", keys);
   if (error) throw new Fail("SERVER", `peak_lines read: ${error.message}`, 500);
-  for (const r of rows ?? []) {
-    if (r.line || Date.now() - Date.parse(r.created_at) < DAY) lines[r.key] = r.line;
+  const old = new Map<string, Row>();
+  for (const r of (rows ?? []) as Row[]) {
+    old.set(r.key, r);
+    // a stand-in, or a game with no line, is asked again after a day
+    const fresh = Date.now() - Date.parse(r.created_at) < DAY;
+    if (fresh || (r.final && r.line)) lines[r.key] = out(r);
   }
   const todo = keys.filter((k) => !(k in lines));
-  // games with no answer this time (no key yet, a limit) are left out of the
-  // reply, so the app asks again later instead of keeping "no line"
+  // games with no answer this time (no key yet, today's cap) are left out of
+  // the reply, so the app asks again later instead of keeping "no line"
   if (todo.length) {
     if (!DEEPSEEK_KEY) {
       if (!Object.keys(lines).length) throw new Fail("SERVER", "Peak lines are not set up on the server yet", 500);
     } else {
       const { data: verdict, error: rateErr } = await supabase.rpc("peak_line_rate_check", {
-        p_uid: uid, p_n: todo.length, p_hour_limit: HOUR_LIMIT, p_daily_cap: DAILY_CAP,
+        p_uid: uid, p_n: todo.length, p_hour_limit: 1_000_000, p_daily_cap: DAILY_CAP,
       });
       if (rateErr) throw new Fail("SERVER", `peak_line_rate_check: ${rateErr.message}`, 500);
       if (verdict !== "ok") {
-        if (!Object.keys(lines).length) {
-          throw new Fail("RATE_LIMIT", verdict === "user" ? "Too many new lines; try again later" : "Today's limit is reached; try again tomorrow", 429, verdict === "user" ? 900 : 3600);
-        }
+        if (!Object.keys(lines).length) throw new Fail("RATE_LIMIT", "Today's limit is reached; try again tomorrow", 429, 3600);
       } else {
-        // DeepSeek failing (bad key, down) leaves the game out: asked again later
-        const made = (await Promise.all(todo.map(async (k) => {
-          const f = await factsFor(k);
-          let line: string | null = null;
-          if (f) {
-            try { line = await write(f); } catch (err) { console.warn("peak-line:", (err as Error).message); return null; }
-          }
-          return { key: k, line, model: line ? MODEL : null, created_at: new Date().toISOString() };
-        }))).filter((m): m is NonNullable<typeof m> => !!m);
-        for (const m of made) lines[m.key] = m.line;
+        const made = (await Promise.all(todo.map((k) => make(k, old.get(k))))).filter((m): m is Row => !!m);
+        for (const m of made) lines[m.key] = out(m);
         if (made.length) {
           const { error: e2 } = await supabase.from("peak_lines").upsert(made);
           if (e2) console.warn("peak_lines write:", e2.message);
