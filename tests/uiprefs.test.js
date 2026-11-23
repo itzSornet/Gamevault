@@ -11,7 +11,7 @@ test('normalize: nothing in, today\'s look out', () => {
 });
 
 test('normalize: round-trips a valid object', () => {
-  const ui = { ...U.defaults(), nav: 'dock', dockPos: 'top', search: 'hidden', accent: '#ff8800', tint: 30, glass: { blur: 150, opacity: 80, saturation: 120, solid: false } };
+  const ui = { ...U.defaults(), nav: 'dock', dockPos: 'bottom', search: 'hidden', accent: '#ff8800', tint: 30, glass: { blur: 150, opacity: 80, saturation: 120, solid: false } };
   assert.deepEqual(U.normalize(U.normalize(ui)), U.normalize(ui));
   assert.equal(U.normalize(ui).nav, 'dock');
   assert.equal(U.normalize(ui).accent, '#ff8800');
@@ -171,4 +171,31 @@ test('share a look: round trip, no paths, bad input', () => {
   assert.equal(U.importLook('x'.repeat(9000), {}, []), null);
   assert.equal(U.importLook('{"gamevault-look":1,"ui":{"nav":"hologram","tint":900}}', {}, []).ui.nav, 'sidebar');
   assert.equal(U.exportLook(U.defaults(), 'midnight'), '{"gamevault-look":1,"palette":"midnight","ui":{}}');
+});
+
+test('the dock runs along the bottom only (an old top dock comes back as bottom)', () => {
+  assert.equal(U.normalize({ nav: 'dock', dockPos: 'top' }).dockPos, 'bottom');
+});
+
+test('search in the navigation needs a navigation with room for it', () => {
+  assert.equal(U.normalize({ nav: 'sidebar', search: 'in-nav' }).search, 'in-nav');
+  assert.equal(U.normalize({ nav: 'dock', search: 'in-nav' }).search, 'in-nav');
+  assert.equal(U.normalize({ nav: 'top', search: 'in-nav' }).search, 'top-center');
+  assert.equal(U.normalize({ nav: 'none', search: 'in-nav' }).search, 'top-center');
+});
+
+test('corners: sharp squares the pills too, round is clearly round', () => {
+  const sharp = U.cssVars({ radius: 0 });
+  const round = U.cssVars({ radius: 2 });
+  assert.ok(Number(sharp['--radius-k']) <= 0.15);
+  assert.equal(sharp['--pill-r'], '3px');
+  assert.equal(U.cssVars({ radius: 1 })['--pill-r'], null);
+  assert.ok(Number(round['--radius-k']) >= 1.8);
+});
+
+test('the main panel thins faster than the small glass as opacity drops', () => {
+  const v = U.cssVars({ glass: { opacity: 50 } });
+  assert.ok(Number(v['--main-alpha-k']) < Number(v['--glass-alpha-k']));
+  assert.equal(U.cssVars({})['--main-alpha-k'], '1');
+  assert.equal(U.cssVars({ glass: { solid: true } })['--main-alpha-k'], '4');
 });

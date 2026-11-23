@@ -19,9 +19,9 @@
   const VERSION = 1;
 
   const CHOICES = {
-    nav: ['sidebar', 'rail', 'dock', 'top', 'none'],
+    nav: ['sidebar', 'dock', 'top', 'none'],
     navSide: ['left', 'right'],
-    dockPos: ['bottom', 'top'],
+    dockPos: ['bottom'],
     dockStyle: ['floating', 'attached'],
     search: ['top-center', 'top-left', 'in-nav', 'floating', 'hidden'],
     density: ['comfortable', 'compact'],
@@ -40,7 +40,7 @@
     fontScale: [90, 120],
     backgroundDim: [0, 100],
     'glass.blur': [0, 200],        // % of each surface's own blur
-    'glass.opacity': [40, 140],    // % of each surface's own opacity
+    'glass.opacity': [20, 140],    // % of each surface's own opacity
     'glass.saturation': [50, 150], // % of each surface's own saturation
   };
 
@@ -123,6 +123,9 @@
     out.backgroundFile = typeof r.backgroundFile === 'string' && r.backgroundFile ? r.backgroundFile : null;
     out.backgroundKind = pick(r.backgroundKind, ['image', 'video'], null);
     for (const k of ['showTitles', 'showPlaytime', 'showRatings']) out[k] = bool(r[k], d[k]);
+    // Top tabs already sit in the top bar, and None has no navigation: the
+    // search goes back to the top bar's centre
+    if (out.search === 'in-nav' && (out.nav === 'none' || out.nav === 'top')) out.search = 'top-center';
     // a custom background needs its file; without it (another PC, file gone) use fluid
     if ((out.background === 'image' || out.background === 'video') && !out.backgroundFile) out.background = 'fluid';
     return out;
@@ -253,7 +256,13 @@
     v['--glass-blur-k'] = solid ? '0' : String(n.glass.blur / 100);
     v['--glass-sat-k'] = solid ? '1' : String(n.glass.saturation / 100);
     v['--glass-alpha-k'] = solid ? '4' : String(n.glass.opacity / 100); // alpha clamps at 1: solid = opaque
-    v['--radius-k'] = String([0.35, 1, 1.6][n.radius]);
+    // the big main panel starts nearly opaque (0.91), so a straight multiplier
+    // hardly shows there: below 100% it thins faster
+    const o = n.glass.opacity / 100;
+    v['--main-alpha-k'] = solid ? '4' : String(+(o < 1 ? o ** 1.6 : o).toFixed(3));
+    v['--radius-k'] = String(RADIUS_K[n.radius]);
+    // round buttons and chips: square-ish when sharp, round otherwise
+    v['--pill-r'] = n.radius === 0 ? '3px' : null;
     v['--tint-k'] = String(n.tint / 100);
     v['--bg-dim'] = String(n.backgroundDim / 100);
     v['--bg-solid'] = n.backgroundColor || null;
@@ -265,6 +274,7 @@
    * main zooms the page (webContents) instead of the root font size. Big
    * Picture sets its own zoom and ignores this.
    */
+  const RADIUS_K = [0.12, 1, 1.9];
   const zoom = (ui) => normalize(ui).fontScale / 100;
 
   /** html data-* attributes for these prefs (CSS selects on them). */
@@ -299,9 +309,9 @@
     { id: 'default', name: 'Default', desc: 'The classic GameVault look', patch: {} },
     { id: 'minimal', name: 'Minimal', desc: 'No navigation bar, search out of the way, solid panels', patch: { nav: 'none', search: 'hidden', glass: { solid: true } } },
     { id: 'dock', name: 'Dock', desc: 'A floating dock along the bottom', patch: { nav: 'dock', dockPos: 'bottom', dockStyle: 'floating' } },
-    { id: 'compact', name: 'Compact', desc: 'Icon rail, tight spacing, small covers', patch: { nav: 'rail', density: 'compact', cardSize: 'small', shelfSize: 'small', radius: 0 } },
+    { id: 'compact', name: 'Compact', desc: 'Tight spacing, small covers, sharp corners', patch: { nav: 'sidebar', density: 'compact', cardSize: 'small', shelfSize: 'small', radius: 0 } },
     { id: 'couch', name: 'Couch', desc: 'Big covers and round corners, easy to read from the sofa', patch: { cardSize: 'large', shelfSize: 'large', radius: 2 } },
-    { id: 'glass', name: 'Glass', desc: 'Heavy blur and see-through panels', patch: { radius: 2, glass: { blur: 180, opacity: 60, saturation: 130 } } },
+    { id: 'glass', name: 'Glass', desc: 'Heavy blur and see-through panels', patch: { radius: 2, glass: { blur: 180, opacity: 45, saturation: 130 } } },
   ]);
 
   /** These prefs with a preset applied (unknown id = unchanged). */

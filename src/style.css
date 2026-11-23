@@ -1636,7 +1636,7 @@ html[data-ui-motion='off'] * { animation-duration: 0.001ms !important; animation
   margin-top: -20px;
   display: grid;
   place-items: center;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   border: 1px solid var(--line-2);
   background: var(--surface-2);
   color: var(--text);
@@ -2086,7 +2086,7 @@ html[data-ui-motion='off'] * { animation-duration: 0.001ms !important; animation
 .art-pill {
   height: 24px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   border: 1px solid var(--line);
   background: none;
   color: var(--text-mute);
@@ -2601,7 +2601,7 @@ body { font-size: 13.5px; }
 .card:hover { transform: translateY(-3px) scale(1.012); box-shadow: 0 22px 50px rgba(0, 0, 0, 0.5); border-color: rgba(255, 255, 255, 0.14); }
 .card-media { border-radius: calc(19px * var(--radius-k, 1)) calc(19px * var(--radius-k, 1)) 0 0; }
 
-.btn { border-radius: 999px; height: 34px; padding: 0 16px; }
+.btn { border-radius: var(--pill-r, 999px); height: 34px; padding: 0 16px; }
 .btn-primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 24px rgba(var(--accent-rgb), 0.35); }
 .icon-btn { border-radius: 50%; }
 
@@ -3548,7 +3548,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar.is-collapse
 :root { --main-glass: 6, 7, 10; --main-glass-a: 0.91; --side-glass-a: 0.56; }
 :root[data-palette='paper'] { --main-glass: 243, 240, 233; --main-glass-a: 0.88; --side-glass-a: 0.64; }
 #ambient:is(.has-fluid, .has-backdrop) ~ .app .main {
-  background: rgba(var(--main-glass), calc(var(--main-glass-a) * var(--glass-alpha-k, 1)));
+  background: rgba(var(--main-glass), calc(var(--main-glass-a) * var(--main-alpha-k, 1)));
   -webkit-backdrop-filter: blur(calc(12px * var(--glass-blur-k, 1))) saturate(calc(140% * var(--glass-sat-k, 1)));
   backdrop-filter: blur(calc(12px * var(--glass-blur-k, 1))) saturate(calc(140% * var(--glass-sat-k, 1)));
 }
@@ -3561,7 +3561,7 @@ html.is-bigpicture #ambient:is(.has-fluid, .has-backdrop) ~ .app .topbar { backg
    the blur is invisible: screenshots with and without it differ by 1/255. So
    the fold keeps the tint and saturation and skips only the blur pass. */
 #ambient:is(.has-fluid, .has-backdrop) ~ .app .main.is-side-moving { -webkit-backdrop-filter: saturate(calc(140% * var(--glass-sat-k, 1))); backdrop-filter: saturate(calc(140% * var(--glass-sat-k, 1))); }
-#ambient:is(.has-fluid, .has-backdrop) ~ .app .main::after { background: linear-gradient(to top, rgba(var(--main-glass), calc(0.9 * var(--glass-alpha-k, 1))), rgba(var(--main-glass), 0)); }
+#ambient:is(.has-fluid, .has-backdrop) ~ .app .main::after { background: linear-gradient(to top, rgba(var(--main-glass), calc(0.9 * var(--main-alpha-k, 1))), rgba(var(--main-glass), 0)); }
 
 /* the waves are only worth moving when glass is there to soften them */
 [data-tier='lite'] #ambient i,
@@ -3578,13 +3578,13 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #ambient i { animati
 .modal-body .pills {
   align-self: flex-start;
   display: inline-flex; gap: 2px; padding: 3px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   border: 1px solid var(--line);
   background: var(--bg-2);
 }
 .modal-body .pills .pill {
   height: 28px; padding: 0 14px;
-  border: none; border-radius: 999px;
+  border: none; border-radius: var(--pill-r, 999px);
   background: transparent; color: var(--text-dim);
   font: inherit; font-size: 12.5px; font-weight: 500; text-transform: capitalize;
   cursor: pointer;
@@ -3850,7 +3850,7 @@ input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; marg
   top: 10px;
   left: 10px;
   padding: 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   background: rgba(10, 11, 16, 0.62);
   -webkit-backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
   backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
@@ -3989,7 +3989,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #grid .card:hover .c
 .st-back {
   align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 12px 0 8px; margin-bottom: 14px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--pill-r, 999px); background: var(--surface);
   color: var(--text-dim); font: inherit; font-size: 12.5px; cursor: pointer;
 }
 .st-back:hover { color: var(--text); border-color: var(--line-2); }
@@ -4020,7 +4020,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #grid .card:hover .c
   font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-mute);
 }
 .st-soon {
-  padding: 2px 8px; border-radius: 999px;
+  padding: 2px 8px; border-radius: var(--pill-r, 999px);
   background: rgba(var(--accent-rgb), 0.14); color: var(--accent);
   font-size: 10px; letter-spacing: 0.04em; text-transform: none; font-weight: 600;
 }
@@ -4054,7 +4054,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #grid .card:hover .c
 .st-switch { position: relative; display: inline-flex; width: 40px; height: 22px; flex: none; cursor: pointer; }
 .st-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: inherit; }
 .st-switch-track {
-  width: 100%; height: 100%; border-radius: 999px;
+  width: 100%; height: 100%; border-radius: var(--pill-r, 999px);
   background: var(--surface-2); border: 1px solid var(--line-2);
   transition: background 0.18s, border-color 0.18s;
 }
@@ -4068,10 +4068,10 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #grid .card:hover .c
 .st-switch.is-disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* settings pills outside the modal reuse the modal segmented control look */
-.st-row .pills { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.st-row .pills { display: inline-flex; gap: 4px; padding: 3px; border-radius: var(--pill-r, 999px); background: var(--surface-2); border: 1px solid var(--line); }
 .st-row .pill {
   position: static; opacity: 1; pointer-events: auto;
-  height: 28px; padding: 0 14px; border: none; border-radius: 999px;
+  height: 28px; padding: 0 14px; border: none; border-radius: var(--pill-r, 999px);
   background: transparent; color: var(--text-dim); font: inherit; font-size: 12.5px; cursor: pointer;
 }
 .st-row .pill:hover:not(:disabled) { color: var(--text); }
@@ -4324,7 +4324,7 @@ img.acct-avatar { object-fit: cover; padding: 0; }
 .ge-status { display: flex; gap: 8px; flex-wrap: wrap; }
 .ge-status-btn {
   display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px;
-  border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface-2);
+  border-radius: var(--pill-r, 999px); border: 1px solid var(--line-2); background: var(--surface-2);
   color: var(--text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background 0.18s, border-color 0.18s, color 0.18s, transform 140ms cubic-bezier(0.2, 0.8, 0.3, 1);
 }
@@ -5437,7 +5437,7 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
   top: 10px; right: 10px; left: auto;
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 7px 4px 6px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   background: rgba(10, 11, 16, 0.62);
   -webkit-backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
   backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
@@ -5506,7 +5506,7 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
 .rt-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .rt-input {
   flex: 1; min-width: 0; height: 34px; padding: 0 12px;
-  border-radius: 999px; border: 1px solid var(--line);
+  border-radius: var(--pill-r, 999px); border: 1px solid var(--line);
   background: var(--surface-2); color: var(--text);
   font: inherit; font-size: 13px;
   outline: none;
@@ -5523,7 +5523,7 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
   overflow: hidden;
   display: inline-flex; align-items: center; gap: 5px;
   padding: 4px 10px 4px 8px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   border: none;
   background: var(--foil);
   color: #3a2500 !important;
@@ -5557,7 +5557,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .peak-foil::after { 
 .rate-chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 8px 3px 6px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   background: rgba(10, 11, 16, 0.62);
   -webkit-backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
   backdrop-filter: blur(calc(8px * var(--glass-blur-k, 1)));
@@ -5660,7 +5660,7 @@ html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
   isolation: isolate;
   overflow: hidden;
   height: 196px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   background: var(--foil);
   box-shadow:
     inset 0 2px 0 rgba(255, 255, 255, 0.75),
@@ -5764,7 +5764,7 @@ html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
 .pk-close {
   margin-top: 22px;
   height: 38px; padding: 0 22px;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   border: 1px solid rgba(255, 214, 110, 0.4);
   background: rgba(255, 255, 255, 0.06);
   color: #ffe7a0;
@@ -5866,7 +5866,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .pk-plaque { transit
 .pk-plaque::after { display: none; }
 .pk-face {
   position: absolute; inset: 0;
-  border-radius: 999px;
+  border-radius: var(--pill-r, 999px);
   overflow: hidden;
   clip-path: inset(0 round 999px);
   isolation: isolate;
@@ -6168,13 +6168,9 @@ button.gvx-month { grid-template-columns: 150px minmax(60px, 1fr) 120px; }
    ========================================================================= */
 
 /* ---- right side (sidebar and rail) */
-html[data-ui-nav-side='right']:is([data-ui-nav='sidebar'], [data-ui-nav='rail']) .app { flex-direction: row-reverse; }
-html[data-ui-nav-side='right']:is([data-ui-nav='sidebar'], [data-ui-nav='rail']) .side-pill::before { left: auto; right: -9px; }
+html[data-ui-nav-side='right'][data-ui-nav='sidebar'] .app { flex-direction: row-reverse; }
+html[data-ui-nav-side='right'][data-ui-nav='sidebar'] .side-pill::before { left: auto; right: -9px; }
 html[data-ui-nav-side='right'][data-ui-nav='sidebar'] .brand-chev { scale: -1 1; }
-
-/* ---- rail: always folded, and the brand mark is only a mark */
-html[data-ui-nav='rail'] .brand-chev { display: none; }
-html[data-ui-nav='rail'] #side-toggle { cursor: default; }
 
 /* ---- shared by dock and top tabs: one row */
 html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar {
@@ -6217,29 +6213,19 @@ html[data-ui-nav='dock'] .side-foot { padding-left: 6px; margin-left: 2px; borde
 html[data-ui-nav='dock'] .side-account { padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--glass-border, var(--line)); height: 44px; }
 /* the room it needs is kept clear, so nothing sits under it */
 html[data-ui-nav='dock'] .app { padding-bottom: 82px; }
-html[data-ui-nav='dock'][data-ui-dock-pos='top'] .sidebar { top: 14px; bottom: auto; }
-html[data-ui-nav='dock'][data-ui-dock-pos='top'] .app { padding-bottom: 12px; padding-top: 82px; }
 /* attached: spans the edge like a taskbar */
 html[data-ui-nav='dock'][data-ui-dock-style='attached'] .sidebar {
   left: 12px; right: 12px; translate: none; bottom: 12px;
   justify-content: center;
   border-radius: var(--radius-glass, 18px);
 }
-html[data-ui-nav='dock'][data-ui-dock-style='attached'][data-ui-dock-pos='top'] .sidebar { top: 12px; bottom: auto; }
 html[data-ui-nav='dock'][data-ui-dock-style='attached'] .app { padding-bottom: 80px; }
-html[data-ui-nav='dock'][data-ui-dock-style='attached'][data-ui-dock-pos='top'] .app { padding-bottom: 12px; padding-top: 80px; }
-/* a top dock leaves a strip above the window's content: it drags the window */
-html[data-ui-nav='dock'][data-ui-dock-pos='top'] .sidebar { -webkit-app-region: no-drag; }
-html[data-ui-nav='dock'][data-ui-dock-pos='top'] .app::before {
-  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 12px; -webkit-app-region: drag;
-}
 /* auto-hide: slides away, comes back when the pointer touches the edge */
 html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] .app { padding-top: 12px; padding-bottom: 12px; }
 html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] .sidebar {
   transition: transform 240ms cubic-bezier(0.2, 0.9, 0.25, 1), opacity 200ms;
   transform: translateY(calc(100% + 24px)); opacity: 0;
 }
-html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'][data-ui-dock-pos='top'] .sidebar { transform: translateY(calc(-100% - 24px)); }
 html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] :is(.sidebar:hover, .sidebar:focus-within),
 html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'].dock-peek .sidebar { transform: none; opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
@@ -6248,30 +6234,47 @@ html[data-ui-nav='dock'][data-ui-dock-auto-hide='1'].dock-peek .sidebar { transf
 /* the same, from Settings → Appearance → Motion */
 html:is([data-ui-motion='reduced'], [data-ui-motion='off'])[data-ui-nav='dock'][data-ui-dock-auto-hide='1'] .sidebar { transition: opacity 120ms; }
 
-/* ---- top tabs: the sections run across the top of the window */
-html[data-ui-nav='top'] .app { flex-direction: column; }
-html[data-ui-nav='top'] .sidebar {
-  flex: 0 0 auto; height: 52px;
-  padding: 0 10px 0 12px; gap: 6px;
-  -webkit-app-region: drag;
+/* ---- top tabs: the sections sit in the top bar itself (app.js moves the
+   sidebar into #topbar), left of the search: one bar, nothing stacked */
+html[data-ui-nav='top']:not(.is-bigpicture) .topbar {
+  grid-template-columns: max-content minmax(140px, 1fr) max-content;
+  padding-left: 10px;
+}
+html[data-ui-nav='top']:not(.is-bigpicture) .topbar > .filter-title { display: none; }
+html[data-ui-nav='top']:not(.is-bigpicture) .topbar > .sidebar { grid-column: 1; grid-row: 1; }
+html[data-ui-nav='top']:not(.is-bigpicture) .topbar > .slot { grid-column: 2; grid-row: 1; }
+html[data-ui-nav='top']:not(.is-bigpicture) .topbar > .top-actions { grid-column: 3; grid-row: 1; }
+html[data-ui-nav='top'] .topbar > .sidebar,
+html[data-ui-nav='top'] #ambient:is(.has-fluid, .has-backdrop) ~ .app .topbar > .sidebar {
+  height: 100%; min-width: 0; padding: 0; gap: 2px;
+  background: none !important; border: 0 !important; box-shadow: none !important;
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+  border-radius: 0; animation: none; view-transition-name: none;
 }
 html[data-ui-nav='top'] .sidebar :is(button, .side-account) { -webkit-app-region: no-drag; }
-html[data-ui-nav='top'] .side-brand { padding: 0 10px 0 0; flex: none; }
-html[data-ui-nav='top'] .side-name { padding-right: 0; overflow: visible; }
-html[data-ui-nav='top'] .brand-chev { display: none; }
-html[data-ui-nav='top'] .sidebar .side-item { height: 36px; padding: 0 12px; gap: 7px; border-radius: calc(10px * var(--radius-k, 1)); }
+html[data-ui-nav='top'] .side-brand { padding: 0 8px 0 2px; flex: none; }
+html[data-ui-nav='top'] .side-name, html[data-ui-nav='top'] .brand-chev { display: none; }
+html[data-ui-nav='top'] .sidebar .side-item { height: 34px; padding: 0 11px; gap: 7px; border-radius: calc(10px * var(--radius-k, 1)); }
 html[data-ui-nav='top'] .sidebar .side-item > :is(span, b) { opacity: 1; transform: none; flex: none; }
-html[data-ui-nav='top'] .side-foot { margin-left: auto; }
 html[data-ui-nav='top'] .sidebar .side-btn { color: var(--text-dim); font-size: 13px; }
 html[data-ui-nav='top'] .sidebar .side-btn:hover { color: var(--text); }
-/* Import and Settings: icons, with their names as tooltips */
-html[data-ui-nav='top'] .side-foot .side-item[data-rail-action] { padding: 0; width: 36px; justify-content: center; }
-html[data-ui-nav='top'] .side-foot .side-item[data-rail-action] > span { display: none; }
+/* the top bar has its own Import and Settings buttons */
+html[data-ui-nav='top'] .side-foot .side-item[data-rail-action] { display: none; }
 html[data-ui-nav='top'] .side-account { padding-left: 6px; }
+/* narrower windows: the counts go first, then the names (the icons keep
+   them as tooltips) */
+@media (max-width: 1240px) {
+  html[data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item > b { display: none; }
+  html[data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item { padding: 0 9px; gap: 6px; }
+}
+@media (max-width: 1040px) {
+  html[data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item > span { display: none; }
+  html[data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item { padding: 0; width: 34px; justify-content: center; }
+}
+/* small windows: the search folds to its magnifier and the logo steps aside */
 @media (max-width: 900px) {
-  html[data-ui-nav='top'] .side-name { display: none; }
-  html[data-ui-nav='top'] .sidebar .side-item { padding: 0; width: 36px; justify-content: center; }
-  html[data-ui-nav='top'] .sidebar .side-item > :is(span, b) { display: none; }
+  html[data-ui-nav='top']:not(.is-bigpicture) .topbar { grid-template-columns: max-content minmax(36px, 1fr) max-content; column-gap: 8px; }
+  html[data-ui-nav='top']:not(.is-bigpicture) .topbar > .sidebar .side-brand { display: none; }
 }
 
 /* ---- none: no navigation chrome; a menu button in the top bar reaches everything */
@@ -6335,23 +6338,6 @@ html[data-ui-search='in-nav']:not([data-ui-nav='none']):not([data-ui-nav='dock']
 .side-search-slot { display: none; flex: none; }
 html[data-ui-search='in-nav']:not([data-ui-nav='none']) .side-search-slot { display: block; height: 34px; margin: 0 0 4px; }
 html[data-ui-search='in-nav'][data-ui-nav='dock'] .side-search-slot { width: 44px; height: 44px; margin: 0; }
-/* top tabs: after the tabs and icons, before the account */
-html[data-ui-search='in-nav'][data-ui-nav='top'] .side-search-slot { width: 260px; margin: 0 0 0 6px; order: 3; }
-html[data-ui-search='in-nav'][data-ui-nav='top'] .side-nav { order: 1; }
-html[data-ui-search='in-nav'][data-ui-nav='top'] .side-foot { order: 2; }
-html[data-ui-search='in-nav'][data-ui-nav='top'] .side-account { order: 4; }
-@media (max-width: 900px) {
-  html[data-ui-search='in-nav'][data-ui-nav='top'] .side-search-slot { width: 36px; height: 36px; }
-}
-/* the search box shares the row with the tabs: between 900 and 1100 px the
-   tabs fold to icons (like under 900) and the box narrows, so the account
-   stays on screen */
-@media (max-width: 1100px) and (min-width: 901px) {
-  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .side-search-slot { width: 200px; }
-  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .side-name { display: none; }
-  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item { padding: 0; width: 36px; justify-content: center; }
-  html[data-ui-search='in-nav'][data-ui-nav='top']:not(.is-bigpicture) .sidebar .side-item > :is(span, b) { display: none; }
-}
 html.is-bigpicture .side-search-slot { display: none !important; }
 
 /* closed and small: only the magnifier shows, centred */
@@ -6375,7 +6361,7 @@ html[data-ui-search='hidden'] .spot {
 }
 /* toasts stack above the corner search button instead of over it */
 html[data-ui-search='floating']:not(.is-bigpicture) .toasts { bottom: calc(var(--shell-gap, 12px) + 14px + 60px); }
-html[data-ui-search='floating'][data-ui-nav='dock'][data-ui-dock-style='attached'][data-ui-dock-pos='bottom']:not([data-ui-dock-auto-hide='1']):not(.is-bigpicture) .toasts { bottom: 160px; }
+html[data-ui-search='floating'][data-ui-nav='dock'][data-ui-dock-style='attached']:not([data-ui-dock-auto-hide='1']):not(.is-bigpicture) .toasts { bottom: 160px; }
 
 /* ============================================================================
    Background choices (html[data-ui-background], app.js "backdrop"). The fluid
@@ -6397,9 +6383,10 @@ html:is([data-ui-background='art'], [data-ui-background='image'], [data-ui-backg
   background: rgba(var(--shade-rgb), var(--bg-dim, 0.4));
 }
 :root[data-ui-background='solid'][data-palette] #ambient { background: var(--bg-solid, var(--bg)); }
-/* with a picture behind it, the main panel lets a bit more through */
-:root:is([data-ui-background='image'], [data-ui-background='video']) { --main-glass-a: 0.8; }
-:root[data-ui-background='art'] { --main-glass-a: 0.84; }
+/* with a picture behind it, the main panel lets it through: it is what the
+   user picked, so it has to be seen */
+:root:is([data-ui-background='image'], [data-ui-background='video']) { --main-glass-a: 0.62; --side-glass-a: 0.42; }
+:root[data-ui-background='art'] { --main-glass-a: 0.66; --side-glass-a: 0.42; }
 @media (prefers-reduced-motion: reduce) { #ambient .amb-layer { transition: none; } }
 /* the same, from Settings → Appearance → Motion */
 html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #ambient .amb-layer { transition: none; }
@@ -6522,7 +6509,17 @@ html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf-hero { min-height: 2
 .cz .st-row:has(> .st-row-control > .st-switch) { flex-direction: row; align-items: center; }
 .cz .st-row-control { flex-wrap: wrap; }
 .cz .st-row-control:empty { display: none; }
-.cz .pills { flex-wrap: wrap; }
+/* choices: an even grid that fills the row (a wrapped pill strip looked
+   broken), one line when they fit */
+.cz .st-row .pills {
+  display: grid; width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  border-radius: calc(12px * var(--radius-k, 1));
+}
+.cz .st-row:has([data-ui-search-group]) .pills,
+.cz .st-row:has([data-ui-bg-group]) .pills { grid-template-columns: repeat(auto-fit, minmax(98px, 1fr)); }
+.cz .st-row .pill { padding: 0 8px; border-radius: calc(9px * var(--radius-k, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-row .pill[hidden] { display: none; }
 .cz .st-card-title { padding: 12px 14px 2px; }
 .cz .st-range-wrap { width: 100%; }
 .cz .st-range-wrap input[type='range'] { flex: 1; min-width: 0; }
@@ -6561,7 +6558,7 @@ html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf-hero { min-height: 2
 .cz-art[data-art='dock'] { grid-template-columns: repeat(3, 1fr); grid-template-rows: 15% 1fr 1fr; padding-bottom: 14%; }
 .cz-art[data-art='dock'] .pa-top { grid-column: 1 / -1; }
 .cz-art[data-art='dock'] .pa-nav { position: absolute; left: 30%; right: 30%; bottom: 4%; height: 8%; border-radius: 99px; background: rgba(var(--ink-rgb), 0.3); }
-.cz-art[data-art='compact'] { grid-template-columns: 7% repeat(3, 1fr); gap: 2px; padding: 2px; border-radius: 2px; }
+.cz-art[data-art='compact'] { grid-template-columns: 14% repeat(3, 1fr); gap: 2px; padding: 2px; border-radius: 2px; }
 .cz-art[data-art='compact'] i { border-radius: 1px; }
 .cz-art[data-art='couch'] { grid-template-columns: 16% repeat(2, 1fr); grid-template-rows: 15% 1fr; }
 .cz-art[data-art='couch'] .pa-c:nth-child(n+5) { display: none; }
@@ -6875,3 +6872,38 @@ html.is-pad .act-day-head:focus, html.is-pad .act-play:focus { outline: 3px soli
 .pkl-by { display: block; margin-top: 4px; font-style: normal; font-size: 0.92em; opacity: 0.75; }
 .gvx-quote { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid rgba(var(--accent-rgb), 0.6); border-radius: 0 calc(8px * var(--radius-k, 1)) calc(8px * var(--radius-k, 1)) 0; background: rgba(var(--ink-rgb), 0.04); font-size: 13px; line-height: 1.5; color: var(--text); font-style: italic; }
 .gvx-quote cite { display: block; margin-top: 6px; font-style: normal; font-size: 12px; color: var(--text-mute); }
+
+/* ============================================================================
+   Customize fixes (2.0 review)
+   ========================================================================= */
+
+/* ---- window buttons in the corner of a right-hand sidebar
+   (app.js moves .win-controls into the brand row) */
+.side-brand > .win-controls { margin: 0 0 0 auto; padding: 0; border: 0; gap: 2px; flex: none; -webkit-app-region: no-drag; }
+html[data-ui-nav-side='right'] .side-brand { -webkit-app-region: drag; }
+html[data-ui-nav-side='right'] .side-brand > :is(button, .win-controls) { -webkit-app-region: no-drag; }
+/* open sidebar: they get a row of their own above the logo (beside it the name was cut) */
+.sidebar:not(.is-collapsed) .side-brand:has(> .win-controls) { flex-wrap: wrap; row-gap: 8px; }
+.sidebar:not(.is-collapsed) .side-brand > .win-controls { order: -1; flex-basis: 100%; justify-content: flex-end; margin: -4px -4px 0 0; }
+/* folded (collapsed sidebar, narrow window): they stack above the logo */
+.sidebar.is-collapsed .side-brand:has(> .win-controls) { flex-direction: column-reverse; align-items: center; gap: 10px; padding-left: 0; padding-right: 0; }
+.sidebar.is-collapsed .side-brand > .win-controls { flex-direction: column; margin: 0; }
+.sidebar.is-collapsed .side-brand:has(> .win-controls) .side-name { display: none; }
+@media (max-width: 900px) {
+  .sidebar .side-brand:has(> .win-controls) { flex-direction: column-reverse; align-items: center; gap: 10px; padding-left: 0; padding-right: 0; }
+  .sidebar .side-brand > .win-controls { flex-direction: column; margin: 0; }
+  .sidebar .side-brand:has(> .win-controls) .side-name { display: none; }
+}
+
+/* ---- the closed search in a narrow slot: no key hint (it cut the text) */
+.spot.is-slim:not(.open) .keys { display: none; }
+
+/* ---- the corner search button never covers content: the pages keep room
+   for it at the bottom */
+html[data-ui-search='floating']:not(.is-bigpicture) .shelf { padding-bottom: 58px; }
+html[data-ui-search='floating']:not(.is-bigpicture) :is(.library, .wishlist-view, .activity-view, .game-view, .settings-view) { padding-bottom: 84px; }
+
+/* ---- a cover with a rating and a status: the status goes under the rating */
+html:not([data-ui-card-ratings='0']) #grid .card:has(> .card-media > .card-rating:not(.peak-strap):not([hidden])) .card-status { top: 54px; }
+/* ratings switched off: nothing sits above the status any more */
+html[data-ui-card-ratings='0'] #grid .card .card-status { top: 10px !important; }

@@ -669,12 +669,12 @@
     addEventListener('pointermove', (e) => {
       const ui = state.ui;
       if (!ui || ui.nav !== 'dock' || !ui.dockAutoHide) return;
-      const near = ui.dockPos === 'top' ? e.clientY <= 6 : e.clientY >= innerHeight - 6;
+      const near = e.clientY >= innerHeight - 6;
       if (near) dockPeek(true);
       else if (document.documentElement.classList.contains('dock-peek')) {
         const side = document.querySelector('.sidebar');
         const r = side && side.getBoundingClientRect();
-        const away = !r || (ui.dockPos === 'top' ? e.clientY > r.bottom + 40 : e.clientY < r.top - 40);
+        const away = !r || e.clientY < r.top - 40;
         if (away) dockPeek(false);
       }
     }, { passive: true });
@@ -7380,15 +7380,14 @@
         html: stLookTools(ui, opts) +
           stCard('Layout',
           stRow('Navigation', 'Where the Library, Wishlist, Activity and Settings buttons live. With None, use the menu button in the top bar or Ctrl 1–6.',
-            stPills('data-ui-nav-group', [['sidebar', 'Sidebar'], ['rail', 'Rail'], ['dock', 'Dock'], ['top', 'Top tabs'], ['none', 'None']], ui.nav), { wide: true }) +
-          `<div data-ui-only="sidebar rail">${stRow('Side', 'Which edge of the window it sits on.', stPills('data-ui-side-group', [['left', 'Left'], ['right', 'Right']], ui.navSide))}</div>` +
+            stPills('data-ui-nav-group', [['sidebar', 'Sidebar'], ['dock', 'Dock'], ['top', 'Top tabs'], ['none', 'None']], ui.nav), { wide: true }) +
+          `<div data-ui-only="sidebar">${stRow('Side', 'Which edge of the window it sits on.', stPills('data-ui-side-group', [['left', 'Left'], ['right', 'Right']], ui.navSide))}</div>` +
           `<div data-ui-only="dock">${
-            stRow('Dock position', '', stPills('data-ui-dockpos-group', [['bottom', 'Bottom'], ['top', 'Top']], ui.dockPos)) +
             stRow('Dock style', 'Floating is a small pill; attached runs along the edge.', stPills('data-ui-dockstyle-group', [['floating', 'Floating'], ['attached', 'Attached']], ui.dockStyle)) +
             stRow('Hide the dock', 'It slides away and comes back when the pointer touches the edge.', stSwitch('data-ui-dock-hide', ui.dockAutoHide, { label: 'Hide the dock' }))
           }</div>` +
           stRow('Search', 'Where the search box sits. It always opens with Ctrl F or /, and Y on a controller.',
-            stPills('data-ui-search-group', [['top-center', 'Top centre'], ['top-left', 'Top left'], ['in-nav', 'In the navigation'], ['floating', 'Corner button'], ['hidden', 'Hidden']], ui.search), { wide: true })) +
+            stPills('data-ui-search-group', [['top-center', 'Top centre'], ['top-left', 'Top left'], ['in-nav', 'In the nav'], ['floating', 'Corner button'], ['hidden', 'Hidden']], ui.search), { wide: true })) +
           stCard('Size and shape',
             stRow('Size', 'Makes everything bigger or smaller: text, buttons and covers. Big Picture keeps its own size.',
               stPills('data-ui-size-group', [['90', '90%'], ['100', '100%'], ['110', '110%'], ['120', '120%']], String(ui.fontScale))) +
@@ -7415,25 +7414,28 @@
             stRow('', '', '<button type="button" class="btn btn-ghost" data-ui-glass-reset>Reset glass</button>')) +
           stCard('Background',
             stRow('Background', 'What sits behind the glass. Your picture or video stays on this PC and isn’t synced.',
-              stPills('data-ui-bg-group', [['fluid', 'Moving colours'], ['art', 'Game art'], ['solid', 'Solid colour'], ['image', 'Picture'], ['video', 'Video']], ui.background), { wide: true }) +
+              stPills('data-ui-bg-group', [['fluid', 'Animated'], ['art', 'Game art'], ['solid', 'Solid colour'], ['image', 'Picture'], ['video', 'Video']], ui.background), { wide: true }) +
             `<div data-ui-bg-only="solid">${stRow('Colour', '', `<input type="color" class="st-color" data-ui-bg-color value="${esc(ui.backgroundColor || '#08090c')}" aria-label="Background colour" />`)}</div>` +
             `<div data-ui-bg-only="image video">${stRow('File', '', '<div class="st-inline"><button type="button" class="btn btn-ghost" data-ui-bg-change>Choose another…</button><button type="button" class="btn btn-ghost" data-ui-bg-remove>Remove</button></div>', { descId: 'st-bg-file' })}</div>` +
             `<div data-ui-bg-only="art image video">${stRow('Dim', 'Darkens the background so the library stays easy to read.', stRange('data-ui-bg-dim', ui.backgroundDim, 0, 100, 'Dim'))}</div>`) +
           stCard('Quality',
             stRow('Visual quality', 'Cinematic adds the animated background. Lite turns off blur and motion — best on older PCs.', stPills('data-tier-group', [['cinematic', 'Cinematic'], ['standard', 'Standard'], ['lite', 'Lite']], state.tier)) +
-            stRow('Motion', `Reduced stops things sliding, tilting and moving. Off also makes every change instant. Follow Windows uses its “Animation effects” setting, now <b>${sysReduced ? 'off' : 'on'}</b>.`,
-              stPills('data-ui-motion-group', [['full', 'Follow Windows'], ['reduced', 'Reduced'], ['off', 'Off']], ui.motion), { wide: true })),
+            stRow('Motion', `Reduced stops things sliding, tilting and moving. Off also makes every change instant. Windows follows its own “Animation effects” setting, now <b>${sysReduced ? 'off' : 'on'}</b>.`,
+              stPills('data-ui-motion-group', [['full', 'Windows'], ['reduced', 'Reduced'], ['off', 'Off']], ui.motion), { wide: true })),
         wire(panel) {
           wirePalettePicker(panel, (v) => applyPalette(v, { announce: true, persist: true }));
           wirePills(panel, '[data-tier-group]', (v) => { applyTier(v, { announce: true, persist: true }); if (panel._showGlass) panel._showGlass(); });
           const showFor = () => {
             for (const el of panel.querySelectorAll('[data-ui-only]')) el.hidden = !el.dataset.uiOnly.split(' ').includes(state.ui.nav);
+            // Top tabs are already in the top bar, and None has no navigation
+            const inNav = panel.querySelector('[data-ui-search-group] .pill[data-value="in-nav"]');
+            if (inNav) inNav.hidden = state.ui.nav === 'none' || state.ui.nav === 'top';
+            for (const p of panel.querySelectorAll('[data-ui-search-group] .pill')) p.classList.toggle('is-active', p.dataset.value === state.ui.search);
           };
           showFor();
           wirePills(panel, '[data-ui-nav-group]', (v) => { setUi({ nav: v }); showFor(); });
           wirePills(panel, '[data-ui-side-group]', (v) => setUi({ navSide: v }));
           wirePills(panel, '[data-ui-search-group]', (v) => setUi({ search: v }));
-          wirePills(panel, '[data-ui-dockpos-group]', (v) => setUi({ dockPos: v }));
           wirePills(panel, '[data-ui-dockstyle-group]', (v) => setUi({ dockStyle: v }));
           const hide = panel.querySelector('[data-ui-dock-hide]');
           if (hide) hide.addEventListener('change', () => setUi({ dockAutoHide: hide.checked }));
@@ -9136,18 +9138,33 @@
   applySidebar(storedSideOpen(), false);
 
   // Every nav layout is this one sidebar restyled (style.css "Navigation
-  // layouts"). Only the classic sidebar folds on request: the rail is always
-  // folded, and the dock and top tabs lay their rows out flat.
+  // layouts"). Only the classic sidebar folds on request; the dock and top
+  // tabs lay their rows out flat.
   if (sideEl) {
     for (const b of sideEl.querySelectorAll('.side-item')) {
       const label = b.querySelector('span');
       if (!b.title && label) b.title = label.textContent.trim();
     }
   }
+  const appEl = $('#app');
+  const topbarEl = $('#topbar');
+  const winCtl = document.querySelector('.win-controls');
+  const winHome = winCtl && winCtl.parentElement;
+  const placeNav = (ui) => {
+    if (!sideEl || !appEl || !topbarEl) return;
+    const intoTop = ui.nav === 'top';
+    if (intoTop && sideEl.parentElement !== topbarEl) topbarEl.insertBefore(sideEl, topbarEl.querySelector('.filter-title'));
+    else if (!intoTop && sideEl.parentElement !== appEl) appEl.insertBefore(sideEl, appEl.firstChild);
+    if (!winCtl || !winHome) return;
+    const corner = ui.navSide === 'right' && ui.nav === 'sidebar';
+    const brand = sideEl.querySelector('.side-brand');
+    if (corner && brand && winCtl.parentElement !== brand) brand.appendChild(winCtl);
+    else if (!corner && winCtl.parentElement !== winHome) winHome.appendChild(winCtl);
+  };
   navHooks.apply = (ui) => {
     const nav = ui.nav;
-    if (nav === 'rail') applySidebar(false, false, false);
-    else if (nav === 'sidebar') applySidebar(storedSideOpen(), false, false);
+    placeNav(ui);
+    if (nav === 'sidebar') applySidebar(storedSideOpen(), false, false);
     else applySidebar(true, false, false);
     if (sideToggle) {
       const folds = nav === 'sidebar';
@@ -9480,16 +9497,11 @@
       const where = placement();
       if (where === 'nav' && sideSlot && sideSlot.offsetParent) return rectOf(sideSlot);
       if (where === 'float') {
+        // the bottom-right corner of the main panel (not the window: a
+        // right-hand sidebar or a bottom dock sits there)
         const size = 48;
-        let bottom = innerHeight - 24;
-        const ui = state.ui;
-        const side = document.querySelector('.sidebar');
-        // stay clear of a dock that runs along the bottom edge
-        if (ui.nav === 'dock' && ui.dockPos === 'bottom' && !ui.dockAutoHide && side) {
-          const d = side.getBoundingClientRect();
-          if (d.right > innerWidth - 24 - size - 12) bottom = Math.min(bottom, d.top - 12);
-        }
-        return { left: innerWidth - 24 - size, top: bottom - size, width: size, height: size };
+        const m = ($('#main') || document.querySelector('.main')).getBoundingClientRect();
+        return { left: m.right - 16 - size, top: m.bottom - 16 - size, width: size, height: size };
       }
       if (where === 'ghost') {
         const o = openRect();
@@ -9501,6 +9513,11 @@
       spot.style.left = r.left + 'px'; spot.style.top = r.top + 'px'; spot.style.width = r.width + 'px'; spot.style.height = r.height + 'px';
       // closed and small (a nav slot, the corner button): just the magnifier
       spot.classList.toggle('is-compact', !isOpen && r.width < 120 && placement() !== 'ghost');
+      const slim = !isOpen && r.width < 260;
+      spot.classList.toggle('is-slim', slim);
+      // a narrow box says less, so the word isn't cut
+      if (!input.dataset.fullPh) input.dataset.fullPh = input.placeholder;
+      input.placeholder = slim && r.width < 200 ? 'Search' : input.dataset.fullPh;
       spot.classList.toggle('is-round', !isOpen && placement() === 'float');
       spot.classList.toggle('is-ghost', !isOpen && placement() === 'ghost');
     };
