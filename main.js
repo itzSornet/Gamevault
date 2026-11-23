@@ -21,6 +21,7 @@ const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
 const { createArtCache, installSgdbImageCaching } = require('./src/backend/art-cache.js');
 const { createPrices } = require('./src/backend/prices.js');
+const { createPeakLines } = require('./src/backend/peak-line.js');
 const { cloudConfig } = require('./src/backend/cloud-config.js');
 const { createAccount } = require('./src/backend/account.js');
 const { createCloud } = require('./src/backend/cloud.js');
@@ -1675,7 +1676,7 @@ function createWindow() {
     return out;
   }
 
-  ipcMain.handle('prices:get', async (_e, { steamAppIds, fresh } = {}) => {
+  function pricesApi() {
     if (!pricesInstance) {
       const { url, anonKey } = cloudConfig();
       pricesInstance = createPrices({
@@ -1684,9 +1685,36 @@ function createWindow() {
         steam: steamRegionPrices,
       });
     }
+    return pricesInstance;
+  }
+  ipcMain.handle('prices:get', async (_e, { steamAppIds, itadIds, fresh } = {}) => {
     const country = await storeCountry();
     try {
-      return await pricesInstance.get({ steamAppIds, country, fresh });
+      return await pricesApi().get({ steamAppIds, itadIds, country, fresh });
+    } catch (err) {
+      return { ok: false, error: { code: 'SERVER', message: err.message } };
+    }
+  });
+  // the Peak scroll's line about a game (written once in the cloud)
+  let peakLinesInstance = null;
+  ipcMain.handle('peak:line', async (_e, games) => {
+    if (!peakLinesInstance) {
+      const { url, anonKey } = cloudConfig();
+      peakLinesInstance = createPeakLines({
+        file: path.join(app.getPath('userData'), 'peak-lines.json'), cloudUrl: url, anonKey,
+        token: async (o) => (await account().token(o).catch(() => null)) || artCache().token(o),
+      });
+    }
+    try {
+      return await peakLinesInstance.get(Array.isArray(games) ? games.slice(0, 50) : []);
+    } catch (err) {
+      return { ok: false, error: { code: 'SERVER', message: err.message } };
+    }
+  });
+  // which game a title is (IsThereAnyDeal), for games with no Steam AppID
+  ipcMain.handle('prices:match', async (_e, titles) => {
+    try {
+      return await pricesApi().match({ titles: Array.isArray(titles) ? titles.slice(0, 100) : [] });
     } catch (err) {
       return { ok: false, error: { code: 'SERVER', message: err.message } };
     }

@@ -297,6 +297,43 @@
     return out;
   }
 
+  // Recent days across every game, newest first: per day its total and each
+  // game played that day (most time first) with that game's sessions.
+  // `sessions` come from allSessions (each has a gameId).
+  function daysByGame(sessions, limit) {
+    const days = new Map();
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (!isValidSession(s)) continue;
+      const d = new Date(s.start);
+      const n = localDayNumber(d);
+      let day = days.get(n);
+      if (!day) {
+        day = { dayNumber: n, day: new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(), hours: 0, count: 0, games: new Map() };
+        days.set(n, day);
+      }
+      const key = String(s.gameId);
+      let g = day.games.get(key);
+      if (!g) { g = { gameId: s.gameId, hours: 0, count: 0, items: [] }; day.games.set(key, g); }
+      const end = isFiniteNumber(s.end) && s.end > s.start ? s.end : s.start + s.duration * 3600000;
+      g.hours += s.duration;
+      g.count += 1;
+      g.items.push({ start: s.start, end, duration: s.duration });
+      day.hours += s.duration;
+      day.count += 1;
+    }
+    const out = Array.from(days.values()).sort((a, b) => b.dayNumber - a.dayNumber);
+    const max = Math.max(0, Math.floor(limit) || 0);
+    return (max ? out.slice(0, max) : out).map((day) => ({
+      dayNumber: day.dayNumber,
+      day: day.day,
+      hours: round2(day.hours),
+      count: day.count,
+      games: Array.from(day.games.values())
+        .map((g) => ({ gameId: g.gameId, hours: round2(g.hours), count: g.count, items: g.items.sort((a, b) => a.start - b.start) }))
+        .sort((a, b) => b.hours - a.hours),
+    }));
+  }
+
   // Games ranked by hours played from `since` on (all of their recorded
   // hours when `since` is null). Games with no time in the range drop out.
   function topGames(games, since, limit) {
@@ -482,6 +519,7 @@
     weekBuckets,
     playStreak,
     allSessions,
+    daysByGame,
     topGames,
   };
 });

@@ -4,10 +4,16 @@
  *   Authorization: Bearer <user access token>   (anonymous sign-in is fine;
  *                                                the bare anon key is refused)
  *   apikey: <project anon/publishable key>
- *   Body: { steamAppIds: number[] (1..50), country?: "US" (ISO 3166-1 alpha-2) }
+ *   Body: { steamAppIds?: number[], itadIds?: string[] (1..50 together),
+ *           country?: "US" (ISO 3166-1 alpha-2) }
+ *     or: { titles: string[] (1..20) }   -> which game each title is
  *
  * Response (HTTP 200):
- *   { ok: true, data: { country, prices: { [steamAppId]: Price | null }, fetchedAt } }
+ *   { ok: true, data: { country, prices: { [steamAppId | "itad:<id>"]: Price | null }, fetchedAt } }
+ *   titles: { ok: true, data: { matches: { [title]: Match | null } } }
+ *   Match = { itadId, title, appid: number | null }   // appid = its Steam AppID
+ *     Found by ITAD's exact title lookup first, then its search (games only,
+ *     same name give or take an edition word). Kept 30 days, misses 1 day.
  *   Price = {
  *     current: Deal | null,              // the cheapest shop right now (picked here, from deals)
  *     deals:   Deal[],                   // every shop selling it, cheapest first
@@ -59,6 +65,93 @@ type Deal = {
   url?: string;
   timestamp?: string;
 };
+type Found = { itadId: string; title: string; appid: number | null };
+
+// "The Witcher® 3: Wild Hunt" -> "thewitcher3wildhunt"
+const norm = (t: string) => String(t || "").toLowerCase().replace(/[\u2122\u00ae\u00a9]/g, "")
+  .replace(/&/g, "and").replace(/[^\p{L}\p{N}]+/gu, "");
+// words a store adds to the same game
+const EDITION = /^(goty|gameoftheyear|definitive|complete|deluxe|ultimate|remastered|enhanced|directorscut|edition|standard|anniversary|premium|gold)+$/;
+const sameGame = (a: string, b: string) => {
+  const x = norm(a), y = norm(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return long.startsWith(short) && EDITION.test(long.slice(short.length));
+};
+
+// "The Witcher 3: Wild Hunt - Game of the Year Edition" -> "The Witcher 3: Wild Hunt"
+const stripEdition = (t: string) => t.replace(
+  /[\s:\-\u2013\u2014]*[([]?\b(game of the year|goty|definitive|complete|deluxe|ultimate|remastered|enhanced|director'?s cut|anniversary|gold|premium|standard)\b( edition)?[)\]]?\s*$/i,
+  "",
+).trim();
+
+async function itadGet(path: string, query: Record<string, string>) {
+  const qs = new URLSearchParams({ key: ITAD_KEY, ...query });
+  let res: Response;
+  try {
+    res = await fetch(`${ITAD}${path}?${qs}`, { signal: AbortSignal.timeout(20_000) });
+  } catch (err) {
+    throw new Fail("NETWORK", `IsThereAnyDeal unreachable: ${(err as Error).message}`, 502);
+  }
+  if (res.status === 429) {
+    throw new Fail("RATE_LIMIT", "IsThereAnyDeal is busy; try again shortly", 429, Number(res.headers.get("Retry-After")) || 60);
+  }
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Fail("NETWORK", `IsThereAnyDeal error ${res.status}`, 502);
+  return await res.json();
+}
+
+/** Titles -> ITAD game + Steam AppID, from the table first, then ITAD. */
+async function matchTitles(titles: string[]): Promise<Record<string, Found | null>> {
+  const out: Record<string, Found | null> = {};
+  const keys = new Map(titles.map((t) => [t, norm(t)]));
+  const { data: rows, error } = await supabase.from("price_titles").select("norm, itad_id, title, appid, fetched_at")
+    .in("norm", [...new Set(keys.values())]);
+  if (error) throw new Fail("SERVER", `price_titles read: ${error.message}`, 500);
+  const known = new Map<string, Found | null>();
+  for (const r of rows ?? []) {
+    const ttl = r.itad_id ? 30 * DAY : DAY;
+    if (Date.now() - Date.parse(r.fetched_at) < ttl) {
+      known.set(r.norm, r.itad_id ? { itadId: r.itad_id, title: r.title ?? "", appid: r.appid ?? null } : null);
+    }
+  }
+  const todo = titles.filter((t) => !known.has(keys.get(t)!));
+  if (todo.length) {
+    // 1) exact lookup of each title and of it without edition words, in one
+    //    call (ITAD keeps "GOTY Edition" packs apart from the game itself)
+    const names = [...new Set(todo.flatMap((t) => [t, stripEdition(t)]).filter(Boolean))];
+    const exact = await itad("/lookup/id/title/v1", names) as Record<string, string | null>;
+    const pick = (n: string) => (exact && typeof exact[n] === "string" ? exact[n] : null);
+    const cands = new Map<string, string[]>();
+    for (const t of todo) cands.set(t, [...new Set([pick(t), pick(stripEdition(t))].filter((x): x is string => !!x))]);
+    // 2) none: ITAD's search, games with the same name (edition words aside)
+    for (const t of todo.filter((x) => !cands.get(x)!.length)) {
+      const list = await itadGet("/games/search/v1", { title: t, results: "10" }) as { id: string; title: string; type: string }[] | null;
+      const hits = (Array.isArray(list) ? list : []).filter((g) => g.type === "game" && sameGame(g.title, t));
+      cands.set(t, hits.slice(0, 3).map((g) => g.id));
+    }
+    // 3) each candidate's Steam AppID; the one on Steam wins, else the first
+    const now = new Date().toISOString();
+    const upserts: Record<string, unknown>[] = [];
+    for (const t of todo) {
+      let found: Found | null = null;
+      for (const gid of cands.get(t)!) {
+        const info = await itadGet("/games/info/v2", { id: gid }) as { title?: string; appid?: number } | null;
+        const f = { itadId: gid, title: String(info?.title ?? t), appid: Number(info?.appid) > 0 ? Number(info!.appid) : null };
+        if (!found) found = f;
+        if (f.appid) { found = f; break; }
+      }
+      known.set(keys.get(t)!, found);
+      upserts.push({ norm: keys.get(t), itad_id: found?.itadId ?? null, title: found?.title ?? null, appid: found?.appid ?? null, fetched_at: now });
+    }
+    const { error: e2 } = await supabase.from("price_titles").upsert(upserts);
+    if (e2) console.warn("price_titles write:", e2.message);
+  }
+  for (const t of titles) out[t] = known.get(keys.get(t)!) ?? null;
+  return out;
+}
+
 type GamePrices = { id: string; historyLow?: { all?: Money | null } | null; deals?: (Deal & { drm?: { name?: string }[] })[] };
 
 class Fail extends Error {
@@ -136,13 +229,32 @@ async function handle(req: Request): Promise<Response> {
   const uid = !authErr && who?.user?.id;
   if (!uid) throw new Fail("UNAUTHENTICATED", "Sign in first (anonymous is fine)", 401);
 
-  const body = await req.json().catch(() => null) as { steamAppIds?: unknown; country?: unknown } | null;
-  const ids = Array.isArray(body?.steamAppIds)
+  const body = await req.json().catch(() => null) as { steamAppIds?: unknown; itadIds?: unknown; titles?: unknown; country?: unknown } | null;
+
+  if (Array.isArray(body?.titles)) {
+    const titles = [...new Set(body!.titles.map((t) => String(t ?? "").trim().slice(0, 200)).filter((t) => norm(t)))];
+    if (!titles.length || titles.length > 20) throw new Fail("BAD_REQUEST", "Send 1 to 20 titles", 400);
+    if (!ITAD_KEY) throw new Fail("SERVER", "Prices are not set up on the server yet", 500);
+    const { data: verdict, error: rateErr } = await supabase.rpc("price_rate_check", {
+      p_uid: uid, p_n: titles.length, p_hour_limit: HOUR_LIMIT, p_daily_cap: DAILY_CAP,
+    });
+    if (rateErr) throw new Fail("SERVER", `price_rate_check: ${rateErr.message}`, 500);
+    if (verdict !== "ok") throw new Fail("RATE_LIMIT", "Lookup limit reached; try again later", 429, 900);
+    return json({ ok: true, data: { matches: await matchTitles(titles) } });
+  }
+
+  const appIds = Array.isArray(body?.steamAppIds)
     ? [...new Set(body!.steamAppIds.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))]
     : [];
-  if (!ids.length || ids.length > 50) throw new Fail("BAD_REQUEST", "Send 1 to 50 steamAppIds", 400);
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const gidsAsked = Array.isArray(body?.itadIds)
+    ? [...new Set(body!.itadIds.map((x) => String(x ?? "").toLowerCase()).filter((x) => UUID.test(x)))]
+    : [];
+  // one list of wanted games: Steam AppIDs as numbers, ITAD ids as "itad:<id>"
+  const ids: (number | string)[] = [...appIds, ...gidsAsked.map((g) => `itad:${g}`)];
+  if (!ids.length || ids.length > 50) throw new Fail("BAD_REQUEST", "Send 1 to 50 steamAppIds or itadIds", 400);
   const country = typeof body?.country === "string" && /^[A-Za-z]{2}$/.test(body.country) ? body.country.toUpperCase() : "US";
-  const key = (id: number) => `${country}:${id}`;
+  const key = (id: number | string) => `${country}:${id}`;
 
   const prices: Record<string, unknown> = {};
   const { data: cached, error } = await supabase.from("price_cache").select("key, data, fetched_at")
@@ -178,7 +290,10 @@ async function handle(req: Request): Promise<Response> {
         }
       } else {
         try {
-          const map = await itadIds(misses);
+          const map = new Map<number | string, string | null>();
+          const missApps = misses.filter((id): id is number => typeof id === "number");
+          if (missApps.length) for (const [k, v] of await itadIds(missApps)) map.set(k, v);
+          for (const id of misses) if (typeof id === "string") map.set(id, id.slice(5));
           const gids = [...new Set([...map.values()].filter((v): v is string => !!v))];
           const byGid = new Map<string, GamePrices>();
           if (gids.length) {

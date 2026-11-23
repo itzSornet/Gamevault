@@ -949,8 +949,9 @@
   // ask SteamGridDB), and each game shows up as soon as its art is in.
   async function enrichArt({ force = false, only = null } = {}) {
     if (!api.sgdbAutofill) return;
+    // iconTried: libraries from before icons were filled get them once too
     const queue = (only || state.games).filter((g) => g.name
-      && (force || g.artVersion !== 3 || (!g.heroUrl && !g.heroTried)));
+      && (force || g.artVersion !== 3 || (!g.heroUrl && !g.heroTried) || (!g.iconUrl && !g.iconTried)));
     if (!queue.length) return;
     queue.sort((a, b) => (b.steamAppId ? 1 : 0) - (a.steamAppId ? 1 : 0));
 
@@ -976,6 +977,7 @@
           if (!g.coverUrl || Math.abs((await imageAspect(g.coverUrl)) - 2 / 3) > 0.02) slots.push('cover');
           if (!g.heroUrl) slots.push('hero');
           if (!g.logoUrl) slots.push('logo');
+          if (!g.iconUrl && !g.iconTried) slots.push('icon');
           if (!slots.length) { g.artVersion = 3; g.heroTried = true; continue; }
 
           const res = await api.sgdbAutofill({
@@ -983,7 +985,7 @@
           }).catch(() => null);
           if (!res || !res.ok) {
             const code = res && res.error && res.error.code;
-            if (code === 'NOT_FOUND') { g.artVersion = 3; g.heroTried = true; continue; }
+            if (code === 'NOT_FOUND') { g.artVersion = 3; g.heroTried = true; g.iconTried = true; saveGamesSoon(); continue; }
             // hourly limit: stop asking (Steam games still get Steam's own
             // art); the rest are left unmarked and filled on a later launch
             if (code === 'RATE_LIMIT') { limited = true; continue; }
@@ -999,6 +1001,8 @@
           if (slots.includes('cover') && a.cover && a.cover.url) { g.coverUrl = a.cover.url; delete g._cover; changed = true; }
           if (slots.includes('hero') && a.hero && a.hero.url) { g.heroUrl = a.hero.url; delete g._hero; g._noHero = false; changed = true; }
           if (slots.includes('logo') && a.logo && a.logo.url) { g.logoUrl = a.logo.url; delete g._logo; changed = true; }
+          if (slots.includes('icon') && a.icon && a.icon.url) { g.iconUrl = a.icon.url; delete g._icon; changed = true; }
+          if (slots.includes('icon')) g.iconTried = true;
           g.heroTried = true;
           g.artVersion = 3;
           saveGamesSoon();
@@ -1405,13 +1409,6 @@
   }
 
   // A run of several days gets a tiny bar per day (the last 14).
-  function actSparkHtml(run) {
-    if (run.days < 2) return '';
-    const days = run.perDay.slice(-14);
-    const max = days.reduce((m, h) => Math.max(m, h), 0) || 1;
-    return `<span class="act-spark" aria-hidden="true">${days.map((h) => `<i style="height:${Math.max(14, (h / max) * 100).toFixed(0)}%"></i>`).join('')}</span>`;
-  }
-
   function actThumb(g) {
     const src = g && (g._cover || g.coverUrl);
     return src
@@ -1460,23 +1457,56 @@
     const byId = new Map(games.map((g) => [String(g.id), g]));
     const sessions = Sessions.allSessions(games);
     const stats = Sessions.sessionStats(sessions, now);
-    const lastWeek = Sessions.weekBuckets(sessions, 2, now)[0].hours;
     const streak = Sessions.playStreak(sessions, now);
     const allHours = games.reduce((t, g) => t + (Number(g.hours) || 0), 0);
     const range = ACT_RANGES[state.actRange] ? state.actRange : '30d';
     const unit = ACT_RANGES[range].unit;
     const buckets = unit === 'day' ? Sessions.dayBuckets(sessions, 30, now) : Sessions.weekBuckets(sessions, 12, now);
     const rangeHours = buckets.reduce((t, b) => t + b.hours, 0);
+    // what each bar was made of (for its hover card)
+    const span = unit === 'day' ? 864e5 : 7 * 864e5;
+    for (const b of buckets) b.games = new Map();
+    for (const x of sessions) {
+      if (x.start < buckets[0].start) break;
+      const b = buckets.find((k) => x.start >= k.start && x.start < k.start + span);
+      if (b) b.games.set(String(x.gameId), (b.games.get(String(x.gameId)) || 0) + x.duration);
+    }
+    for (const b of buckets) {
+      b.games = [...b.games].sort((x, y) => y[1] - x[1]).map(([gid, h]) => [(byId.get(gid) || {}).name || 'A game', h]);
+    }
     let top = Sessions.topGames(games, buckets[0].start, 6);
     let topAllTime = false;
     if (!top.length) { top = Sessions.topGames(games, null, 6); topAllTime = true; }
     const topMax = top.length ? top[0].hours : 1;
-    const recent = Sessions.recentRuns(games, 8);
 
-    const diff = stats.weekHours - lastWeek;
-    const weekNote = !stats.weekHours && !lastWeek
-      ? 'Nothing yet this week'
-      : (Math.abs(diff) < 1 / 60 ? 'Same as last week' : `${diff > 0 ? '+' : '−'}${Sessions.formatDuration(Math.abs(diff))} vs last week`);
+    // the last 7 days against the 7 before them: on a Monday "this week" is
+    // always 0h, which says nothing
+    const fortnight = Sessions.dayBuckets(sessions, 14, now);
+    const week = fortnight.slice(7).reduce((t, b) => t + b.hours, 0);
+    const before = fortnight.slice(0, 7).reduce((t, b) => t + b.hours, 0);
+    const diff = week - before;
+    const weekNote = !week && !before
+      ? 'Nothing in the last two weeks'
+      : (Math.abs(diff) < 1 / 60 ? 'Same as the week before' : `${Sessions.formatDuration(Math.abs(diff))} ${diff > 0 ? 'more' : 'less'} than the week before`);
+    const weekStart = fortnight[7].start;
+    const weekGames = new Map();
+    for (const x of sessions) {
+      if (x.start < weekStart) break;
+      weekGames.set(String(x.gameId), (weekGames.get(String(x.gameId)) || 0) + x.duration);
+    }
+    const mostThisWeek = [...weekGames].sort((x, y) => y[1] - x[1])[0];
+    const mostName = mostThisWeek && byId.get(mostThisWeek[0]) ? byId.get(mostThisWeek[0]).name : '';
+
+    // days, newest first, each with the games played that day
+    const days = Sessions.daysByGame(sessions, 14);
+    if (!state._actDay || !days.some((d) => d.day === state._actDay.day)) state._actDay = { day: days.length ? days[0].day : null };
+
+    // games you started and left: not finished, a few hours in, untouched
+    // for three weeks or more; the most recently left first
+    const backlog = games
+      .filter((g) => g.status !== 'Finished' && (Number(g.hours) || 0) >= 2 && g.lastPlayed && now - g.lastPlayed > 21 * 864e5)
+      .sort((x, y) => y.lastPlayed - x.lastPlayed)
+      .slice(0, 5);
 
     const tile = (label, value, note) => `
       <div class="act-tile">
@@ -1493,23 +1523,41 @@
         <span class="act-game-right">${right}</span>
       </button>`;
 
+    const CHEV = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+    const times = (items) => (items.length > 2
+      ? `${items.length} sessions, from ${hhmm(items[0].start)}`
+      : items.map((i) => `${hhmm(i.start)} – ${hhmm(i.end)}`).join(', '));
+    const dayHtml = (d) => {
+      const open = state._actDay.day === d.day;
+      const n = d.games.length;
+      const head = `<button type="button" class="act-day-head" data-act-day="${d.day}" aria-expanded="${open}">
+          <span class="act-day-name">${CHEV}${esc(actRelDay(d.day, now))}</span>
+          <span class="act-day-sum">${n} game${n === 1 ? '' : 's'} · <b>${Sessions.formatDuration(d.hours)}</b></span>
+        </button>`;
+      const body = open ? `<div class="act-day-body">${d.games.map((x) => {
+        const g = byId.get(String(x.gameId));
+        return g ? gameRow(g, Sessions.formatDuration(x.hours), esc(times(x.items))) : '';
+      }).join('')}</div>` : '';
+      return `<div class="act-day${open ? ' is-open' : ''}">${head}${body}</div>`;
+    };
+
     view.innerHTML = `
       <div class="act">
         <header class="act-head">
           <div>
             <h1 class="act-title">Activity</h1>
-            <p class="act-sub">Your playtime across every game</p>
+            <p class="act-sub">What you've been playing, across every game</p>
           </div>
         </header>
         <div class="act-tiles">
-          ${tile('This week', actHours(stats.weekHours), esc(weekNote))}
-          ${tile('This month', actHours(stats.monthHours), `${MONTHS[new Date(now).getMonth()]}`)}
-          ${tile('Day streak', `${streak.current} day${streak.current === 1 ? '' : 's'}`, streak.best ? `Best: ${streak.best} day${streak.best === 1 ? '' : 's'}` : 'Play today to start one')}
-          ${tile('All time', actHours(allHours), `${stats.count.toLocaleString()} session${stats.count === 1 ? '' : 's'} tracked`)}
+          ${tile('Last 7 days', actHours(week), esc(weekNote))}
+          ${tile('Games played', `${weekGames.size}`, weekGames.size ? `in the last 7 days${mostName ? `, most of all ${esc(mostName)}` : ''}` : 'in the last 7 days')}
+          ${tile('Days in a row', `${streak.current}`, streak.current ? `Your best: ${streak.best}` : (streak.best ? `Play today to start again. Your best: ${streak.best}` : 'Play today to start'))}
+          ${tile('All time', actHours(allHours), `${stats.count.toLocaleString()} session${stats.count === 1 ? '' : 's'} saved`)}
         </div>
         <section class="act-card act-playtime">
           <div class="act-card-head">
-            <h2>Playtime <span>${actHours(rangeHours)} in the last ${ACT_RANGES[range].label}</span></h2>
+            <h2>Playtime <span>${actHours(rangeHours)} in the last ${ACT_RANGES[range].label}. Point at a bar to see what you played.</span></h2>
             <div class="act-seg" role="group" aria-label="Range">
               ${Object.entries(ACT_RANGES).map(([key, r]) => `<button type="button" class="act-seg-btn${key === range ? ' is-on' : ''}" data-act-range="${key}" aria-pressed="${key === range}">${r.label}</button>`).join('')}
             </div>
@@ -1518,29 +1566,38 @@
         </section>
         <div class="act-cols">
           <section class="act-card">
-            <div class="act-card-head"><h2>Most played <span>${topAllTime ? 'all time' : `last ${ACT_RANGES[range].label}`}</span></h2></div>
-            <div class="act-list">
-              ${top.length
-                ? top.map((row) => {
-                    const g = byId.get(String(row.id));
-                    if (!g) return '';
-                    const meter = `<span class="act-meter" aria-hidden="true"><i style="width:${Math.max(3, (row.hours / topMax) * 100).toFixed(1)}%"></i></span>`;
-                    return gameRow(g, actHours(row.hours), row.count ? `${row.count} session${row.count === 1 ? '' : 's'}` : 'Playtime imported', meter);
-                  }).join('')
-                : '<p class="act-empty">Play a game and it shows up here.</p>'}
+            <div class="act-card-head"><h2>Day by day <span>the last ${days.length || 14} days you played</span></h2></div>
+            <div class="act-days" data-act-days>
+              ${days.length ? days.map(dayHtml).join('') : '<p class="act-empty">No sessions yet. Press Play on any game and each session is saved here when you stop.</p>'}
             </div>
           </section>
-          <section class="act-card">
-            <div class="act-card-head"><h2>Recently played</h2></div>
-            <div class="act-list">
-              ${recent.length
-                ? recent.map((run) => {
-                    const g = byId.get(String(run.gameId));
-                    return g ? gameRow(g, Sessions.formatDuration(run.hours), actRunSub(run, now), actSparkHtml(run), run.brief ? ' is-brief' : '') : '';
-                  }).join('')
-                : '<p class="act-empty">No sessions yet. Press Play on any game and each session is saved here when you stop.</p>'}
-            </div>
-          </section>
+          <div class="act-side">
+            <section class="act-card">
+              <div class="act-card-head"><h2>Most played <span>${topAllTime ? 'all time' : `last ${ACT_RANGES[range].label}`}</span></h2></div>
+              <div class="act-list">
+                ${top.length
+                  ? top.map((row) => {
+                      const g = byId.get(String(row.id));
+                      if (!g) return '';
+                      const meter = `<span class="act-meter" aria-hidden="true"><i style="width:${Math.max(3, (row.hours / topMax) * 100).toFixed(1)}%"></i></span>`;
+                      return gameRow(g, actHours(row.hours), row.count ? `${row.count} session${row.count === 1 ? '' : 's'}` : 'Playtime imported', meter);
+                    }).join('')
+                  : '<p class="act-empty">Play a game and it shows up here.</p>'}
+              </div>
+            </section>
+            ${backlog.length ? `<section class="act-card">
+              <div class="act-card-head"><h2>Pick back up <span>started, not finished, not played lately</span></h2></div>
+              <div class="act-list">
+                ${backlog.map((g) => `<div class="act-back">
+                  <button type="button" class="act-game" data-act-game data-id="${esc(String(g.id))}">
+                    ${actThumb(g)}
+                    <span class="act-game-text"><span class="act-game-name">${esc(g.name || 'Untitled')}</span><span class="act-game-sub">${fmtHours(g.hours)} in · last played ${wishAgo(g.lastPlayed)}</span></span>
+                  </button>
+                  <button type="button" class="act-play" data-act-play data-id="${esc(String(g.id))}" aria-label="Play ${esc(g.name || 'this game')}"><svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Play</button>
+                </div>`).join('')}
+              </div>
+            </section>` : ''}
+          </div>
         </div>
       </div>`;
 
@@ -1559,6 +1616,39 @@
     for (const row of view.querySelectorAll('[data-act-game]')) {
       row.onclick = () => openDetail(row.dataset.id);
     }
+    for (const btn of view.querySelectorAll('[data-act-play]')) {
+      btn.onclick = () => togglePlay(btn.dataset.id);
+    }
+    // Day by day: one day open at a time; opening another folds the last
+    const daysEl = view.querySelector('[data-act-days]');
+    if (daysEl) daysEl.onclick = async (e) => {
+      const head = e.target.closest && e.target.closest('[data-act-day]');
+      if (!head || daysEl._folding) return;
+      const day = Number(head.dataset.actDay);
+      const calm = prefersReducedMotion();
+      const shut = daysEl.querySelector('.act-day.is-open .act-day-body');
+      state._actDay = { day: state._actDay && state._actDay.day === day ? null : day };
+      daysEl._folding = true;
+      try {
+        if (shut && !calm) {
+          const arrow = shut.parentElement.querySelector('.act-day-name svg');
+          if (arrow) arrow.style.transform = 'none';
+          await foldTo(shut, 0, 170);
+        }
+        renderActivity();
+        const fresh = $('#activity-view [data-act-days]');
+        const again = fresh && fresh.querySelector(`[data-act-day="${day}"]`);
+        if (again) { again.focus({ preventScroll: true }); again.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' }); }
+        const body = state._actDay.day === day && fresh && fresh.querySelector('.act-day.is-open .act-day-body');
+        if (body && !calm) {
+          const arrow = body.parentElement.querySelector('.act-day-name svg');
+          if (arrow) arrow.animate([{ transform: 'none' }, { transform: 'rotate(90deg)' }], { duration: 200, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' });
+          await foldTo(body, null, 240);
+        }
+      } finally {
+        daysEl._folding = false;
+      }
+    };
     // hover a bar: its day (or week), time and session count
     const chart = view.querySelector('.act-chart');
     const tip = chart && chart.querySelector('.act-tip');
@@ -1575,7 +1665,9 @@
       const b = buckets[Number(slot.dataset.i)];
       const d = new Date(b.start);
       const when = unit === 'day' ? `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(b.start)}` : `Week of ${actDay(b.start)}`;
-      tip.innerHTML = `<b>${esc(when)}</b><span>${b.hours > 0 ? `${esc(Sessions.formatDuration(b.hours))} · ${b.count} session${b.count === 1 ? '' : 's'}` : 'No play'}</span>`;
+      const list = (b.games || []).slice(0, 4).map(([name, h]) => `<span class="act-tip-game"><em>${esc(name)}</em>${esc(Sessions.formatDuration(h))}</span>`).join('');
+      const more = (b.games || []).length > 4 ? `<span>and ${b.games.length - 4} more</span>` : '';
+      tip.innerHTML = `<b>${esc(when)} · ${b.hours > 0 ? esc(Sessions.formatDuration(b.hours)) : 'no play'}</b>${list}${more}`;
       tip.hidden = false;
       const cr = chart.getBoundingClientRect();
       const sr = slot.getBoundingClientRect();
@@ -1629,9 +1721,49 @@
   // ---- wishlist prices: IsThereAnyDeal, through GameVault Cloud (no key in
   // the app). Kept in memory only (never synced); main caches them on disk.
   // Amounts, shops and links are shown exactly as IsThereAnyDeal sends them.
+  // A game's store AppID for prices and store facts: its own, else the one
+  // found by title (kept apart from steamAppId, which launches and tracks the
+  // game through Steam).
+  function storeAppId(g) {
+    const n = Number(g.steamAppId) || Number(g.steamMeta && g.steamMeta.lookupAppId);
+    return n > 0 ? n : 0;
+  }
+  // where a game's price is kept: its AppID, else "itad:<IsThereAnyDeal id>"
+  function priceKey(g) {
+    const n = storeAppId(g);
+    if (n) return n;
+    return g.itadId ? `itad:${g.itadId}` : null;
+  }
   function wishPrice(g) {
-    const p = g.steamAppId && state.prices ? state.prices[g.steamAppId] : null;
+    const k = priceKey(g);
+    const p = k && state.prices ? state.prices[k] : null;
     return p || null;
+  }
+
+  // Games with no AppID (added from SteamGridDB or by name): ask once which
+  // game each title is. Saves the IsThereAnyDeal id, and the Steam AppID when
+  // the game is on Steam; a miss is asked again after a day. Resolves to true
+  // when anything was found.
+  async function matchByTitle(list) {
+    if (!api.priceMatch) return false;
+    const DAY = 24 * 3600 * 1000;
+    const todo = list.filter((g) => g.name && !priceKey(g) && !(g.itadTried && Date.now() - g.itadTried < DAY));
+    if (!todo.length) return false;
+    const res = await api.priceMatch([...new Set(todo.map((g) => g.name))]).catch(() => null);
+    if (!res || !res.ok || !res.data) return false;
+    let found = false;
+    for (const g of todo) {
+      if (!(g.name in res.data)) continue;
+      const m = res.data[g.name];
+      if (m && m.itadId) {
+        g.itadId = m.itadId;
+        if (m.appid > 0) g.steamMeta = { ...(g.steamMeta || {}), lookupAppId: m.appid };
+        delete g.itadTried;
+        found = true;
+      } else g.itadTried = Date.now();
+    }
+    saveGamesSoon();
+    return found;
   }
   function wishMoney(d) {
     if (!d || typeof d.amount !== 'number') return '';
@@ -1641,18 +1773,25 @@
   function loadWishPrices(list) {
     if (!api.prices) return;
     const asked = state._priceAsked || (state._priceAsked = new Set());
-    const ids = list.map((g) => Number(g.steamAppId)).filter((id) => id > 0 && !asked.has(id));
-    if (!ids.length) return;
-    for (const id of ids) asked.add(id);
-    api.prices(ids).then((res) => {
+    if (list.some((g) => !priceKey(g)) && !state._matching) {
+      state._matching = true;
+      matchByTitle(list).then((found) => { state._matching = false; if (found) loadWishPrices(list); })
+        .catch(() => { state._matching = false; });
+    }
+    const keys = [...new Set(list.map(priceKey).filter((k) => k && !asked.has(k)))];
+    if (!keys.length) return;
+    for (const k of keys) asked.add(k);
+    const ids = keys.filter((k) => typeof k === 'number');
+    const gids = keys.filter((k) => typeof k === 'string').map((k) => k.slice(5));
+    api.prices(ids, false, gids).then((res) => {
       if (!res || !res.ok || !res.data) {
         // let a later visit try again
-        setTimeout(() => { for (const id of ids) asked.delete(id); }, 5 * 60000);
+        setTimeout(() => { for (const k of keys) asked.delete(k); }, 5 * 60000);
         return;
       }
       state.prices = { ...(state.prices || {}), ...res.data };
       if (state.filter === 'Want' && !state.selectedId && !state.settingsOpen) renderWishlist();
-    }).catch(() => { for (const id of ids) asked.delete(id); });
+    }).catch(() => { for (const k of keys) asked.delete(k); });
   }
 
   // "Buy": every shop selling the game, cheapest first, each opening its deal
@@ -1675,13 +1814,13 @@
     const body = () => {
       const p = wishPrice(g);
       if (dealsOf(p).length) return `<div class="wb-list">${rows(p)}</div>`;
-      if (!g.steamAppId) return '<p class="wb-empty">No prices: this game isn’t linked to a Steam store page, so stores can’t be matched to it.</p>';
+      if (!priceKey(g) && status !== 'loading') return '<p class="wb-empty">No prices: no store lists a game by this name.</p>';
       if (status === 'done') return '<p class="wb-empty">No store is selling this game right now.</p>';
       if (status === 'failed') return '<p class="wb-empty">Couldn’t load prices right now. Try again in a bit.</p>';
       return '<p class="wb-empty">Loading prices…</p>';
     };
     const foot = () => {
-      return `<span class="wb-links">${g.steamAppId ? '<button type="button" data-wb-steam>Steam store page</button> · ' : ''}Prices from <button type="button" data-wb-itad>IsThereAnyDeal</button></span>`;
+      return `<span class="wb-links">${storeAppId(g) ? '<button type="button" data-wb-steam>Steam store page</button> · ' : ''}Prices from <button type="button" data-wb-itad>IsThereAnyDeal</button></span>`;
     };
     const card = openModal(`
       <div class="wb">
@@ -1699,7 +1838,7 @@
       const t = e.target.closest('button');
       if (!t || !api.openExternal) return;
       if (t.dataset.wbUrl && /^https:\/\//.test(t.dataset.wbUrl)) api.openExternal(t.dataset.wbUrl);
-      else if (t.hasAttribute('data-wb-steam')) api.openExternal(`https://store.steampowered.com/app/${encodeURIComponent(g.steamAppId)}/`);
+      else if (t.hasAttribute('data-wb-steam')) api.openExternal(`https://store.steampowered.com/app/${encodeURIComponent(storeAppId(g))}/`);
       else if (t.hasAttribute('data-wb-itad')) {
         const p = wishPrice(g);
         api.openExternal(p && /^https:\/\//.test(p.page || '') ? p.page : 'https://isthereanydeal.com/');
@@ -1707,11 +1846,16 @@
     });
     const p = wishPrice(g);
     if (p && Array.isArray(p.deals)) status = 'done';
-    else if (!g.steamAppId) status = 'done';
     else if (!api.prices) { status = 'failed'; paint(); }
     else {
       const timer = setTimeout(() => { if (status === 'loading') { status = 'failed'; paint(); } }, 20000);
-      api.prices([Number(g.steamAppId)]).then((res) => {
+      // no AppID or store id yet: find the game by its title first
+      const ready = priceKey(g) ? Promise.resolve() : matchByTitle([g]);
+      ready.then(() => {
+        const k = priceKey(g);
+        if (!k) return { ok: true, data: {} };
+        return typeof k === 'number' ? api.prices([k]) : api.prices([], false, [k.slice(5)]);
+      }).then((res) => {
         clearTimeout(timer);
         if (res && res.ok && res.data) {
           state.prices = { ...(state.prices || {}), ...res.data };
@@ -2079,7 +2223,7 @@
   // Steam store data (release date, free to play) for wishlisted Steam games, one
   // request at a time and at most every 12 h per game.
   function queueWishMeta(g) {
-    if (!g.steamAppId || !api.steamDetails) return;
+    if (!storeAppId(g) || !api.steamDetails) return;
     const m = g.steamMeta;
     if (m && m.version === 3 && m.at && Date.now() - m.at < 12 * 3600000) return;
     if (g._metaTried && Date.now() - g._metaTried < 10 * 60000) return;
@@ -3048,20 +3192,22 @@
       if (g.added) parts.push(`since ${fmtDate(g.added)}`);
       return parts.join('<span class="gvx-dot">·</span>');
     }
-    if (g.source) parts.push(esc(g.source));
-    if (g.added) parts.push(`added ${fmtDate(g.added)}`);
+    if (running) parts.push('Playing now');
     if (total > 0) parts.push(`${fmtHours(total)} played`);
-    if (g.lastPlayed) parts.push(`last played ${fmtDate(g.lastPlayed)}`);
+    else parts.push('Not played yet');
+    if (g.lastPlayed && !running) parts.push(`<span title="${esc(fmtDate(g.lastPlayed))}">last played ${wishAgo(g.lastPlayed)}</span>`);
+    const critic = g.steamMeta && g.steamMeta.metacritic && g.steamMeta.metacritic.score;
+    if (critic) parts.push(`<span class="gvx-mc${critic >= 75 ? '' : critic >= 50 ? ' is-mid' : ' is-low'}" title="Critics' score on Metacritic"><b>${esc(String(critic))}</b> Metacritic</span>`);
     return parts.join('<span class="gvx-dot">·</span>');
   }
 
   function detailTimerHtml(g) {
     const live = state.live[String(g.id)];
     if (typeof live === 'number') {
-      return `<span class="gvx-timer-label">SESSION</span><span class="gvx-timer-value is-live" data-timer-value>00:00</span>`;
+      return `<span class="gvx-timer-label">This session</span><span class="gvx-timer-value is-live" data-timer-value>00:00</span>`;
     }
     const last = gvSessions(g).slice().sort((a, b) => b.start - a.start)[0];
-    const label = last ? 'LAST SESSION' : 'PLAYTIME';
+    const label = last ? 'Last session' : 'Playtime';
     const value = last ? Sessions.formatDuration(last.duration) : fmtHours(g.hours);
     return `<span class="gvx-timer-label">${label}</span><span class="gvx-timer-value" data-timer-value>${value}</span>`;
   }
@@ -3075,44 +3221,53 @@
   // card (pulse or specs). The rail itself is always rendered for owned games.
   function railHasData(g) {
     const meta = g.steamMeta || {};
-    return !!((meta.metacritic && meta.metacritic.score) || Number(g.timeToBeat) > 0 || Number(g.rating) > 0
+    return !!((meta.metacritic && meta.metacritic.score) || Number(g.timeToBeat) > 0 || meta.about || meta.developer
+      || (meta.genres && meta.genres.length)
       || (meta.recommended && meta.recommended.length) || (meta.minimum && meta.minimum.length));
   }
 
+  // Store text that shouts a whole sentence in capitals, in sentence case
+  // ("THE CRITICALLY ACCLAIMED FANTASY ACTION RPG." -> "The critically
+  // acclaimed fantasy action RPG."); short all-caps words like RPG stay.
+  function unshout(text) {
+    return String(text || '').replace(/[^.!?]+[.!?]*/g, (part) => {
+      const letters = part.replace(/[^A-Za-z]/g, '');
+      if (letters.length < 12 || letters !== letters.toUpperCase()) return part;
+      const lead = part.match(/^\s*/)[0];
+      return lead + part.slice(lead.length).toLowerCase()
+        .replace(/\b(rpg|fps|mmo|pvp|pve|ai|vr|ui|dlc|3d|2d)\b/gi, (w) => w.toUpperCase())
+        .replace(/^./, (c) => c.toUpperCase());
+    });
+  }
+
+  // The side column: what the game is (About), then what it needs to run.
+  // Your own numbers (playtime, last played) live in the hero and Sessions,
+  // so nothing here repeats them.
   function railHtml(g) {
     const meta = g.steamMeta || {};
-    const pulse = [];
-    if (meta.metacritic && meta.metacritic.score) pulse.push([String(meta.metacritic.score), 'Metacritic']);
-    if (Number(g.timeToBeat) > 0) pulse.push([`~${Math.round(Number(g.timeToBeat))}h`, 'To beat']);
-    if (Rating.value(g) > 0) pulse.push([Rating.label(Rating.value(g)), 'Your rating']);
-
-    const KEEP = ['OS', 'Processor', 'Memory', 'Graphics', 'Storage'];
-    const specs = ((meta.recommended && meta.recommended.length)
-      ? meta.recommended
-      : (meta.minimum && meta.minimum.length ? meta.minimum : []))
-      .filter(([key]) => KEEP.includes(key));
-
     const facts = [];
-    const liveMins = state.live[String(g.id)];
-    const liveHours = typeof liveMins === 'number' ? liveMins / 60 : 0;
-    const totalHours = (Number(g.hours) || 0) + liveHours;
-    facts.push(['Playtime', totalHours > 0 ? fmtHours(totalHours) : '—']);
-    facts.push(['Last played', g.lastPlayed ? fmtDate(g.lastPlayed) : 'Never']);
+    if (meta.developer) facts.push(['Made by', meta.developer]);
+    if (meta.genres && meta.genres.length) facts.push(['Genre', meta.genres.join(', ')]);
+    if (Number(g.timeToBeat) > 0) facts.push(['To finish', `about ${Math.round(Number(g.timeToBeat))} hours`]);
+    if (g.source) facts.push(['From', g.source]);
     if (g.added) facts.push(['Added', fmtDate(g.added)]);
-    if (g.source) facts.push(['Source', g.source]);
+
+    const NAMES = { OS: 'System', Processor: 'Processor', Memory: 'Memory', Graphics: 'Graphics', Storage: 'Storage' };
+    // what it needs at least (Steam's recommended when it lists no minimum)
+    const min = !!(meta.minimum && meta.minimum.length);
+    const specs = (min ? meta.minimum : (meta.recommended && meta.recommended.length ? meta.recommended : []))
+      .filter(([key]) => NAMES[key]);
+
 
     return `
       <div class="gvx-card">
-        <div class="gvx-card-head">AT A GLANCE</div>
-        <dl class="gvx-specs">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
+        <h3 class="gvx-card-head">About this game</h3>
+        ${meta.about ? `<p class="gvx-about">${esc(unshout(meta.about))}</p>` : ''}
+        ${facts.length ? `<dl class="gvx-specs">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : ''}
       </div>
-      ${pulse.length ? `<div class="gvx-card">
-        <div class="gvx-card-head">GAME PULSE</div>
-        <div class="gvx-pulse">${pulse.map(([value, label]) => `<div class="gvx-pulse-item"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join('')}</div>
-      </div>` : ''}
       ${specs.length ? `<div class="gvx-card">
-        <div class="gvx-card-head">SPECS <span>${meta.recommended && meta.recommended.length ? 'recommended' : 'minimum'}</span></div>
-        <dl class="gvx-specs">${specs.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd title="${esc(value)}">${esc(value)}</dd></div>`).join('')}</dl>
+        <h3 class="gvx-card-head">What your PC needs <span>${min ? 'at least' : 'recommended'}</span></h3>
+        <dl class="gvx-specs is-specs">${specs.map(([key, value]) => `<div><dt>${NAMES[key]}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>
       </div>` : ''}
     `;
   }
@@ -3123,14 +3278,16 @@
   }
 
   async function loadSteamMeta(g) {
-    if (!g.steamAppId || !api.steamDetails) return;
+    const appId = storeAppId(g);
+    if (!appId || !api.steamDetails) return;
     const ttl = gvIsWishlisted(g) ? 12 * 3600000 : 14 * 86400000;
     const fresh = g.steamMeta && g.steamMeta.version === 3 && g.steamMeta.at && (Date.now() - g.steamMeta.at < ttl);
     if (fresh) return;
-    const res = await api.steamDetails(g.steamAppId).catch(() => null);
+    const res = await api.steamDetails(appId).catch(() => null);
     if (!res || !res.ok || !res.data) return;
     const hadData = railHasData(g);
-    g.steamMeta = { ...res.data, version: 3, at: Date.now() };
+    const lookupAppId = g.steamMeta && g.steamMeta.lookupAppId;
+    g.steamMeta = { ...res.data, ...(lookupAppId ? { lookupAppId } : {}), version: 3, at: Date.now() };
     saveGamesSoon();
     if (gvIsWishlisted(g) && state.filter === 'Want' && !state.selectedId && !state.settingsOpen) renderWishlist();
     if (state.selectedId !== String(g.id) || gvIsWishlisted(g)) return;
@@ -3139,6 +3296,8 @@
     const rail = document.querySelector('#game-view [data-rail]');
     if (!rail) renderDetail();
     else if (hadData || railHasData(g)) paintRail(g);
+    const metaEl = document.querySelector('#game-view .gvx-meta');
+    if (metaEl) metaEl.innerHTML = detailMeta(g);
   }
 
   const heroDecodes = new Map();
@@ -3195,14 +3354,8 @@
             ${state.filter === 'Want' ? 'Wishlist' : state.filter === 'Activity' ? 'Activity' : 'Library'}
           </button>
           <div class="gvx-top-right">
-            ${wish ? '' : `${rateButtonHtml(g)}
-            <button class="gvx-chip gvx-fin${status === 'Finished' ? ' is-done' : ''}" data-finish aria-pressed="${status === 'Finished'}" title="${status === 'Finished' ? 'Finished — click to unmark' : 'Mark this game as finished'}">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>
-              <span>${status === 'Finished' ? 'Finished' : 'Mark as finished'}</span>
-            </button>`}
-            <button class="gvx-chip gvx-icon${wish ? ' is-on' : ''}" data-wish aria-pressed="${wish}" title="Wishlist">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="${wish ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3.8 2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z"/></svg>
-            </button>
+            ${wish ? '' : `${Rating.value(g) > 0 ? '<span class="gvx-top-label" aria-hidden="true">Your rating</span>' : ''}${rateButtonHtml(g)}
+            ${finishButtonHtml(status === 'Finished')}`}
             <div class="gvx-more-wrap">
               <button class="gvx-chip gvx-icon" data-more aria-haspopup="menu" aria-expanded="false" title="More">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
@@ -3212,6 +3365,7 @@
                 <button role="menuitem" data-copy ${g.exePath ? '' : 'disabled'}>Copy path</button>
                 <button role="menuitem" data-edit>Edit…</button>
                 <button role="menuitem" data-refresh>Refresh artwork</button>
+                ${wish ? '' : '<button role="menuitem" data-to-wish>Move to wishlist</button>'}
                 <button role="menuitem" class="is-danger" data-remove-game>${wish ? 'Remove from wishlist' : 'Remove from library…'}</button>
               </div>
             </div>
@@ -3283,29 +3437,30 @@
 
   const SES_WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  // Three plain numbers and one sentence. No charts.
+  // Three plain numbers, each with a line saying what it means, and one
+  // sentence about when you play. No charts.
   function sessionsTopHtml(g, sessions) {
-    const stats = Sessions.sessionStats(sessions);
-    const live = state.live[String(g.id)];
-    const total = (Number(g.hours) || 0) + (typeof live === 'number' ? live / 60 : 0);
-    const stat = (label, value) => `<div class="gvx-ses-stat"><span>${label}</span><b>${value}</b></div>`;
-    // a typical day of real play: quick launches would drag an average to "1m"
-    const realDays = Sessions.dayGroups(sessions).filter((d) => !d.brief);
+    const days = Sessions.dayGroups(sessions);
+    const stat = (label, value, note) => `<div class="gvx-ses-stat"><span>${label}</span><b>${value}</b>${note ? `<small>${note}</small>` : ''}</div>`;
+    // a usual day of real play: quick launches would drag an average to "1m"
+    const realDays = days.filter((d) => !d.brief);
     const typical = realDays.length ? realDays.reduce((t, d) => t + d.hours, 0) / realDays.length : 0;
+    const best = days.reduce((a, d) => (!a || d.hours > a.hours ? d : a), null);
+    const first = days.length ? days[days.length - 1].day : 0;
+    const since = first ? new Date(first).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : '';
     const habit = sessionHabitText(Sessions.habits(sessions));
     return `
       <div class="gvx-ses-stats">
-        ${stat('Total', total > 0 ? fmtHours(total) : '0h')}
-        ${stat('This week', stats.weekHours > 0 ? Sessions.formatDuration(stats.weekHours) : '0h')}
-        ${stat('Typical day', typical > 0 ? Sessions.formatDuration(typical) : '—')}
+        ${stat('Days you played', String(days.length), since ? `since ${esc(since)}` : '')}
+        ${stat('A usual day', typical > 0 ? Sessions.formatDuration(typical) : '—', typical > 0 ? 'of play, when you play' : 'only quick launches so far')}
+        ${stat('Your longest day', best ? Sessions.formatDuration(best.hours) : '—', best ? esc(fmtDate(best.day)) : '')}
       </div>
       ${habit ? `<p class="gvx-ses-habit">${esc(habit)}</p>` : ''}`;
   }
 
   function ledgerCountText(sessions) {
     const n = Sessions.sessionStats(sessions).count;
-    const days = Sessions.dayGroups(sessions).length;
-    return days > 1 ? `Played on ${days} days` : `${n} session${n === 1 ? '' : 's'}`;
+    return n ? `${n} session${n === 1 ? '' : 's'}, newest first` : '';
   }
 
   const SES_DAY_NAMES = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
@@ -3317,17 +3472,10 @@
     return part ? `${part}.` : (day ? `${day}.` : '');
   }
 
-  // A closed month: one small bar per day of the month.
-  function monthSparkHtml(month) {
-    const [y, m] = month.key.split('-').map(Number);
-    const n = new Date(y, m, 0).getDate();
-    const hours = new Array(n).fill(0);
-    for (const row of month.rows) {
-      if (row.kind === 'day') hours[new Date(row.day).getDate() - 1] = row.hours;
-      else for (let d = new Date(row.from).getDate(); d <= new Date(row.to).getDate(); d++) hours[d - 1] = Math.max(hours[d - 1], 0.01);
-    }
-    const max = hours.reduce((a, b) => Math.max(a, b), 0) || 1;
-    return `<span class="gvx-month-spark" aria-hidden="true">${hours.map((h) => (h > 0 ? `<i style="height:${Math.max(16, (h / max) * 100).toFixed(0)}%"></i>` : '<i class="is-off"></i>')).join('')}</span>`;
+  // "June 2026", in the user's own language
+  function monthTitle(key) {
+    const [y, m] = String(key).split('-').map(Number);
+    return esc(new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }));
   }
 
   function paintLedger(g) {
@@ -3338,12 +3486,13 @@
     const running = typeof live === 'number';
     const book = Sessions.ledger(sessions);
     const MAX_ROWS = 120;
-    // The two newest months are open; older ones are a one-line summary you
-    // can open. Which ones are open is remembered while you stay on the game.
+    // One month open at a time (the newest, to begin with), and inside it one
+    // day's sessions at a time: opening another closes the last, so the list
+    // never piles up. Remembered while you stay on the game.
     if (!state._ledgerOpen || state._ledgerOpen.id !== String(g.id)) {
-      state._ledgerOpen = { id: String(g.id), keys: new Set(book.months.slice(0, 2).map((m) => m.key)) };
+      state._ledgerOpen = { id: String(g.id), month: book.months.length ? book.months[0].key : null, day: null };
     }
-    const openKeys = state._ledgerOpen.keys;
+    const openState = state._ledgerOpen;
 
     const topEl = document.querySelector('[data-ses-top]');
     if (topEl) {
@@ -3354,6 +3503,8 @@
 
     // (the running session is the timer beside Play/Stop; no extra row here)
     const rows = [];
+    const CHEV = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+    const bar = (h, max) => `<span class="gvx-row-bar" aria-hidden="true"><i style="width:${Math.max(1.5, (h / (max || 1)) * 100).toFixed(1)}%"></i></span>`;
 
     // One row per day played: when in the day it happened, and for how long.
     let rendered = 0;
@@ -3361,43 +3512,95 @@
     for (const m of book.months) for (const r of m.rows) if (r.kind === 'day' && r.hours > longestDay) longestDay = r.hours;
     for (const month of book.months) {
       if (rendered >= MAX_ROWS) break;
-      const open = openKeys.has(month.key);
-      rows.push(`<button type="button" class="gvx-month${open ? ' is-open' : ''}" data-month="${month.key}" aria-expanded="${open}">
-        <span class="gvx-month-name"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>${month.label}</span>
-        ${open ? '<span></span>' : monthSparkHtml(month)}
-        <span class="gvx-month-sum">${Sessions.formatDuration(month.hours)} · ${month.days} day${month.days === 1 ? '' : 's'}</span>
-      </button>`);
-      if (!open) continue;
+      const open = openState.month === month.key;
+      const head = `<button type="button" class="gvx-month${open ? ' is-open' : ''}" data-month="${month.key}" aria-expanded="${open}">
+        <span class="gvx-month-name">${CHEV}${monthTitle(month.key)}</span>
+        <span class="gvx-month-sum">${Sessions.formatDuration(month.hours)} over ${month.days} day${month.days === 1 ? '' : 's'}</span>
+      </button>`;
+      if (!open) { rows.push(`<div class="gvx-mgroup">${head}</div>`); continue; }
+      const inner = [];
       for (const row of month.rows) {
         if (rendered >= MAX_ROWS) break;
         if (row.kind === 'brief') {
           const range = row.days > 1 ? `${actDay(row.from)} – ${new Date(row.to).getDate()}` : actDay(row.to);
-          rows.push(`<div class="gvx-row is-brief" role="listitem">
+          inner.push(`<div class="gvx-row is-brief" role="listitem">
             <span class="gvx-row-date"><b>·</b></span>
             <span class="gvx-row-note">${row.count} quick launch${row.count === 1 ? '' : 'es'} · ${range}</span>
             <span class="gvx-row-dur">${Sessions.formatDuration(row.hours)}</span>
           </div>`);
         } else {
           const d = new Date(row.day);
-          const tip = row.count > 1 ? `${row.count} sessions, from ${hhmm(row.first)}` : `${hhmm(row.first)} – ${hhmm(row.last)}`;
-          rows.push(`<div class="gvx-row" role="listitem" title="${esc(tip)}">
-            <span class="gvx-row-date"><b>${d.getDate()}</b><i>${SES_WD[d.getDay()]}</i></span>
-            <span class="gvx-row-bar" aria-hidden="true"><i style="width:${Math.max(1.5, (row.hours / (longestDay || 1)) * 100).toFixed(1)}%"></i></span>
-            <span class="gvx-row-dur">${Sessions.formatDuration(row.hours)}</span>
-          </div>`);
+          const many = row.count > 1 && Array.isArray(row.items) && row.items.length > 1;
+          const date = `<span class="gvx-row-date"><i>${SES_WD[d.getDay()]}</i><b>${d.getDate()}</b></span>`;
+          const dur = `<span class="gvx-row-dur">${Sessions.formatDuration(row.hours)}</span>`;
+          if (!many) {
+            const when = `${hhmm(row.first)} – ${hhmm(row.last)}`;
+            inner.push(`<div class="gvx-row" role="listitem" aria-label="${esc(`${fmtDate(row.day)}: ${Sessions.formatDuration(row.hours)}, ${when}`)}">
+              ${date}${bar(row.hours, longestDay)}<span class="gvx-row-when" aria-hidden="true">${when}</span>${dur}
+            </div>`);
+          } else {
+            // more than one session that day: a button that opens them
+            const dayOpen = openState.day === row.day;
+            const subs = dayOpen ? row.items.map((it) => `<div class="gvx-row is-sub" role="listitem" aria-label="${esc(`${hhmm(it.start)} to ${hhmm(it.end)}: ${Sessions.formatDuration(it.duration)}`)}">
+                <span class="gvx-row-date" aria-hidden="true"></span>${bar(it.duration, longestDay)}
+                <span class="gvx-row-when" aria-hidden="true">${hhmm(it.start)} – ${hhmm(it.end)}</span>
+                <span class="gvx-row-dur" aria-hidden="true">${Sessions.formatDuration(it.duration)}</span>
+              </div>`).join('') : '';
+            inner.push(`<div class="gvx-dgroup${dayOpen ? ' is-open' : ''}">
+              <button type="button" class="gvx-row is-many" data-day="${row.day}" aria-expanded="${dayOpen}" aria-label="${esc(`${fmtDate(row.day)}: ${Sessions.formatDuration(row.hours)} in ${row.count} sessions. ${dayOpen ? 'Hide' : 'Show'} them`)}">
+                ${date}${bar(row.hours, longestDay)}<span class="gvx-row-when" aria-hidden="true">${row.count} sessions ${CHEV}</span>${dur}
+              </button>${subs ? `<div class="gvx-dsubs">${subs}</div>` : ''}
+            </div>`);
+          }
         }
         rendered += 1;
       }
+      rows.push(`<div class="gvx-mgroup is-open">${head}<div class="gvx-mdays">${inner.join('')}</div></div>`);
     }
-    const totalRows = book.months.reduce((n, m) => n + (openKeys.has(m.key) ? m.rows.length : 0), 0);
-    listEl.onclick = (e) => {
-      const btn = e.target.closest && e.target.closest('[data-month]');
-      if (!btn) return;
-      const key = btn.dataset.month;
-      if (openKeys.has(key)) openKeys.delete(key); else openKeys.add(key);
-      paintLedger(g);
-      const again = listEl.querySelector(`[data-month="${key}"]`);
-      if (again) again.focus({ preventScroll: true });
+    const totalRows = book.months.reduce((n, m) => n + (openState.month === m.key ? m.rows.length : 0), 0);
+    listEl.onclick = async (e) => {
+      const btn = e.target.closest && e.target.closest('[data-month], [data-day]');
+      if (!btn || listEl._folding) return;
+      const isMonth = !!btn.dataset.month;
+      const shut = listEl.querySelector(isMonth ? '.gvx-mgroup.is-open .gvx-mdays' : '.gvx-dgroup.is-open .gvx-dsubs');
+      let sel;
+      if (isMonth) {
+        const key = btn.dataset.month;
+        openState.month = openState.month === key ? null : key;
+        openState.day = null;
+        sel = `[data-month="${key}"]`;
+      } else {
+        const day = Number(btn.dataset.day);
+        openState.day = openState.day === day ? null : day;
+        sel = `[data-day="${day}"]`;
+      }
+      const opening = isMonth ? !!openState.month : openState.day != null;
+      const calm = prefersReducedMotion();
+      listEl._folding = true;
+      try {
+        // the open one folds shut first (its arrow turning back with it)
+        if (shut && !calm) {
+          const arrow = shut.parentElement.querySelector(isMonth ? '.gvx-month svg' : '.gvx-row.is-many svg');
+          if (arrow) arrow.style.transform = 'none';
+          await foldTo(shut, 0, 170);
+        }
+        paintLedger(g);
+        const again = listEl.querySelector(sel);
+        if (again) {
+          again.focus({ preventScroll: true });
+          // a month that opened above the fold stays where the click was
+          again.scrollIntoView({ block: 'nearest', behavior: calm ? 'auto' : 'smooth' });
+        }
+        // then the new one unfolds
+        const body = opening && listEl.querySelector(isMonth ? '.gvx-mgroup.is-open .gvx-mdays' : '.gvx-dgroup.is-open .gvx-dsubs');
+        if (body && !calm) {
+          const arrow = body.parentElement.querySelector(isMonth ? '.gvx-month svg' : '.gvx-row.is-many svg');
+          if (arrow) arrow.animate([{ transform: 'none' }, { transform: 'rotate(90deg)' }], { duration: 200, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)' });
+          await foldTo(body, null, 240);
+        }
+      } finally {
+        listEl._folding = false;
+      }
     };
 
     if (rows.length) {
@@ -3417,6 +3620,19 @@
       </div>`;
     }
     listEl.classList.toggle('is-empty', !rows.length);
+  }
+
+  // Fold a box open (to its own height, `to` null) or shut (0), smoothly.
+  function foldTo(el, to, ms) {
+    const full = el.scrollHeight;
+    const from = to === 0 ? full : 0;
+    const end = to === 0 ? 0 : full;
+    el.style.overflow = 'hidden';
+    const anim = el.animate([
+      { height: `${from}px`, opacity: from ? 1 : 0 },
+      { height: `${end}px`, opacity: end ? 1 : 0 },
+    ], { duration: ms, easing: 'cubic-bezier(0.22, 0.8, 0.3, 1)', fill: to === 0 ? 'forwards' : 'none' });
+    return anim.finished.catch(() => {}).then(() => { if (to !== 0) el.style.overflow = ''; });
   }
 
   function startDetailTick(g) {
@@ -3489,6 +3705,15 @@
     }
   }
 
+  // A switch, not a label: it says what it is now, and on hover what a click
+  // does.
+  function finishButtonHtml(done) {
+    return `<button class="gvx-chip gvx-fin${done ? ' is-done' : ''}" data-finish aria-pressed="${done}" title="${done ? 'You finished this game. Click if you haven\'t' : 'Mark this game as finished'}">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>
+              <span class="gvx-fin-now">${done ? 'Finished' : 'Mark as finished'}</span>${done ? '<span class="gvx-fin-undo">Mark not finished</span>' : ''}
+            </button>`;
+  }
+
   function setFinished(g, value) {
     const wasWish = gvIsWishlisted(g);
     g.status = value ? 'Finished' : 'Playing';
@@ -3505,11 +3730,10 @@
     const view = $('#game-view');
     const btn = view.querySelector('[data-finish]');
     if (btn) {
-      btn.classList.toggle('is-done', !!value);
-      btn.setAttribute('aria-pressed', String(!!value));
-      btn.title = value ? 'Finished — click to unmark' : 'Mark this game as finished';
-      const label = btn.querySelector('span');
-      if (label) label.textContent = value ? 'Finished' : 'Mark as finished';
+      btn.outerHTML = finishButtonHtml(!!value);
+      const fresh = view.querySelector('[data-finish]');
+      fresh.onclick = () => setFinished(g, !(g.status === 'Finished'));
+      fresh.focus({ preventScroll: true });
     }
     renderLibrary();
   }
@@ -3644,6 +3868,7 @@
         else if (item.hasAttribute('data-copy')) navigator.clipboard.writeText(g.exePath || '').then(() => toast('Path copied', 'ok')).catch(() => {});
         else if (item.hasAttribute('data-edit')) openGameModal(g);
         else if (item.hasAttribute('data-refresh')) refetchArtwork(g);
+        else if (item.hasAttribute('data-to-wish')) toggleDetailWish(g);
         else if (item.hasAttribute('data-remove-game')) askRemoveGame(g);
       });
       view.onpointerdown = (e) => { if (!e.target.closest('.gvx-more-wrap')) closeMenu(); };
@@ -3880,7 +4105,15 @@
     const year = Number(g.firstYear) > 1970 ? String(g.firstYear) : steamYear;
     const line = [m.developer || g.developer || '', year || '', Array.isArray(m.genres) && m.genres[0] ? m.genres[0] : '']
       .filter(Boolean).join(' · ');
-    return { line, about: String(m.about || '').trim() };
+    // one line for someone who already loves the game (peak-line, in the
+    // cloud), never the store's pitch
+    const about = (state._peakLines || {})[peakLineKey(g)] || '';
+    return { line, about };
+  }
+  function peakLineKey(g) {
+    const n = storeAppId(g);
+    if (n) return `steam:${n}`;
+    return g.itadId ? `itad:${String(g.itadId).toLowerCase()}` : '';
   }
   function peakStanding(g) {
     const owned = state.games.filter((x) => !gvIsWishlisted(x));
@@ -3995,7 +4228,8 @@
   async function peakAppId(g) {
     if (g.steamAppId) return g.steamAppId;
     if (g.steamMeta && g.steamMeta.lookupAppId) return g.steamMeta.lookupAppId;
-    if (!api.steamSearch || !g.name) return null;
+    if (!g.name) return null;
+    if (!api.steamSearch) { await matchByTitle([g]).catch(() => false); return storeAppId(g) || null; }
     const key = (x) => String(x || '').toLowerCase().replace(/[\u2122\u00ae\u00a9]/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
     const want = key(g.name);
     const extra = /^(goty|gameoftheyear|definitive|complete|deluxe|ultimate|remastered|enhanced|directorscut|edition)+$/;
@@ -4005,7 +4239,12 @@
       const k = key(h.name);
       return k === want || (k.startsWith(want) && extra.test(k.slice(want.length)));
     });
-    if (!hit) return null;
+    if (!hit) {
+      // a different name on Steam ("— Remastered", an old SteamGridDB title):
+      // IsThereAnyDeal's title match knows the game's AppID
+      await matchByTitle([g]).catch(() => false);
+      return storeAppId(g) || null;
+    }
     g.steamMeta = { ...(g.steamMeta || {}), lookupAppId: hit.appId };
     return hit.appId;
   }
@@ -4062,14 +4301,42 @@
       </div>`, { className: 'peak-modal' });
     if (!card) return;
     const root = card.querySelector('.pkl');
+    // the line gets whatever room the title leaves on the paper: a little
+    // smaller when a long title leaves less
+    const fitAbout = () => {
+      const els = [...root.querySelectorAll('.pkl-about')];
+      for (const size of ['', '11.5px']) {
+        for (const el of els) el.style.fontSize = size;
+        if (!els.length || els[0].scrollHeight <= els[0].clientHeight + 1) return;
+      }
+    };
+    const repaint = () => {
+      if (!root.isConnected) return;
+      label = peakLabel(g);
+      for (const w of root.querySelectorAll('.pkl-window')) w.innerHTML = writing();
+      fitAbout();
+    };
+    fitAbout();
+    // the line: from disk when seen before, else written once in the cloud.
+    // A game with no store id yet is found by its title first.
+    if (api.peakLine && !((state._peakLines || {})[peakLineKey(g)])) {
+      (peakLineKey(g) ? Promise.resolve() : peakAppId(g).catch(() => null)).then(() => {
+        const key = peakLineKey(g);
+        if (!key) return null;
+        return api.peakLine([{ steamAppId: storeAppId(g) || undefined, itadId: g.itadId || undefined }]).then((res) => {
+          const line = res && res.ok && res.data ? res.data[key] : null;
+          if (!line) return;
+          state._peakLines = { ...(state._peakLines || {}), [key]: line };
+          repaint();
+        });
+      }).catch(() => {});
+    }
     if (api.steamDetails && !(g.steamMeta && g.steamMeta.about)) {
       peakAppId(g).then((appId) => (appId ? api.steamDetails(appId) : null)).then((res) => {
         if (!res || !res.ok || !res.data) return;
         g.steamMeta = { ...(g.steamMeta || {}), ...res.data, version: 3, at: Date.now() };
         saveGamesSoon();
-        if (!root.isConnected) return;
-        label = peakLabel(g);
-        for (const w of root.querySelectorAll('.pkl-window')) w.innerHTML = writing();
+        repaint();
       }).catch(() => {});
     }
     if (!(Number(g.firstYear) > 0) && !g._yearTried && api.sgdbResolve && (g.steamAppId || g.name)) {
@@ -4078,9 +4345,7 @@
         if (!y) return;
         g.firstYear = y;
         saveGamesSoon();
-        if (!root.isConnected) return;
-        label = peakLabel(g);
-        for (const w of root.querySelectorAll('.pkl-window')) w.innerHTML = writing();
+        repaint();
       }).catch(() => {});
     }
     peakColors(g).then((cols) => {
@@ -4180,7 +4445,8 @@
     saveGamesSoon();
     state._shelfKey = '';
     const peakChanged = (next >= Rating.PEAK) !== (prevRating >= Rating.PEAK);
-    if (state.selectedId === String(g.id) && peakChanged) {
+    // PEAK, or rated at all, changes the top row (the "Your rating" label)
+    if (state.selectedId === String(g.id) && (peakChanged || !prevRating !== !next)) {
       renderDetail();
     } else if (state.selectedId === String(g.id)) {
       const btn = $('#game-view [data-rate]');
@@ -4189,8 +4455,7 @@
         const fresh = $('#game-view [data-rate]');
         if (fresh) fresh.onclick = () => openRater(g);
       }
-      const rail = $('#game-view .gvx-rail');
-      if (rail && !gvIsWishlisted(g)) rail.innerHTML = railHtml(g);
+      if (!gvIsWishlisted(g)) paintRail(g);
     }
     renderLibrary();
     if (next >= Rating.PEAK) sfx('success');
@@ -6424,7 +6689,7 @@
 
   // -- save backups, per game (rail card on the game page)
   function savesCardHtml(g) {
-    const head = '<div class="gvx-card-head">CLOUD SAVES</div>';
+    const head = '<h3 class="gvx-card-head">Cloud saves</h3>';
     if (!signedIn()) return head + '<p class="sv-text">Sign in to back up this game’s saves.</p><button type="button" class="sv-link" data-sv="settings">Open account settings</button>';
     if (!state.config.cloudSaves) return head + '<p class="sv-text">Save backups are off.</p><button type="button" class="sv-link" data-sv="settings">Turn on in settings</button>';
     const ui = state._sv && state._sv.id === String(g.id) ? state._sv : (state._sv = { id: String(g.id) });

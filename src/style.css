@@ -6101,9 +6101,6 @@ html.is-pad .sv-link:focus { outline-offset: 4px; }
 .gvx-ses-habit { margin: 0 2px; font-size: 12.5px; color: var(--text-dim); }
 
 /* Activity → Recently played: a run of days gets a bar per day */
-.act-spark { flex: 0 1 auto; display: flex; align-items: flex-end; gap: 2px; height: 22px; padding: 0 2px; }
-.act-spark i { display: block; width: 4px; border-radius: calc(2px * var(--radius-k, 1)); background: rgba(var(--accent-rgb), 0.75); }
-.act-game:hover .act-spark i { background: var(--accent); }
 .act-game.is-brief .act-game-name,
 .act-game.is-brief .act-game-right { color: var(--text-mute); font-weight: 400; }
 .act-game.is-brief .act-thumb { opacity: 0.6; }
@@ -6689,7 +6686,7 @@ html[data-ui-search='floating'][data-ui-nav='dock'][data-ui-dock-style='attached
   font-style: italic;
   opacity: 0.9;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -6744,3 +6741,132 @@ html.is-bigpicture .pkl { zoom: 1.25; }
 .wb-links button { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .wb-links button:hover { color: var(--text); }
 
+
+/* ---- game page, readable: one scroll for the whole page (no small scroll
+   boxes under a fixed hero), sentence-case labels at a size you can read */
+.game-view { overflow-y: auto; overscroll-behavior: contain; }
+.gvx-band { flex: none; min-height: 0; grid-template-rows: auto; align-items: start; overflow: visible; padding-bottom: 40px; }
+.gvx-main, .gvx-main .gvx-list, .gvx-list, .gvx-rail { overflow: visible; min-height: auto; padding-right: 0; }
+.gvx-list { flex: none; }
+
+.gvx-card-head { margin: 0 0 10px; font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--text); font-weight: 600; }
+.gvx-card-head span { font-size: 12px; color: var(--text-mute); }
+.gvx-about { margin: 0 0 12px; font-size: 13px; line-height: 1.55; color: var(--text-dim); }
+.gvx-specs { gap: 8px; }
+.gvx-specs div { grid-template-columns: 86px minmax(0, 1fr); }
+.gvx-specs dt { font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--text-mute); }
+.gvx-specs dd { font-size: 12.5px; line-height: 1.45; color: var(--text); white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.gvx-specs.is-specs dd { color: var(--text-dim); }
+
+.gvx-ses-stat { gap: 3px; }
+.gvx-ses-stat span { font-size: 12px; letter-spacing: 0; text-transform: none; font-weight: 500; color: var(--text-dim); }
+.gvx-ses-stat b { font-size: 20px; }
+.gvx-ses-stat small { font-size: 12px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gvx-ses-habit { font-size: 13px; }
+.gvx-ledger-head .gvx-ledger-count { font-size: 12.5px; }
+
+button.gvx-month { grid-template-columns: minmax(0, 1fr) auto; font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--text); font-weight: 600; }
+button.gvx-month:hover { color: var(--text); background: rgba(var(--ink-rgb), 0.03); }
+.gvx-month .gvx-month-sum { font-size: 12.5px; color: var(--text-mute); }
+button.gvx-month:not(.is-open) .gvx-month-sum { color: var(--text-dim); }
+
+.gvx-main .gvx-row { grid-template-columns: 70px minmax(60px, 1fr) minmax(0, 150px) 66px; height: 34px; }
+.gvx-main .gvx-row.is-brief, .gvx-main .gvx-row.is-live { grid-template-columns: 70px minmax(0, 1fr) 66px; }
+.gvx-row-date { gap: 7px; }
+.gvx-row-date > i { font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--text-mute); min-width: 28px; }
+.gvx-row-date b { font-size: 13.5px; }
+.gvx-main .gvx-row-when { font-size: 12px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.gvx-row-dur { font-size: 13px; }
+
+/* top right: say what the rating is; Finished is a switch you can undo */
+.gvx-top-label { align-self: center; margin-right: -2px; font-size: 12px; color: rgba(255, 255, 255, 0.72); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); }
+.gvx-fin .gvx-fin-undo { display: none; }
+.gvx-fin.is-done:is(:hover, :focus-visible) .gvx-fin-now { display: none; }
+.gvx-fin.is-done:is(:hover, :focus-visible) .gvx-fin-undo { display: inline; }
+.gvx-fin.is-done:is(:hover, :focus-visible) { color: var(--text); border-color: rgba(var(--ink-rgb), 0.3); background: rgba(var(--ink-rgb), 0.06); }
+.gvx-fin.is-done:is(:hover, :focus-visible) svg { opacity: 0.4; }
+
+@media (max-width: 1080px) {
+  .gvx-main .gvx-row { grid-template-columns: 70px minmax(40px, 1fr) 66px; }
+  .gvx-main .gvx-row-when { display: none; }
+}
+.gvx-timer-label { font-size: 12px; letter-spacing: 0; text-transform: none; }
+/* a day with more than one session: each one under it, smaller */
+.gvx-main .gvx-row.is-sub { height: 26px; }
+.gvx-row.is-sub .gvx-row-bar { height: 5px; }
+.gvx-row.is-sub .gvx-row-bar i { background: rgba(var(--accent-rgb), 0.45); }
+.gvx-row.is-sub .gvx-row-dur { font-size: 12px; font-weight: 400; color: var(--text-dim); }
+.gvx-main .gvx-row.is-sub .gvx-row-when { color: var(--text-dim); }
+.gvx-main .gvx-row.is-sub:last-of-type, .gvx-main .gvx-row.is-sub + .gvx-row:not(.is-sub) { margin-top: 0; }
+.gvx-main .gvx-row:not(.is-sub) + .gvx-row.is-sub { margin-top: -4px; }
+@media (max-width: 1080px) {
+  .gvx-main .gvx-row.is-sub { grid-template-columns: 70px minmax(40px, 1fr) 96px 66px; }
+  .gvx-main .gvx-row.is-sub .gvx-row-when { display: block; }
+}
+
+/* ---- sessions as an accordion: one month open (a card), one day's
+   sessions open inside it (a tinted box) */
+.gvx-mgroup { border: 1px solid transparent; border-radius: calc(12px * var(--radius-k, 1)); margin-bottom: 4px; }
+.gvx-mgroup:not(.is-open) { border-color: var(--line); background: var(--surface); }
+.gvx-mgroup:not(.is-open) button.gvx-month { padding: 12px 14px; background: transparent; border-radius: inherit; }
+.gvx-mgroup:not(.is-open) button.gvx-month:hover { background: rgba(var(--ink-rgb), 0.04); }
+.gvx-mgroup.is-open { border-color: rgba(var(--accent-rgb), 0.35); background: var(--surface); padding: 0 8px 8px; margin: 6px 0 10px; }
+.gvx-mgroup.is-open button.gvx-month { padding: 12px 6px 8px; background: transparent; }
+.gvx-mgroup button.gvx-month .gvx-month-name { font-size: 14px; }
+
+button.gvx-row { width: 100%; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.gvx-row.is-many .gvx-row-when { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--accent); }
+.gvx-row.is-many .gvx-row-when svg { transition: transform 0.18s ease; }
+.gvx-row.is-many[aria-expanded="true"] .gvx-row-when svg { transform: rotate(90deg); }
+.gvx-row.is-many:hover { background: rgba(var(--accent-rgb), 0.08); }
+.gvx-row.is-many:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gvx-dgroup.is-open { margin: 2px 0 6px; padding-bottom: 6px; border-radius: calc(10px * var(--radius-k, 1)); background: rgba(var(--accent-rgb), 0.07); }
+.gvx-dgroup.is-open .gvx-row.is-many { background: transparent; }
+.gvx-main .gvx-dgroup .gvx-row.is-sub { height: 28px; margin: 0; }
+html.is-pad .gvx-row.is-many:focus { outline: 3px solid var(--accent) !important; outline-offset: -3px; }
+
+/* ---- game page: the Metacritic score in the hero line */
+.gvx-mc b { display: inline-block; min-width: 24px; margin-right: 3px; padding: 1px 5px; border-radius: calc(5px * var(--radius-k, 1)); background: #3d9b46; color: #fff; font-weight: 700; font-size: 12px; text-align: center; }
+
+/* ---- game page motion: the ⋯ menu pops, the open day box fades in */
+.gvx-menu:not([hidden]) { animation: gvx-pop 0.16s cubic-bezier(0.22, 0.8, 0.3, 1); transform-origin: top right; }
+@keyframes gvx-pop { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: none; } }
+.gvx-fin, .gvx-row.is-many, button.gvx-month { transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease; }
+@media (prefers-reduced-motion: reduce) { .gvx-menu:not([hidden]) { animation: none; } }
+html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .gvx-menu:not([hidden]) { animation: none; }
+.gvx-mc.is-mid b { background: #c99a1e; color: #1a1300; }
+.gvx-mc.is-low b { background: #c4423b; }
+
+/* ---- Activity, readable: sentence-case labels, Day by day as an
+   accordion (one day open), Pick back up with its own Play */
+.act-tile-label { font-size: 12.5px; letter-spacing: 0; text-transform: none; font-weight: 500; color: var(--text-dim); }
+.act-tile-note { font-size: 12px; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.act-card-head h2 span { font-size: 12.5px; }
+.act-x span, .act-gridline span { font-size: 11px; }
+.act-cols { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.act-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+.act-days { display: flex; flex-direction: column; gap: 6px; }
+.act-day { border: 1px solid var(--line); border-radius: calc(12px * var(--radius-k, 1)); background: rgba(var(--ink-rgb), 0.02); }
+.act-day.is-open { border-color: rgba(var(--accent-rgb), 0.35); background: rgba(var(--accent-rgb), 0.05); }
+.act-day-head { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border: 0; border-radius: inherit; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: background 0.18s ease; }
+.act-day-head:hover { background: rgba(var(--ink-rgb), 0.04); }
+.act-day-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.act-day-name { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; }
+.act-day-name svg { opacity: 0.7; }
+.act-day.is-open .act-day-name svg { transform: rotate(90deg); }
+.act-day-sum { font-size: 12.5px; color: var(--text-mute); }
+.act-day-sum b { color: var(--text); font-weight: 600; margin-left: 2px; }
+.act-day-body { padding: 0 6px 6px; }
+.act-day-body .act-game { padding: 6px 8px; }
+
+.act-back { display: flex; align-items: center; gap: 8px; }
+.act-back .act-game { flex: 1; min-width: 0; }
+.act-play { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid rgba(var(--accent-rgb), 0.45); border-radius: calc(8px * var(--radius-k, 1)); background: rgba(var(--accent-rgb), 0.12); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background 0.18s ease; }
+.act-play:hover { background: var(--accent); color: #fff; }
+.act-play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.act-tip { gap: 4px; min-width: 170px; }
+.act-tip-game { display: flex; justify-content: space-between; gap: 14px; color: var(--text-dim); }
+.act-tip-game em { font-style: normal; color: var(--text); max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+html.is-pad .act-day-head:focus, html.is-pad .act-play:focus { outline: 3px solid var(--accent) !important; outline-offset: -3px; }

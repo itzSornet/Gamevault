@@ -95,3 +95,31 @@ test('a Steam price in another currency is not mixed in', () => {
   const entry = { current: DEAL, deals: [DEAL], lowest: null, page: 'p' };
   assert.strictEqual(mergeSteam(entry, { amount: 5, regular: 5, cut: 0, currency: 'TRY' }, 1), entry);
 });
+
+test('ITAD ids are asked as itadIds and answered under "itad:<id>"', async () => {
+  const gid = '018d937f-1212-7000-8000-000000000001';
+  const { prices, calls } = setup((b) => ok({ [`itad:${gid}`]: PRICE }));
+  const res = await prices.get({ steamAppIds: [], itadIds: [gid.toUpperCase(), 'not-an-id'] });
+  assert.deepStrictEqual(calls[0].body, { itadIds: [gid], country: 'US' });
+  assert.deepStrictEqual(res.data, { [`itad:${gid}`]: PRICE });
+});
+
+test('title matches are asked once and kept', async () => {
+  const M = { itadId: 'x', title: 'The Witcher 3: Wild Hunt', appid: 292030 };
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gvp-')), 'prices.json');
+  const calls = [];
+  const p = createPrices({
+    file, cloudUrl: 'https://x.supabase.co', anonKey: 'pk', token: async () => 't',
+    fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      calls.push(body);
+      return { status: 200, json: async () => ({ ok: true, data: { matches: Object.fromEntries(body.titles.map((t) => [t, /Witcher/.test(t) ? M : null])) } }) };
+    },
+  });
+  const a = await p.match({ titles: ['The Witcher 3: Wild Hunt', 'Nope Game'] });
+  assert.deepStrictEqual(a.data, { 'The Witcher 3: Wild Hunt': M, 'Nope Game': null });
+  // same title written differently: no new request
+  const b = await p.match({ titles: ['the witcher 3 - wild hunt™'] });
+  assert.deepStrictEqual(b.data['the witcher 3 - wild hunt™'], M);
+  assert.strictEqual(calls.length, 1);
+});

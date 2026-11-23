@@ -106,7 +106,9 @@ contextBridge.exposeInMainWorld('api', {
   // SteamGridDB search
   sgdbGames: (term) => ipcRenderer.invoke('sgdb:games', term),
   steamDetails: (appId) => ipcRenderer.invoke('steam:details', appId),
-  prices: (steamAppIds, fresh) => ipcRenderer.invoke('prices:get', { steamAppIds, fresh }),
+  prices: (steamAppIds, fresh, itadIds) => ipcRenderer.invoke('prices:get', { steamAppIds, fresh, itadIds }),
+  priceMatch: (titles) => ipcRenderer.invoke('prices:match', titles),
+  peakLine: (games) => ipcRenderer.invoke('peak:line', games),
   steamSearch: (term) => ipcRenderer.invoke('steam:search', term),
   sgdbResolve: (payload) => ipcRenderer.invoke('sgdb:resolve', payload),
   sgdbAssets: (payload) => ipcRenderer.invoke('sgdb:assets', payload),

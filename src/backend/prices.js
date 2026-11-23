@@ -24,6 +24,8 @@ const BATCH = 50;              // the server takes up to 50 per call
 
 const fail = (code, message) => ({ ok: false, error: { code, message } });
 const VERSION = 2;             // 2: Steam's own regional price is merged in
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const normTitle = (t) => String(t || '').toLowerCase().replace(/[\u2122\u00ae\u00a9]/g, '').replace(/&/g, 'and').replace(/[^\p{L}\p{N}]+/gu, '');
 
 /**
  * IsThereAnyDeal follows Steam's price in the big regions only (it says $49.99
@@ -84,7 +86,7 @@ function createPrices(opts = {}) {
     if (saveTimer.unref) saveTimer.unref();
   }
 
-  async function call(ids, country) {
+  async function call(payload) {
     let last = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       let access;
@@ -94,7 +96,7 @@ function createPrices(opts = {}) {
         res = await doFetch(`${cloudUrl}/functions/v1/game-prices`, {
           method: 'POST',
           headers: { apikey: anonKey, Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ steamAppIds: ids, country }),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(30_000),
         });
       } catch (err) {
@@ -108,11 +110,17 @@ function createPrices(opts = {}) {
     return last && last.error ? last : fail('UNAUTHENTICATED', 'Price server refused the session');
   }
 
-  /** Prices for these Steam AppIDs; fresh ones from disk, the rest from the cloud. */
-  async function get({ steamAppIds, country = 'US', fresh = false } = {}) {
+  /**
+   * Prices for these Steam AppIDs and IsThereAnyDeal game ids; fresh ones from
+   * disk, the rest from the cloud. Answers are keyed by AppID, or "itad:<id>".
+   */
+  async function get({ steamAppIds, itadIds, country = 'US', fresh = false } = {}) {
     if (!cloudUrl || !anonKey) return fail('NO_CLOUD', 'Cloud is not configured');
     const cc = /^[A-Za-z]{2}$/.test(String(country)) ? String(country).toUpperCase() : 'US';
-    const ids = [...new Set((steamAppIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+    const ids = [
+      ...new Set((steamAppIds || []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)),
+      ...new Set((itadIds || []).map((x) => String(x || '').toLowerCase()).filter((x) => UUID.test(x)).map((x) => `itad:${x}`)),
+    ];
     const s = load();
     const out = {};
     const need = [];
@@ -126,13 +134,15 @@ function createPrices(opts = {}) {
     let error = null;
     for (let i = 0; i < need.length; i += BATCH) {
       const chunk = need.slice(i, i + BATCH);
-      const res = await call(chunk, cc);
+      const apps = chunk.filter((id) => typeof id === 'number');
+      const gids = chunk.filter((id) => typeof id === 'string').map((id) => id.slice(5));
+      const res = await call({ ...(apps.length ? { steamAppIds: apps } : {}), ...(gids.length ? { itadIds: gids } : {}), country: cc });
       if (res.ok && res.data && res.data.prices) {
         let own = {};
-        if (opts.steam) { try { own = (await opts.steam(chunk, cc)) || {}; } catch (_) { own = {}; } }
+        if (opts.steam && apps.length) { try { own = (await opts.steam(apps, cc)) || {}; } catch (_) { own = {}; } }
         for (const id of chunk) {
           if (!(String(id) in res.data.prices) && !own[id]) continue;
-          const data = mergeSteam(res.data.prices[id] || null, own[id], id);
+          const data = typeof id === 'number' ? mergeSteam(res.data.prices[id] || null, own[id], id) : (res.data.prices[id] || null);
           s[`${cc}:${id}`] = { savedAt: now(), data, v: VERSION };
           out[id] = data;
         }
@@ -147,7 +157,39 @@ function createPrices(opts = {}) {
     return { ok: true, data: out };
   }
 
-  return { get };
+  /**
+   * Which game each title is, for games with no Steam AppID: { [title]:
+   * { itadId, title, appid | null } | null }. Kept 30 days (misses 1 day).
+   */
+  async function match({ titles } = {}) {
+    if (!cloudUrl || !anonKey) return fail('NO_CLOUD', 'Cloud is not configured');
+    const list = [...new Set((titles || []).map((t) => String(t || '').trim()).filter((t) => normTitle(t)))];
+    const s = load();
+    const out = {};
+    const need = [];
+    for (const t of list) {
+      const hit = s[`t:${normTitle(t)}`];
+      if (hit && now() - hit.savedAt < (hit.data ? 30 * 24 * HOUR : 24 * HOUR)) out[t] = hit.data;
+      else need.push(t);
+    }
+    let error = null;
+    for (let i = 0; i < need.length; i += 20) {
+      const chunk = need.slice(i, i + 20);
+      const res = await call({ titles: chunk });
+      if (res.ok && res.data && res.data.matches) {
+        for (const t of chunk) {
+          const m = res.data.matches[t] || null;
+          s[`t:${normTitle(t)}`] = { savedAt: now(), data: m };
+          out[t] = m;
+        }
+        saveSoon();
+      } else error = res.error || { code: 'SERVER', message: 'No match' };
+    }
+    if (error && !Object.keys(out).length) return { ok: false, error };
+    return { ok: true, data: out };
+  }
+
+  return { get, match };
 }
 
 module.exports = { createPrices, mergeSteam };

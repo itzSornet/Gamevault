@@ -441,3 +441,23 @@ test('stress: 20,000 sessions group in well under a second', () => {
   assert.equal(runs.length, 1);
   assert.equal(runs[0].days, out.days);
 });
+
+/* ------------------------------------------------------------------ */
+/* daysByGame                                                          */
+/* ------------------------------------------------------------------ */
+
+test('daysByGame: newest day first, games by time, sessions in order', () => {
+  const { daysByGame } = require('../src/lib/sessions.js');
+  const s = (gameId, d, h, dur) => ({ gameId, start: at(2026, 7, d, h), duration: dur });
+  const days = daysByGame([
+    s('a', 24, 20, 1), s('b', 24, 18, 2), s('a', 24, 14, 0.5),
+    s('a', 25, 21, 1.5),
+  ]);
+  assert.equal(days.length, 2);
+  assert.equal(days[0].day, at(2026, 7, 25));
+  assert.equal(days[1].hours, 3.5);
+  assert.equal(days[1].count, 3);
+  assert.deepEqual(days[1].games.map((g) => [g.gameId, g.hours, g.count]), [['b', 2, 1], ['a', 1.5, 2]]);
+  assert.deepEqual(days[1].games[1].items.map((i) => new Date(i.start).getHours()), [14, 20]);
+  assert.equal(daysByGame([s('a', 24, 20, 1), s('a', 25, 20, 1)], 1).length, 1);
+});
