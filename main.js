@@ -65,8 +65,9 @@ function patchGame(gameId, patch) {
   });
 }
 
-function sendLaunchError(gameId, error) {
-  if (win && !win.isDestroyed()) win.webContents.send('game:launch-error', { gameId, error });
+// extra: { code: 'NOT_FOUND', path, isExe } lets the app offer a fix
+function sendLaunchError(gameId, error, extra) {
+  if (win && !win.isDestroyed()) win.webContents.send('game:launch-error', { ...(extra || {}), gameId, error });
 }
 
 // CLI flags (used by autostart and compositor keybinds on Wayland)
@@ -163,7 +164,7 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
     }
     patchGame(sid, patch).catch(() => {});
   };
-  const fail = (msg) => sendLaunchError(gameId, msg);
+  const fail = (msg, extra) => sendLaunchError(gameId, msg, extra);
 
   // What to open and what counts as playing are separate (tracker split):
   // launchTarget/launcherPath is opened, trackMode/trackExe decide tracking.
@@ -196,7 +197,8 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
     }
   } else if (pathToLaunch) {
     if (!fs.existsSync(pathToLaunch)) {
-      fail(`Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.`);
+      fail(`Executable not found:\n${pathToLaunch}\n\nThe file may have been moved, deleted, or the drive is disconnected.`,
+        { code: 'NOT_FOUND', path: pathToLaunch, isExe: pathToLaunch === exePath });
       return;
     }
 
@@ -913,6 +915,11 @@ function createWindow() {
       return img.isEmpty() ? null : 'data:image/jpeg;base64,' + img.toJPEG(92).toString('base64');
     } catch (_) { return null; }
   });
+  // Windows' regional format (not its display language), read once by the
+  // preload so the first paint already writes dates the user's way
+  ipcMain.on('app:locale', (e) => {
+    try { e.returnValue = (app.getSystemLocale && app.getSystemLocale()) || app.getLocale() || ''; } catch (_) { e.returnValue = ''; }
+  });
   ipcMain.handle('app:platform-info', () => ({
     platform: process.platform,
     wayland: platform.isWayland(),
@@ -1297,8 +1304,21 @@ function createWindow() {
   });
   ipcMain.handle('tracking:active', () => Object.keys(trackedProcesses));
 
-  ipcMain.handle('pick:exe', async () => {
+  // startAt: where the file was, or the game's folder; the picker opens in
+  // the nearest folder of it that still exists
+  ipcMain.handle('pick:exe', async (_, startAt) => {
+    let defaultPath;
+    try {
+      let dir = typeof startAt === 'string' && startAt ? path.resolve(startAt) : '';
+      for (let i = 0; dir && i < 6; i++) {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) { defaultPath = dir; break; }
+        const up = path.dirname(dir);
+        if (up === dir) break;
+        dir = up;
+      }
+    } catch (_) { defaultPath = undefined; }
     const result = await dialog.showOpenDialog(win, {
+      ...(defaultPath ? { defaultPath } : {}),
       properties: ['openFile'],
       filters: process.platform === 'win32'
         ? [{ name: 'Executables', extensions: ['exe'] }]

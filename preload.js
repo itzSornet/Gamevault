@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   close:    () => ipcRenderer.send('win-close'),
   isMaximized: () => ipcRenderer.invoke('win:is-maximized'),
   getPlatformInfo: () => ipcRenderer.invoke('app:platform-info'),
+  locale: (() => { try { return ipcRenderer.sendSync('app:locale') || ''; } catch (_) { return ''; } })(),
   thumb: (src, width, kind) => ipcRenderer.invoke('img:thumb', { src, width, kind }),
   palette: (src) => ipcRenderer.invoke('img:palette', src),
   onMaximizedChange: (cb) => ipcRenderer.on('win:maximized', (_, isMax) => cb(isMax)),
@@ -100,7 +101,7 @@ contextBridge.exposeInMainWorld('api', {
   onLaunchError: (cb) => ipcRenderer.on('game:launch-error', (_, d) => cb(d)),
 
   // Pick exe file
-  pickExe: () => ipcRenderer.invoke('pick:exe'),
+  pickExe: (startAt) => ipcRenderer.invoke('pick:exe', typeof startAt === 'string' ? startAt : ''),
   showInFolder: (path) => ipcRenderer.send('game:show-in-folder', path),
 
   // SteamGridDB search

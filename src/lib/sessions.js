@@ -64,7 +64,14 @@
     return Math.floor((localDayNumber(new Date(newerMs)) - localDayNumber(new Date(olderMs))) / 7);
   }
 
-  // Hours as a float -> '<1m' | '42m' | '2h' | '2h 19m'.
+  // Locale for the hour count's thousands separator ('2,547h 12m'); the
+  // renderer sets it to the user's regional English (lib/locale.js).
+  let numLocale = 'en-US';
+  function setLocale(tag) {
+    try { if (tag) { (1).toLocaleString(tag); numLocale = tag; } } catch (_) { /* keep the old one */ }
+  }
+
+  // Hours as a float -> '<1m' | '42m' | '2h' | '2h 19m' | '2,547h 12m'.
   function formatDuration(hours) {
     if (!isFiniteNumber(hours) || hours < 0) return '\u2014';
     const totalMinutes = Math.round(hours * 60);
@@ -73,7 +80,8 @@
 
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
-    return m === 0 ? h + 'h' : h + 'h ' + m + 'm';
+    const hs = h >= 1000 ? h.toLocaleString(numLocale) : String(h);
+    return m === 0 ? hs + 'h' : hs + 'h ' + m + 'm';
   }
 
   // Milliseconds -> 'MM:SS' or 'H:MM:SS'.
@@ -509,6 +517,7 @@
     recentRuns,
     habits,
     formatDuration,
+    setLocale,
     formatClock,
     sessionStats,
     groupSessions,

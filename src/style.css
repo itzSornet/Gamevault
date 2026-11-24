@@ -768,7 +768,7 @@ html, body {
 }
 
 .gvx-logo { max-width: 340px; max-height: 92px; object-fit: contain; object-position: left center; }
-.gvx-title { margin: 0; font-family: var(--font-display); font-size: clamp(28px, 3vw, 34px); line-height: 1.05; letter-spacing: -0.02em; font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.gvx-title { margin: 0; font-family: var(--font-display); font-size: clamp(28px, 3vw, 34px); line-height: 1.05; letter-spacing: -0.02em; font-weight: 600; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; padding-bottom: 0.08em; }
 
 .gvx-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); }
 .gvx-dot { color: var(--text-mute); }
@@ -1438,7 +1438,9 @@ html[data-ui-motion='off'] * { animation-duration: 0.001ms !important; animation
      8px strip top + 8px gap + ~18px label + 10px strip bottom), capped at
      the 172x258 design size so normal and tall windows are unchanged. */
   container-type: size;
-  --tile-h: clamp(168px, calc(100cqh - 220px - 44px), 258px);
+  /* the floor only matters in the shortest windows (580px tall at 120% text):
+     low enough that the tiles and their names still fit */
+  --tile-h: clamp(120px, calc(100cqh - 220px - 44px), 258px);
   --tile-w: calc(var(--tile-h) * 2 / 3);
 }
 
@@ -2418,8 +2420,31 @@ html[data-ui-motion='off'] * { animation-duration: 0.001ms !important; animation
   border: 1px solid var(--line);
 }
 .shelf-tile > .cover-fallback svg { max-width: 64px; }
+/* no artwork: the same tint and initials as the cards view */
+:is(.shelf-tile, .shelf-poster) > .cover-fallback {
+  background:
+    radial-gradient(120% 80% at 30% 15%, hsl(var(--card-hue, 220) 55% 34% / 0.9), transparent 60%),
+    linear-gradient(160deg, hsl(var(--card-hue, 220) 40% 20%), hsl(calc(var(--card-hue, 220) + 45) 45% 9%));
+}
+:is(.shelf-tile, .shelf-poster) > .cover-fallback::before, :is(.shelf-tile, .shelf-poster) > .cover-fallback svg { display: none; }
+:is(.shelf-tile, .shelf-poster) > .cover-fallback::after {
+  content: attr(data-initials);
+  font-family: var(--font-display);
+  font-size: calc(var(--tile-w, 150px) * 0.26);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: hsl(var(--card-hue, 220) 60% 88% / 0.85);
+  text-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+:root[data-palette='paper'] :is(.shelf-tile, .shelf-poster) > .cover-fallback {
+  background:
+    radial-gradient(120% 80% at 30% 15%, hsl(var(--card-hue, 220) 70% 92%), transparent 60%),
+    linear-gradient(160deg, hsl(var(--card-hue, 220) 45% 84%), hsl(calc(var(--card-hue, 220) + 45) 40% 72%));
+}
+:root[data-palette='paper'] :is(.shelf-tile, .shelf-poster) > .cover-fallback::after { color: hsl(var(--card-hue, 220) 45% 28% / 0.8); text-shadow: none; }
 .shelf-poster.is-empty { background: none !important; }
 .shelf-poster .cover-fallback { border-radius: calc(10px * var(--radius-k, 1)); }
+.shelf-poster > .cover-fallback::after { font-size: 56px; }
 
 /* ============================================================================
    Theme pass — structure, density, type
@@ -3681,8 +3706,16 @@ html.is-maximized .main { border-bottom-right-radius: 0; }
    10px scrollbar gutter instead of overlapping them
    ========================================================================= */
 .toasts {
-  right: calc(var(--shell-gap) + 22px);
+  right: calc(var(--toast-right, var(--shell-gap)) + 22px);
   bottom: calc(var(--shell-gap) + 14px);
+  z-index: 130;   /* a toast about a dialog shows over it, not under it */
+}
+html:not(.is-bigpicture) #toasts.is-above-spot { bottom: var(--toast-bottom); }
+/* while a dialog is open the stack moves to the top centre, clear of the
+   dialog's own buttons */
+html:not(.is-bigpicture):has(#modal:not([hidden])) .toasts {
+  top: 14px; bottom: auto; right: auto; left: 50%; transform: translateX(-50%);
+  align-items: center;
 }
 
 /* ============================================================================
@@ -3987,6 +4020,9 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #grid .card:hover .c
   overflow-y: auto;
 }
 .st-back {
+  /* flex: none: in a short window the section list scrolls instead of
+     squashing this button */
+  flex: none;
   align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
   height: 30px; padding: 0 12px 0 8px; margin-bottom: 14px;
   border: 1px solid var(--line); border-radius: var(--pill-r, 999px); background: var(--surface);
@@ -4081,7 +4117,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) #grid .card:hover .c
 @media (max-width: 1000px) {
   .st-wrap { grid-template-columns: 64px minmax(0, 1fr); }
   .st-nav { padding: 16px 8px; align-items: center; }
-  .st-back { padding: 0; width: 36px; justify-content: center; font-size: 0; }
+  .st-back { padding: 0; width: 36px; height: 36px; align-self: center; justify-content: center; font-size: 0; }
   .st-nav-title, .st-tab span { display: none; }
   .st-tab { justify-content: center; padding: 0; width: 44px; }
   .st-row:not(.is-wide) { flex-wrap: wrap; }
@@ -4434,8 +4470,8 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .gv-logo3d .gvx-logo
   border-radius: calc(10px * var(--radius-k, 1));
   font-size: 13px;
   color: var(--text);
-  background: linear-gradient(100deg, rgba(var(--wish-rgb), 0.17), rgba(var(--wish-rgb), 0.04) 72%) !important;
-  box-shadow: inset 0 0 0 1px rgba(var(--wish-rgb), 0.24);
+  background: transparent !important;
+  box-shadow: inset 0 0 0 1px transparent;
   transition: box-shadow 220ms var(--ease-out-quart, ease), color 150ms;
 }
 .sidebar .side-item.side-wish::after {
@@ -4446,7 +4482,10 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .gv-logo3d .gvx-logo
   pointer-events: none;
 }
 .sidebar .side-item.side-wish:hover::after { transform: translateX(110%); transition: transform 760ms cubic-bezier(0.22, 0.8, 0.3, 1); }
-.sidebar .side-item.side-wish:hover { box-shadow: inset 0 0 0 1px rgba(var(--wish-rgb), 0.42), 0 4px 18px rgba(var(--wish-rgb), 0.12); }
+.sidebar .side-item.side-wish:hover {
+  background: linear-gradient(100deg, rgba(var(--wish-rgb), 0.12), rgba(var(--wish-rgb), 0.03) 72%) !important;
+  box-shadow: inset 0 0 0 1px rgba(var(--wish-rgb), 0.26);
+}
 .sidebar .side-item.side-wish.is-active {
   background: linear-gradient(100deg, rgba(var(--wish-rgb), 0.34), rgba(var(--wish-rgb), 0.11) 78%) !important;
   box-shadow: inset 0 0 0 1px rgba(var(--wish-rgb), 0.6), 0 6px 22px rgba(var(--wish-rgb), 0.2);
@@ -4467,8 +4506,8 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
 .sidebar .side-pill.is-away { opacity: 0; }
 
 /* topbar: sorting / layout don't apply to the wishlist page */
-.main.is-wish #sort-wrap,
-.main.is-wish #btn-view { display: none !important; }
+.main:is(.is-wish, .is-settings) #sort-wrap,
+.main:is(.is-wish, .is-settings) #btn-view { display: none !important; }
 
 /* page */
 .wishlist-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
@@ -4545,7 +4584,10 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
 /* top pick */
 .wl-top {
   position: relative;
-  height: clamp(250px, 38vh, 400px);
+  /* grows with its content in a short window or with a long title, instead
+     of pushing the badge out over its top edge */
+  min-height: clamp(250px, 38vh, 400px);
+  display: flex; align-items: flex-end;
   border-radius: calc(18px * var(--radius-k, 1));
   overflow: hidden;
   isolation: isolate;
@@ -4562,7 +4604,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
     linear-gradient(0deg, rgba(7, 7, 11, 0.55), rgba(7, 7, 11, 0) 55%);
 }
 .wl-top-body {
-  position: absolute; left: 28px; right: 28px; bottom: 24px;
+  position: relative; margin: 24px 28px; flex: 0 1 600px; min-width: 0;
   max-width: 600px;
   display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
 }
@@ -4691,8 +4733,7 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
   column-gap: 8px; row-gap: 6px; padding: 10px 8px 11px 14px;
 }
 .wl-card-info { display: contents; }
-.wl-card-name { grid-column: 1; grid-row: 1; }
-.wl-card-acts { grid-column: 2; grid-row: 1; }
+.wl-card-name { grid-column: 1 / -1; grid-row: 1; }
 .wl-card .wl-facts { grid-column: 1 / -1; grid-row: 2; }
 .wl-card-name { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wl-card .wl-facts { color: var(--text-dim); font-size: 11.5px; min-height: 22px; }
@@ -4701,8 +4742,20 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .sidebar .side-item.
 :root[data-palette='paper'] .wl-card .wl-chip.is-sale { color: #3d7a0c; background: rgba(110, 170, 30, 0.18); }
 .wl-card .wl-price { color: var(--text); }
 .wl-card .wl-since { color: var(--text-mute); }
-.wl-card-acts { flex: none; display: flex; gap: 2px; opacity: 0.55; transition: opacity 160ms; }
-.wl-card:hover .wl-card-acts, .wl-card:focus-within .wl-card-acts { opacity: 1; }
+.wl-card-acts {
+  position: absolute; top: 8px; right: 8px; z-index: 4;
+  display: flex; gap: 2px; padding: 3px;
+  border-radius: calc(11px * var(--radius-k, 1));
+  background: rgba(10, 10, 14, 0.62);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  opacity: 0; translate: 0 -4px; pointer-events: none;
+  transition: opacity 160ms, translate 200ms cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+.wl-card:hover .wl-card-acts, .wl-card:focus-within .wl-card-acts { opacity: 1; translate: 0 0; pointer-events: auto; }
+@media (hover: none) { .wl-card-acts { opacity: 1; translate: 0 0; pointer-events: auto; } }
+.wl-card-acts .wl-icon { color: rgba(255, 255, 255, 0.82); }
+.wl-card-acts .wl-icon:hover { background: rgba(255, 255, 255, 0.14); }
 .wl-icon {
   width: 30px; height: 30px;
   display: grid; place-items: center;
@@ -4916,6 +4969,16 @@ html.is-bigpicture .topbar {
   gap: 16px;
 }
 :root[data-palette='paper'].is-bigpicture .topbar { background: linear-gradient(to bottom, rgba(252, 250, 245, 0.92), rgba(252, 250, 245, 0)); }
+/* scrolled pages fade out under the top row instead of running through the
+   section name, the search and the clock */
+html.is-bigpicture :is(#library, #wishlist-view, #activity-view, #game-view.is-scrolled) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent calc(var(--bp-safe-y) + 50px), #000 calc(var(--bp-safe-y) + 72px));
+  mask-image: linear-gradient(to bottom, transparent calc(var(--bp-safe-y) + 50px), #000 calc(var(--bp-safe-y) + 72px));
+}
+html.is-bigpicture .st-panel {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 28px, #000 calc(100% - 28px), transparent);
+}
 html.is-bigpicture .filter-title { font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-right: auto; }
 html.is-bigpicture .topbar .slot { flex: 0 1 380px; min-width: 0; }
 html.is-bigpicture .topbar .top-actions { margin-left: 8px; }
@@ -4943,7 +5006,9 @@ html.is-bigpicture .shelf-actions { gap: 12px; margin-top: 8px; }
 html.is-bigpicture .shelf-actions .btn { height: 52px; padding: 0 26px; font-size: 17px; }
 html.is-bigpicture .shelf-actions .btn-primary { min-width: 150px; }
 html.is-bigpicture .shelf-actions .icon-btn { width: 52px; height: 52px; }
-html.is-bigpicture .shelf-poster { right: var(--bp-safe-x); top: calc(50% + 36px); width: 180px; height: 270px; border-radius: calc(14px * var(--radius-k, 1)); }
+html.is-bigpicture .shelf-poster { right: var(--bp-safe-x); top: calc(50% + 36px); width: auto; aspect-ratio: 2 / 3; border-radius: calc(14px * var(--radius-k, 1));
+  /* a short hero (a 1080p TV at 150%) must not push it up into the header */
+  height: min(270px, calc(100% - 2 * var(--bp-safe-y) - 72px)); }
 html.is-bigpicture .shelf-strip { gap: 20px; padding: 14px var(--bp-safe-x) calc(var(--bp-safe-y) + 40px); scroll-padding-inline: var(--bp-safe-x); }
 html.is-bigpicture .shelf-tile { font-size: 15px; gap: 10px; }
 html.is-bigpicture .shelf-tile img { border-radius: calc(14px * var(--radius-k, 1)); }
@@ -5094,6 +5159,18 @@ html.is-pad .ga-item[data-danger]:focus { background: rgba(255, 80, 80, 0.16); }
 .modal-card.rm-modal { width: min(420px, calc(100vw - 32px)); }
 .rm-text { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.55; }
 .rm-text b { color: var(--text); font-weight: 600; }
+/* problem dialogs: the raw reason or path under the plain words */
+.err-detail {
+  margin: 12px 0 0; padding: 9px 11px;
+  border-radius: calc(8px * var(--radius-k, 1));
+  background: var(--surface-2);
+  color: var(--text-mute);
+  font: 11.5px/1.5 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 140px; overflow: auto;
+  -webkit-user-select: text; user-select: text;
+}
+.err-modal .modal-foot .is-side { margin-right: auto; }
 :root[data-palette='paper'] .ge-remove, :root[data-palette='paper'] .gvx-menu button.is-danger, :root[data-palette='paper'] .ga-item[data-danger] { color: #c0392b; }
 
 /* ---- game page: Play and Mark as finished side by side, timer after */
@@ -5226,8 +5303,8 @@ html.is-bigpicture .act-head { display: none; }
 
 /* Activity sits with Import and Settings: a place, not a library category.
    No sliding pill; when open, only its text and icon light up. */
-.side-act.is-active { color: var(--text); }
-.side-act.is-active .side-ico { color: var(--accent); opacity: 1; }
+.side-act.is-active, .side-item[data-rail-action].is-active { color: var(--text); }
+:is(.side-act, .side-item[data-rail-action]).is-active .side-ico { color: var(--accent); opacity: 1; }
 
 /* Import and Settings live in the sidebar; the top bar copies stay in the
    DOM (the sidebar rows click them) but are not shown twice */
@@ -5901,20 +5978,22 @@ html:is([data-ui-motion='reduced'], [data-ui-motion='off']) .pk-plaque { transit
 /* older tier rules must not repaint the metal */
 .gvx-rate.tier-peak.peak-foil, .card-rating[data-tier='peak'].peak-foil, #grid .card-rating[data-tier='peak'].peak-foil { background: var(--gold); color: #4b3108 !important; }
 
-/* numeric ratings sit where PEAK does: centered on top of the cover, same size */
+/* numeric ratings sit in the top-right corner, off the game's logo (PEAK
+   keeps the top centre) */
 #grid .card-rating:not(.peak-strap), .card-rating:not(.peak-strap) {
-  top: 10px; left: 50%; right: auto;
-  translate: -50% 0;
-  padding: 5px 13px 5px 11px;
-  gap: 5px;
-  font-size: 13px;
+  top: 10px; right: 10px; left: auto;
+  translate: none;
+  padding: 4px 9px 4px 7px;
+  gap: 4px;
+  font-size: 12px;
   z-index: 4;
 }
-.card-rating:not(.peak-strap) svg { width: 13px; height: 13px; }
-.tile-rating { left: 50%; right: auto; translate: -50% 0; }
-.tile-rating .rate-chip { padding: 5px 13px 5px 11px; gap: 5px; font-size: 13px; }
-.tile-rating .rate-chip svg { width: 13px; height: 13px; }
-html.is-bigpicture .tile-rating { transform-origin: top center; }
+.card-rating:not(.peak-strap) svg { width: 12px; height: 12px; }
+.tile-rating:not(.is-peak) { top: 8px; right: 8px; left: auto; translate: none; }
+.tile-rating .rate-chip { padding: 4px 9px 4px 7px; gap: 4px; font-size: 12px; }
+.tile-rating .rate-chip svg { width: 12px; height: 12px; }
+html.is-bigpicture .tile-rating:not(.is-peak) { transform: none; }
+html.is-bigpicture .tile-rating.is-peak { transform-origin: top center; }
 
 /* rating pills, larger: the one beside "played …" in the shelf banner grows
    the most; the ones on covers (cards and shelf tiles) a little */
@@ -5922,9 +6001,6 @@ html.is-bigpicture .tile-rating { transform-origin: top center; }
 .shelf-meta .rate-chip svg { width: 15px; height: 15px; }
 .shelf-meta .peak-foil.is-sm { padding: 5px 16px 6px; font-size: 15px; }
 .shelf-meta .rate-chip, .shelf-meta .peak-foil { margin-left: 10px; }
-#grid .card-rating:not(.peak-strap), .card-rating:not(.peak-strap),
-.tile-rating .rate-chip { padding: 6px 15px 6px 12px; gap: 6px; font-size: 15px; }
-.card-rating:not(.peak-strap) svg, .tile-rating .rate-chip svg { width: 15px; height: 15px; }
 #grid .card-rating.peak-foil, .card-rating.peak-foil,
 .tile-rating.is-peak .peak-foil { padding: 5px 17px 6px; font-size: 14px; }
 
@@ -6186,7 +6262,7 @@ html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar :is(.side-nav, .side
 html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item { width: auto; flex: none; }
 /* the active pill slides along the row (app.js drawSidePill); Activity has
    no pill, so it keeps a quiet fill of its own */
-html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item.side-act.is-active {
+html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item:is(.side-act, [data-rail-action]).is-active {
   box-shadow: inset 0 0 0 100px rgba(var(--accent-rgb), 0.16), inset 0 0 0 1px rgba(var(--accent-rgb), 0.34);
 }
 html:is([data-ui-nav='dock'], [data-ui-nav='top']) .side-pill {
@@ -6485,8 +6561,8 @@ html[data-ui-card-titles='0']:not(.is-bigpicture) .shelf-tile-label { visibility
 
 /* ---- shelf tile size: the covers still follow the shelf's height, with a
    lower or higher cap */
-html[data-ui-shelf-size='small']:not(.is-bigpicture) .shelf { --tile-h: clamp(140px, calc(100cqh - 220px - 44px), 204px); }
-html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf { --tile-h: clamp(180px, calc(100cqh - 200px - 44px), 318px); }
+html[data-ui-shelf-size='small']:not(.is-bigpicture) .shelf { --tile-h: clamp(110px, calc(100cqh - 220px - 44px), 204px); }
+html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf { --tile-h: clamp(130px, calc(100cqh - 200px - 44px), 318px); }
 html[data-ui-shelf-size='large']:not(.is-bigpicture) .shelf-hero { min-height: 200px; }
 
 /* ============================================================================
@@ -6906,6 +6982,10 @@ html[data-ui-nav-side='right'] .side-brand > :is(button, .win-controls) { -webki
   .sidebar .side-brand:has(> .win-controls) { flex-direction: column-reverse; align-items: center; gap: 10px; padding-left: 0; padding-right: 0; }
   .sidebar .side-brand > .win-controls { flex-direction: column; margin: 0; }
   .sidebar .side-brand:has(> .win-controls) .side-name { display: none; }
+  /* undo the open-sidebar row above: it outranks the lines here and made
+     the buttons fill the column, pushing the logo out past the edge */
+  .sidebar:not(.is-collapsed) .side-brand:has(> .win-controls) { flex-wrap: nowrap; }
+  .sidebar:not(.is-collapsed) .side-brand > .win-controls { order: 0; flex-basis: auto; margin: 0; }
 }
 
 /* ---- the closed search in a narrow slot: no key hint (it cut the text) */
@@ -6916,8 +6996,6 @@ html[data-ui-nav-side='right'] .side-brand > :is(button, .win-controls) { -webki
 html[data-ui-search='floating']:not(.is-bigpicture) .shelf { padding-bottom: 58px; }
 html[data-ui-search='floating']:not(.is-bigpicture) :is(.library, .wishlist-view, .activity-view, .game-view, .settings-view) { padding-bottom: 84px; }
 
-/* ---- a cover with a rating and a status: the status goes under the rating */
-html:not([data-ui-card-ratings='0']) #grid .card:has(> .card-media > .card-rating:not(.peak-strap):not([hidden])) .card-status { top: 54px; }
 /* ratings switched off: nothing sits above the status any more */
 html[data-ui-card-ratings='0'] #grid .card .card-status { top: 10px !important; }
 
@@ -6965,3 +7043,10 @@ html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item:not(.is-a
 /* the corner search button answers the pointer */
 .spot.is-round { transition-property: left, top, width, height, border-radius, background-color, border-color, box-shadow; }
 .spot.is-round:hover { border-color: rgba(var(--accent-rgb), 0.55); box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(var(--accent-rgb), 0.16); }
+
+/* Game names in any script: an Arabic or Hebrew title takes its own
+   direction, so it reads right to left and is cut at its own end, not at
+   its first word */
+.card-title, .shelf-tile-label, .hero-title, .gvx-title, .wl-name-text, .wl-card-name,
+.act-game-name, .act-tip-game em, .wb-game, .pkl-game, .rt-title, .ga-title, .spot .name,
+.shelf-title, .ge-title { unicode-bidi: plaintext; }

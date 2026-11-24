@@ -461,3 +461,14 @@ test('daysByGame: newest day first, games by time, sessions in order', () => {
   assert.deepEqual(days[1].games[1].items.map((i) => new Date(i.start).getHours()), [14, 20]);
   assert.equal(daysByGame([s('a', 24, 20, 1), s('a', 25, 20, 1)], 1).length, 1);
 });
+
+test('formatDuration: thousands of hours get the locale separator', () => {
+  const { formatDuration: fd, setLocale } = require('../src/lib/sessions.js');
+  assert.equal(fd(2547.2), '2,547h 12m');
+  setLocale('en-DE');
+  assert.equal(fd(2547), '2.547h');
+  setLocale('not a locale ###');
+  assert.equal(fd(2547), '2.547h');
+  setLocale('en-US');
+  assert.equal(fd(999), '999h');
+});

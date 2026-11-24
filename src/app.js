@@ -60,6 +60,22 @@
   const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 
+  // Dates and numbers: English words, in the order and separators of the
+  // user's regional format (lib/locale.js)
+  const LOC = (window.GVLocale && GVLocale.pick(window.api && window.api.locale)) || 'en-US';
+  const fmtNum = (n, digits = 0) => (Number(n) || 0).toLocaleString(LOC, { maximumFractionDigits: digits });
+  const fmtDay = (ts, opts) => new Date(ts).toLocaleDateString(LOC, opts);
+  const fmtDayRange = (a, b) => {
+    try { return new Intl.DateTimeFormat(LOC, { month: 'short', day: 'numeric' }).formatRange(new Date(a), new Date(b)); } catch (_) { return `${fmtDay(a, { month: 'short', day: 'numeric' })} – ${fmtDay(b, { month: 'short', day: 'numeric' })}`; }
+  };
+
+  const TIME_FMT = new Intl.DateTimeFormat(LOC, { hour: 'numeric', minute: '2-digit' });
+
+  // A–Z by name: "Portal 2" before "Portal 10", case and accents ignored;
+  // other scripts (日本語, 한국어, العربية) follow the Latin ones
+  const NAME_ORDER = new Intl.Collator(LOC, { numeric: true, sensitivity: 'base' });
+  if (window.Sessions && Sessions.setLocale) Sessions.setLocale(LOC);
+
   const fmtHours = (h) => {
     const n = Number(h) || 0;
     if (n <= 0) return '0h';
@@ -68,7 +84,7 @@
       if (mins < 1) return '<1m';
       if (mins < 60) return `${mins}m`;
     }
-    return n >= 100 ? `${Math.round(n)}h` : `${n.toFixed(1).replace(/\.0$/, '')}h`;
+    return `${fmtNum(n, n >= 100 ? 0 : 1)}h`;
   };
 
   const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
@@ -108,7 +124,7 @@
   const fmtDate = (ts) => {
     if (!ts) return '—';
     try {
-      return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      return fmtDay(ts, { month: 'short', day: 'numeric', year: 'numeric' });
     } catch (_) { return '—'; }
   };
 
@@ -188,6 +204,19 @@
       }
       el.appendChild(row);
     }
+    // keep the stack inside the main panel: with the sidebar on the right it
+    // would otherwise sit on top of the sidebar
+    const main = $('#main');
+    if (main && !document.documentElement.classList.contains('is-bigpicture')) {
+      wrap.style.setProperty('--toast-right', `${Math.max(0, Math.round(innerWidth - main.getBoundingClientRect().right))}px`);
+    } else wrap.style.removeProperty('--toast-right');
+    // and above the round search button in the corner, whatever the nav
+    // layout puts under it
+    const spot = $('#spot');
+    const sr = spot && spot.classList.contains('is-round') && !spot.classList.contains('open') ? spot.getBoundingClientRect() : null;
+    const round = !!sr && sr.width > 0 && getComputedStyle(spot).visibility !== 'hidden';
+    wrap.classList.toggle('is-above-spot', round);
+    if (round) wrap.style.setProperty('--toast-bottom', `${Math.max(0, Math.round(innerHeight - sr.top + 10))}px`);
     wrap.appendChild(el);
     const shown = live();
     for (let i = 0; i < shown.length - TOAST_MAX; i++) dismissToast(shown[i]);
@@ -801,16 +830,17 @@
     }
 
     const sort = state.sort;
+    const byName = (a, b) => NAME_ORDER.compare(String(a.name || ''), String(b.name || ''));
     const compare = (a, b) => {
       if (sort === 'lastPlayed') {
         return (b.lastPlayed || 0) - (a.lastPlayed || 0) || (b.added || 0) - (a.added || 0);
       }
-      if (sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
+      if (sort === 'name') return byName(a, b);
       if (sort === 'hours') return (Number(b.hours) || 0) - (Number(a.hours) || 0);
-      if (sort === 'rating') return (Rating.value(b) - Rating.value(a)) || String(a.name || '').localeCompare(String(b.name || ''));
+      if (sort === 'rating') return (Rating.value(b) - Rating.value(a)) || byName(a, b);
       if (sort === 'status') {
         const d = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
-        return d !== 0 ? d : String(a.name || '').localeCompare(String(b.name || ''));
+        return d !== 0 ? d : byName(a, b);
       }
       return (b.added || 0) - (a.added || 0);
     };
@@ -840,7 +870,7 @@
       if (state.filter === 'Active') return !wanted && isActiveGame(g);
       return !wanted && g.status === state.filter;
     };
-    const gamesWord = (n) => `${n.toLocaleString()} game${n === 1 ? '' : 's'}`;
+    const gamesWord = (n) => `${fmtNum(n)} game${n === 1 ? '' : 's'}`;
 
     // Header title + subtitle follow the active filter.
     const label = filterLabel(state.filter);
@@ -853,13 +883,13 @@
       const n = c[state.filter] ?? 0;
       libSub.textContent = state.filter === 'Want'
         ? gamesWord(n)
-        : `${gamesWord(n)} · ${hoursOf(inFilter).toLocaleString()} h`;
+        : `${gamesWord(n)} · ${fmtNum(hoursOf(inFilter))} h`;
     }
 
     const totalEl = $('#side-total');
     const hoursEl = $('#side-hours');
     if (totalEl) totalEl.textContent = gamesWord(c.All);
-    if (hoursEl) hoursEl.textContent = `${hoursOf((g) => !gvIsWishlisted(g)).toLocaleString()} h`;
+    if (hoursEl) hoursEl.textContent = `${fmtNum(hoursOf((g) => !gvIsWishlisted(g)))} h`;
   }
 
   const FILTER_LABELS = { All: 'Library', Active: 'Active', Finished: 'Finished', Want: 'Wishlist', Activity: 'Activity' };
@@ -1373,11 +1403,9 @@
     '30d': { label: '30 days', unit: 'day' },
     '12w': { label: '12 weeks', unit: 'week' },
   };
-  const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   const actHours = (h) => (h > 0 ? Sessions.formatDuration(h) : '0h');
-  const actDay = (ts) => { const d = new Date(ts); return `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`; };
+  const actDay = (ts) => fmtDay(ts, { month: 'short', day: 'numeric' });
 
   // round the top of the scale up to a number a person would draw
   function actNiceMax(max) {
@@ -1385,21 +1413,20 @@
     return steps.find((v) => v >= max) || Math.ceil(max / 50) * 50;
   }
 
-  // "Today", "Yesterday", or "Tue, Nov 10"
+  // "Today", "Yesterday", or "Tue, Nov 10" / "Tue 10 Nov"
   function actRelDay(ts, now) {
     const d = new Date(ts);
     const a = new Date(now);
     const days = Math.round((new Date(a.getFullYear(), a.getMonth(), a.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
     if (days === 0) return 'Today';
     if (days === 1) return 'Yesterday';
-    return `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(ts)}`;
+    return fmtDay(ts, { weekday: 'short', month: 'short', day: 'numeric' });
   }
 
   // One line that says what a run of play was, the way a person would.
   function actRunSub(run, now) {
     if (run.days > 1) {
-      const from = new Date(run.from), to = new Date(run.to);
-      const range = from.getMonth() === to.getMonth() ? `${actDay(run.from)} – ${to.getDate()}` : `${actDay(run.from)} – ${actDay(run.to)}`;
+      const range = fmtDayRange(run.from, run.to);
       const end = actRelDay(run.to, now);
       return `${run.days} days in a row · ${end === 'Today' ? 'through today' : end === 'Yesterday' ? 'until yesterday' : range}`;
     }
@@ -1526,7 +1553,7 @@
     const CHEV = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
     const times = (items) => (items.length > 2
       ? `${items.length} sessions, from ${hhmm(items[0].start)}`
-      : items.map((i) => `${hhmm(i.start)} – ${hhmm(i.end)}`).join(', '));
+      : items.map((i) => hhmmRange(i.start, i.end)).join(', '));
     const dayHtml = (d) => {
       const open = state._actDay.day === d.day;
       const n = d.games.length;
@@ -1553,7 +1580,7 @@
           ${tile('Last 7 days', actHours(week), esc(weekNote))}
           ${tile('Games played', `${weekGames.size}`, weekGames.size ? `in the last 7 days${mostName ? `, most of all ${esc(mostName)}` : ''}` : 'in the last 7 days')}
           ${tile('Days in a row', `${streak.current}`, streak.current ? `Your best: ${streak.best}` : (streak.best ? `Play today to start again. Your best: ${streak.best}` : 'Play today to start'))}
-          ${tile('All time', actHours(allHours), `${stats.count.toLocaleString()} session${stats.count === 1 ? '' : 's'} saved`)}
+          ${tile('All time', actHours(allHours), `${fmtNum(stats.count)} session${stats.count === 1 ? '' : 's'} saved`)}
         </div>
         <section class="act-card act-playtime">
           <div class="act-card-head">
@@ -1663,8 +1690,7 @@
       on = slot;
       slot.classList.add('is-hover');
       const b = buckets[Number(slot.dataset.i)];
-      const d = new Date(b.start);
-      const when = unit === 'day' ? `${WEEKDAY_SHORT[d.getDay()]}, ${actDay(b.start)}` : `Week of ${actDay(b.start)}`;
+      const when = unit === 'day' ? fmtDay(b.start, { weekday: 'short', month: 'short', day: 'numeric' }) : `Week of ${actDay(b.start)}`;
       const list = (b.games || []).slice(0, 4).map(([name, h]) => `<span class="act-tip-game"><em>${esc(name)}</em>${esc(Sessions.formatDuration(h))}</span>`).join('');
       const more = (b.games || []).length > 4 ? `<span>and ${b.games.length - 4} more</span>` : '';
       tip.innerHTML = `<b>${esc(when)} · ${b.hours > 0 ? esc(Sessions.formatDuration(b.hours)) : 'no play'}</b>${list}${more}`;
@@ -1767,7 +1793,7 @@
   }
   function wishMoney(d) {
     if (!d || typeof d.amount !== 'number') return '';
-    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: d.currency || 'USD' }).format(d.amount); } catch (_) { return String(d.amount); }
+    try { return new Intl.NumberFormat(LOC, { style: 'currency', currency: d.currency || 'USD' }).format(d.amount); } catch (_) { return String(d.amount); }
   }
   function wishOnSale(g) { const p = wishPrice(g); return !!(p && p.current && p.current.cut > 0); }
   function loadWishPrices(list) {
@@ -2024,7 +2050,7 @@
     const list = wishOrder();
     const sale = list.filter(wishOnSale).length;
     const soon = list.filter((g) => { const m = wishMeta(g); return m && m.release && m.release.soon; }).length;
-    const bits = [`${list.length.toLocaleString()} game${list.length === 1 ? '' : 's'} you want`];
+    const bits = [`${fmtNum(list.length)} game${list.length === 1 ? '' : 's'} you want`];
     if (sale) bits.push(`<b>${sale} on sale</b>`);
     if (soon) bits.push(`${soon} coming soon`);
     view.querySelector('[data-wl-sub]').innerHTML = list.length ? bits.join(' · ') : 'The games you want next, in one place.';
@@ -2459,13 +2485,15 @@
     tile._name = name;
     tile._r = r;
     tile.title = name;
-    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup()}<span class="shelf-tile-label">${esc(name)}</span>${!r ? '' : r >= Rating.PEAK ? `<span class="tile-rating is-peak peak-strap" data-id="${esc(String(g.id))}" data-peak-open title="Your best game ever">${PEAK_BAND}</span>` : `<span class="tile-rating">${ratingChipHtml(r, String(g.id))}</span>`}`;
+    const initials = GVLocale.initials(name);
+    tile.style.setProperty('--card-hue', String(cardHue(name)));
+    tile.innerHTML = `${src ? `<img src="${esc(toFileUrl(src))}" loading="lazy" decoding="async" width="172" height="236" alt="" />` : coverFallbackMarkup(initials)}<span class="shelf-tile-label">${esc(name)}</span>${!r ? '' : r >= Rating.PEAK ? `<span class="tile-rating is-peak peak-strap" data-id="${esc(String(g.id))}" data-peak-open title="Your best game ever">${PEAK_BAND}</span>` : `<span class="tile-rating">${ratingChipHtml(r, String(g.id))}</span>`}`;
     const img = tile.querySelector('img');
     fadeInOnLoad(img);
     if (img) {
       img.addEventListener('error', () => {
         if (!img.isConnected) return;
-        img.insertAdjacentHTML('afterend', coverFallbackMarkup());
+        img.insertAdjacentHTML('afterend', coverFallbackMarkup(initials));
         img.remove();
       }, { once: true });
     }
@@ -2779,14 +2807,16 @@
     const posterBack = shelfDom.posters[back];
 
     const posterSrc = g._cover || g.coverUrl;
-    const visualKey = `${art}|${posterSrc}`;
+    // games with no cover differ by their initials and tint
+    const visualKey = `${art}|${posterSrc}|${posterSrc ? '' : g.name}`;
     if (state._stageVisual !== visualKey) {
       const oldArt = shelfDom.arts[shelfDom.front];
       state._stageVisual = visualKey;
       artBack.style.backgroundImage = art ? cssUrl(art) : '';
       artBack.classList.toggle('is-fallback', !heroArt && !!art);
       posterBack.style.backgroundImage = posterSrc ? cssUrl(posterSrc) : '';
-      posterBack.innerHTML = posterSrc ? '' : coverFallbackMarkup();
+      posterBack.innerHTML = posterSrc ? '' : coverFallbackMarkup(GVLocale.initials(g.name));
+      posterBack.style.setProperty('--card-hue', String(cardHue(g.name)));
       posterBack.classList.toggle('is-empty', !posterSrc);
       posterBack.style.display = '';
 
@@ -2849,8 +2879,8 @@
   // Grid (built once, toggled afterwards)
   // ---------------------------------------------------------------------------
 
-  function coverFallbackMarkup() {
-    return `<span class="cover-fallback" aria-hidden="true">
+  function coverFallbackMarkup(initials) {
+    return `<span class="cover-fallback" aria-hidden="true"${initials ? ` data-initials="${esc(initials)}"` : ''}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>
         <path d="M6 11h4M8 9v4"/>
@@ -2860,17 +2890,9 @@
   }
 
   // Cards without artwork get a tint and initials derived from the title, so
-  // a library of fallbacks still reads as distinct games.
-  const CARD_LETTER = /\p{L}\p{M}*/u;
-  function cardInitials(name) {
-    const out = [];
-    for (const word of String(name || '').split(/\s+/)) {
-      const m = CARD_LETTER.exec(word);
-      if (m) out.push(m[0].normalize('NFC').toLocaleUpperCase());
-      if (out.length === 2) break;
-    }
-    return out.join('') || '?';
-  }
+  // a library of fallbacks still reads as distinct games (any script: see
+  // GVLocale.initials).
+  const cardInitials = (name) => GVLocale.initials(name);
   function cardHue(name) {
     let h = 0;
     for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) % 360;
@@ -2882,7 +2904,7 @@
     if (days <= 0) return 'today';
     if (days === 1) return 'yesterday';
     if (days < 7) return `${days} days ago`;
-    if (days < 30) return `${Math.floor(days / 7)} wk ago`;
+    if (days < 30) { const w = Math.floor(days / 7); return w === 1 ? 'a week ago' : `${w} weeks ago`; }
     return fmtDate(ts);
   }
 
@@ -3219,9 +3241,15 @@
     return `<span class="gvx-timer-label">${label}</span><span class="gvx-timer-value" data-timer-value>${value}</span>`;
   }
 
-  function hhmm(ts) {
-    const d = new Date(ts);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  // Clock times in the region's 12- or 24-hour style: '4:46 PM' / '16:46';
+  // a range on one day shares its AM/PM: '4:46 – 6:02 PM'
+  function hhmm(ts) { return TIME_FMT.format(new Date(ts)); }
+  function hhmmRange(a, b) {
+    const x = new Date(a), y = new Date(b);
+    if (x.toDateString() === y.toDateString()) {
+      try { return TIME_FMT.formatRange(x, y); } catch (_) { /* below */ }
+    }
+    return `${hhmm(a)} – ${hhmm(b)}`;
   }
 
   // Whether the rail has anything beyond the always-present "At a glance"
@@ -3383,7 +3411,7 @@
         <div class="gvx-hero-body" tabindex="-1" aria-label="${esc(g.name)}">
           ${logo
             ? `<span class="gv-logo3d" data-logo3d><img class="gvx-logo" src="${esc(toFileUrl(logo))}" alt="${esc(g.name)}" /><i class="gv-logo-sheen" style="--logo:${esc(cssUrl(logo))}" aria-hidden="true"><b></b></i></span>`
-            : `<h1 class="gvx-title">${esc(g.name)}</h1>`}
+            : `<h1 class="gvx-title" title="${esc(g.name)}">${esc(g.name)}</h1>`}
           <div class="gvx-meta">${detailMeta(g)}</div>
           <div class="gvx-play-row">
             ${wish
@@ -3433,7 +3461,7 @@
     if (heroImg && heroImg.tagName === 'IMG') heroImg.addEventListener('error', () => heroImg.classList.add('is-empty'));
     const logoImg = view.querySelector('.gvx-logo');
     logoTilt(view.querySelector('[data-logo3d]'));
-    if (logoImg) logoImg.addEventListener('error', () => { (logoImg.closest('[data-logo3d]') || logoImg).remove(); view.querySelector('.gvx-hero-body').insertAdjacentHTML('afterbegin', `<h1 class="gvx-title">${esc(g.name)}</h1>`); });
+    if (logoImg) logoImg.addEventListener('error', () => { (logoImg.closest('[data-logo3d]') || logoImg).remove(); view.querySelector('.gvx-hero-body').insertAdjacentHTML('afterbegin', `<h1 class="gvx-title" title="${esc(g.name)}">${esc(g.name)}</h1>`); });
 
     if (!wish) paintLedger(g);
     wireDetail(g, wish);
@@ -3456,7 +3484,7 @@
     const typical = realDays.length ? realDays.reduce((t, d) => t + d.hours, 0) / realDays.length : 0;
     const best = days.reduce((a, d) => (!a || d.hours > a.hours ? d : a), null);
     const first = days.length ? days[days.length - 1].day : 0;
-    const since = first ? new Date(first).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : '';
+    const since = first ? fmtDay(first, { month: 'long', year: 'numeric' }) : '';
     const habit = sessionHabitText(Sessions.habits(sessions));
     return `
       <div class="gvx-ses-stats">
@@ -3484,7 +3512,7 @@
   // "June 2026", in the user's own language
   function monthTitle(key) {
     const [y, m] = String(key).split('-').map(Number);
-    return esc(new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }));
+    return esc(fmtDay(new Date(y, m - 1, 1), { month: 'long', year: 'numeric' }));
   }
 
   function paintLedger(g) {
@@ -3531,7 +3559,7 @@
       for (const row of month.rows) {
         if (rendered >= MAX_ROWS) break;
         if (row.kind === 'brief') {
-          const range = row.days > 1 ? `${actDay(row.from)} – ${new Date(row.to).getDate()}` : actDay(row.to);
+          const range = row.days > 1 ? fmtDayRange(row.from, row.to) : actDay(row.to);
           inner.push(`<div class="gvx-row is-brief" role="listitem">
             <span class="gvx-row-date"><b>·</b></span>
             <span class="gvx-row-note">${row.count} quick launch${row.count === 1 ? '' : 'es'} · ${range}</span>
@@ -3543,16 +3571,16 @@
           const date = `<span class="gvx-row-date"><i>${SES_WD[d.getDay()]}</i><b>${d.getDate()}</b></span>`;
           const dur = `<span class="gvx-row-dur">${Sessions.formatDuration(row.hours)}</span>`;
           if (!many) {
-            const when = `${hhmm(row.first)} – ${hhmm(row.last)}`;
+            const when = hhmmRange(row.first, row.last);
             inner.push(`<div class="gvx-row" role="listitem" aria-label="${esc(`${fmtDate(row.day)}: ${Sessions.formatDuration(row.hours)}, ${when}`)}">
               ${date}${bar(row.hours, longestDay)}<span class="gvx-row-when" aria-hidden="true">${when}</span>${dur}
             </div>`);
           } else {
             // more than one session that day: a button that opens them
             const dayOpen = openState.day === row.day;
-            const subs = dayOpen ? row.items.map((it) => `<div class="gvx-row is-sub" role="listitem" aria-label="${esc(`${hhmm(it.start)} to ${hhmm(it.end)}: ${Sessions.formatDuration(it.duration)}`)}">
+            const subs = dayOpen ? row.items.map((it) => `<div class="gvx-row is-sub" role="listitem" aria-label="${esc(`${hhmmRange(it.start, it.end)}: ${Sessions.formatDuration(it.duration)}`)}">
                 <span class="gvx-row-date" aria-hidden="true"></span>${bar(it.duration, longestDay)}
-                <span class="gvx-row-when" aria-hidden="true">${hhmm(it.start)} – ${hhmm(it.end)}</span>
+                <span class="gvx-row-when" aria-hidden="true">${hhmmRange(it.start, it.end)}</span>
                 <span class="gvx-row-dur" aria-hidden="true">${Sessions.formatDuration(it.duration)}</span>
               </div>`).join('') : '';
             inner.push(`<div class="gvx-dgroup${dayOpen ? ' is-open' : ''}">
@@ -4722,7 +4750,7 @@
   function syncSidePill() {
     const pill = document.querySelector('.side-pill');
     const side = document.querySelector('.sidebar');
-    const active = side && side.querySelector('.side-item.is-active:not(.side-wish):not(.side-act)');
+    const active = side && side.querySelector('.side-item.is-active:not(.side-wish):not(.side-act):not([data-rail-action])');
     if (!pill || !side) return;
     pill.classList.toggle('is-away', !active);
     // when it comes back it appears in place instead of flying in
@@ -6066,7 +6094,7 @@
       const bits = [];
       if (c.wishlisted) bits.push('Wishlist · not owned yet');
       else if (c.source) bits.push(c.source);
-      if (c.hours > 0) bits.push(`${Number(c.hours).toFixed(1).replace(/\.0$/, '')}h`);
+      if (c.hours > 0) bits.push(`${fmtNum(c.hours, 1)}h`);
       if (c.kind) bits.push(c.kind);
       return bits.join(' · ') || 'Game';
     };
@@ -6574,7 +6602,7 @@
     if (s < 45) return 'just now';
     if (s < 3600) return `${Math.round(s / 60)} min ago`;
     if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-    return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: s > 300 * 86400 ? 'numeric' : undefined });
+    return fmtDay(t, { day: 'numeric', month: 'short', year: s > 300 * 86400 ? 'numeric' : undefined });
   }
   const mb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
@@ -6841,7 +6869,14 @@
       const res = await api.savesRestore({ gameId: String(g.id), backupId: id, saveDir: g.saveDir });
       ui.busy = null;
       if (res && res.ok) toast(`Restored ${res.data.files} file${res.data.files === 1 ? '' : 's'}. Your previous saves were kept in GameVault’s cloud folder.`, 'ok');
-      else toast((res && res.error && res.error.message) || 'Restore failed', 'error');
+      else {
+        problemDialog({
+          title: 'Saves weren’t restored',
+          body: `The backup of <b>${esc(g.name || 'this game')}</b> couldn’t be put back. Check that the game is closed and its save folder is still there, then try again.`,
+          detail: (res && res.error && res.error.message) || '',
+          fallback: (res && res.error && res.error.message) || 'Restore failed',
+        });
+      }
       paintSavesCard(g);
     }
   }
@@ -6861,6 +6896,19 @@
 
   function settingsView() { return $('#settings-view'); }
 
+  // While Settings is open the nav says so: its own item lit (no pill, like
+  // Activity), the library tabs off, and the library-only sort and layout
+  // buttons out of the top bar
+  function markSettingsNav(on) {
+    $('#main')?.classList.toggle('is-settings', on);
+    for (const btn of $$('.tab[data-filter]')) btn.classList.toggle('is-active', !on && btn.dataset.filter === state.filter);
+    for (const b of $$('.side-item[data-rail-action="btn-settings"]')) {
+      b.classList.toggle('is-active', on);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    }
+    syncSidePill();
+  }
+
   async function openSettings(section) {
     if (state.selectedId) closeDetail();
     const view = settingsView();
@@ -6878,6 +6926,7 @@
     if ($('#activity-view')) $('#activity-view').hidden = true;
     const fb = $('#filterbar'); if (fb) fb.hidden = true;
     view.hidden = false;
+    markSettingsNav(true);
     const title = $('#filter-title'); if (title) title.textContent = 'Settings';
     document.title = 'Settings — GameVault';
     await renderSettings();
@@ -6892,6 +6941,7 @@
     state.settingsOpen = false;
     view.hidden = true;
     view.innerHTML = '';
+    markSettingsNav(false);
     const fb = $('#filterbar'); if (fb) fb.hidden = false;
     const title = $('#filter-title'); if (title) title.textContent = filterLabel(state.filter);
     renderLibrary();
@@ -6910,14 +6960,14 @@
       view.innerHTML = `
         <div class="st-wrap">
           <nav class="st-nav" aria-label="Settings sections" data-pad-region="st-nav">
-            <button type="button" class="st-back" data-st-close>
+            <button type="button" class="st-back" data-st-close title="Back to the library">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
               Library
             </button>
             <div class="st-nav-title">Settings</div>
             <div class="st-tabs" role="tablist" aria-orientation="vertical" data-pad-enter>
               ${SETTINGS_SECTIONS.map((s) => `
-                <button type="button" class="st-tab" role="tab" id="st-tab-${s.id}" data-st-section="${s.id}" aria-controls="st-panel">
+                <button type="button" class="st-tab" role="tab" id="st-tab-${s.id}" data-st-section="${s.id}" aria-controls="st-panel" title="${esc(s.label)}">
                   ${stIcon(s.icon)}<span>${esc(s.label)}</span>
                 </button>`).join('')}
             </div>
@@ -7945,7 +7995,7 @@
       if (state.live[id] !== 'launching') return;
       delete state.live[id];
       refreshGameUi(state.games.find((x) => String(x.id) === id));
-      toast(`${g.name || 'The game'} was launched, but GameVault couldn't detect it running — playtime isn't being tracked`, 'error');
+      showNotTracked(state.games.includes(g) ? g : null);
     }, LAUNCH_TIMEOUT_MS));
   }
 
@@ -7958,6 +8008,146 @@
     const parts = lines.slice(0, 2).map((s) => (isPath(s) ? baseName(s) : s));
     const text = parts.join(' ');
     return text.length > 200 ? `${text.slice(0, 197)}…` : text;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Problem dialogs: a failure the user has to act on gets a dialog that says
+  // what happened and offers the fix (a toast is gone before it is read).
+  // With another dialog open it falls back to a toast, so it never replaces
+  // what the user is doing.
+  // ---------------------------------------------------------------------------
+
+  // actions: [{ label, primary, side, keepOpen, run(card) }]
+  function problemDialog({ title, body, detail = '', actions = [], fallback = '' }) {
+    const wrap = $('#modal');
+    if (wrap && !wrap.hidden && !wrap.classList.contains('is-closing')) {
+      toast(fallback || title, 'error');
+      return null;
+    }
+    const list = actions.length ? actions : [{ label: 'OK', primary: true }];
+    const card = openModal(`
+      <div class="modal-head">
+        <h2>${esc(title)}</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body rm-body">
+        <p class="rm-text">${body}</p>
+        ${detail ? `<p class="err-detail">${esc(detail)}</p>` : ''}
+      </div>
+      <div class="modal-foot">
+        ${list.map((a, i) => `<button class="btn ${a.primary ? 'btn-primary' : 'btn-ghost'}${a.side ? ' is-side' : ''}" data-act="${i}"${a.primary ? ' data-autofocus' : ''}>${esc(a.label)}</button>`).join('')}
+      </div>`, { className: 'rm-modal err-modal' });
+    if (!card) return null;
+    card.querySelector('[data-close]').onclick = closeModal;
+    for (const btn of card.querySelectorAll('[data-act]')) {
+      const a = list[Number(btn.dataset.act)];
+      btn.onclick = async () => {
+        if (a.keepOpen) {
+          btn.disabled = true;
+          try { await (a.run && a.run(card)); } finally { btn.disabled = false; }
+          return;
+        }
+        closeModal();
+        if (a.run) a.run(card);
+      };
+    }
+    return card;
+  }
+
+  // Play on a game with no program, or one whose .exe has gone: choose it
+  // here, then it starts. missingPath is where the old one was.
+  function askForExe(g, { missingPath = '' } = {}) {
+    if (!g) return;
+    const name = g.name || 'this game';
+    const what = IS_WINDOWS ? '.exe' : 'program';
+    problemDialog({
+      title: missingPath ? `Can’t find the game’s ${what}` : `Choose the game’s ${what}`,
+      body: missingPath
+        ? `The ${what} GameVault starts for <b>${esc(name)}</b> isn’t there any more. It may have been moved or deleted, or its drive is disconnected. Choose it again to keep playing.`
+        : `GameVault doesn’t know which ${what} starts <b>${esc(name)}</b> yet. Choose it once and Play works from then on.`,
+      detail: missingPath,
+      fallback: missingPath ? `Can’t find ${baseName(missingPath)}` : `Choose the ${what} for ${name} first`,
+      actions: [
+        { label: 'More settings', side: true, run: () => { if (state.games.includes(g)) openGameModal(g); } },
+        { label: 'Cancel' },
+        {
+          label: `Choose the ${what}…`, primary: true, keepOpen: true,
+          run: async () => {
+            const file = await api.pickExe(missingPath || g.installDir || '');
+            if (!file) return;
+            closeModal();
+            if (!state.games.includes(g)) return;
+            g.exePath = file;
+            saveGamesSoon();
+            refreshGameUi(g);
+            togglePlay(g.id);
+          },
+        },
+      ],
+    });
+  }
+
+  const openedBefore = new Map();
+  function undoOpened(g) {
+    const key = g && String(g.id);
+    if (!key || !openedBefore.has(key)) return;
+    const was = openedBefore.get(key);
+    openedBefore.delete(key);
+    if (was == null) delete g.lastOpened; else g.lastOpened = was;
+    saveGamesSoon();
+    refreshCounts();
+  }
+
+  // The launch failed: say why, and offer what can fix it
+  function showLaunchProblem(g, { error, code, path: where, isExe } = {}) {
+    if (g && code === 'NOT_FOUND' && isExe) { askForExe(g, { missingPath: where || g.exePath || '' }); return; }
+    const name = (g && g.name) || 'The game';
+    const lines = String(error == null ? '' : error).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    // the generic first line adds nothing; the reason and path follow it
+    const detail = lines.filter((l) => !/^failed to launch game:?$/i.test(l)).join('\n');
+    // Node's spawn codes, in plain words
+    const hint = /\b(UNKNOWN|ENOEXEC)\b/.test(detail) ? 'Windows couldn’t run the file. It may not be a working program, it may need to run as administrator, or antivirus may have blocked it.'
+      : /\b(EACCES|EPERM)\b/.test(detail) ? 'Windows didn’t allow it to run. It may need to run as administrator, or antivirus may have blocked it.'
+        : /\bENOENT\b/.test(detail) ? 'The file or its folder wasn’t found.'
+          : detail ? 'This is what went wrong:' : '';
+    problemDialog({
+      title: 'Couldn’t start the game',
+      body: `<b>${esc(name)}</b> didn’t start.${hint ? ` ${hint}` : ''}`,
+      detail,
+      fallback: launchErrorText(error),
+      actions: g ? [
+        { label: 'Edit game', side: true, run: () => { if (state.games.includes(g)) openGameModal(g); } },
+        { label: 'Close' },
+        { label: 'Try again', primary: true, run: () => togglePlay(g.id) },
+      ] : [],
+    });
+  }
+
+  // Launched, but GameVault never saw it running, so the session isn't
+  // timed. Asked once per game per run of the app; after that a toast.
+  const untrackedAsked = new Set();
+  function showNotTracked(g) {
+    const name = (g && g.name) || 'The game';
+    const msg = `${name} launched, but GameVault never saw it running. Edit → Launch & tracking to pick what to track`;
+    if (!g || untrackedAsked.has(String(g.id))) { toast(msg, 'error'); return; }
+    untrackedAsked.add(String(g.id));
+    problemDialog({
+      title: 'This session isn’t being timed',
+      body: `<b>${esc(name)}</b> was started, but GameVault never saw it running, so this session isn’t counted. This usually means the ${IS_WINDOWS ? '.exe' : 'program'} is only a launcher. Pick the program that really runs the game, while it’s running.`,
+      fallback: msg,
+      actions: [
+        { label: 'Not now' },
+        {
+          label: 'Pick what to track', primary: true,
+          run: () => {
+            if (!state.games.includes(g)) return;
+            openGameModal(g);
+            const adv = $('#modal .adv-launch');
+            if (adv) { adv.open = true; adv.scrollIntoView({ block: 'nearest' }); }
+          },
+        },
+      ],
+    });
   }
 
   function togglePlay(id) {
@@ -7994,12 +8184,13 @@
     }
 
     if (!g.exePath && !g.steamAppId) {
-      toast('No executable set for this game', 'error');
-      openGameModal(g);
+      askForExe(g);
       return;
     }
 
     sfx('launch');
+    // a launch that fails puts this back (it must not count as playing)
+    openedBefore.set(key, g.lastOpened);
     g.lastOpened = Date.now();
     saveGamesSoon();
     state.live[key] = 'launching';
@@ -8344,19 +8535,19 @@
       const g = findGame(id);
       refreshGameUi(g);
       const name = (g && g.name) || 'The game';
-      toast(reason === 'untracked'
-        ? `${name} launched — playtime tracking is off for this game`
-        : `${name} launched, but GameVault never saw it running. Edit → Launch & tracking to pick what to track`,
-      reason === 'untracked' ? 'ok' : 'error');
+      if (reason === 'untracked') toast(`${name} launched — playtime tracking is off for this game`, 'ok');
+      else showNotTracked(g);
     });
 
-    if (api.onLaunchError) api.onLaunchError(({ gameId, error }) => {
-      const id = String(gameId || '');
+    if (api.onLaunchError) api.onLaunchError((info) => {
+      const id = String((info && info.gameId) || '');
       if (id) clearLaunchWatchdog(id);
       if (id && Object.prototype.hasOwnProperty.call(state.live, id)) delete state.live[id];
       if (id && state.liveStart) delete state.liveStart[id];
-      toast(launchErrorText(error), 'error');
-      refreshGameUi(findGame(id));
+      const g = id ? findGame(id) : null;
+      undoOpened(g);
+      refreshGameUi(g);
+      showLaunchProblem(g, info || {});
     });
 
     if (api.onTrackingDetected) api.onTrackingDetected(({ gameId, gameName }) => {
@@ -8459,7 +8650,13 @@
       }
     } catch (e) {
       console.error('boot:', e);
-      toast('Could not load the library', 'error');
+      problemDialog({
+        title: 'Couldn’t load your library',
+        body: 'GameVault couldn’t read your games. Nothing has been changed or deleted. Reload to try again.',
+        detail: String((e && e.message) || e || ''),
+        fallback: 'Could not load the library',
+        actions: [{ label: 'Close' }, { label: 'Reload', primary: true, run: () => location.reload() }],
+      });
     }
 
     // one-time status model migration: Dropped → Playing, Want → Wishlist
@@ -9341,6 +9538,14 @@
       if (tb) tb.classList.toggle('is-scrolled', libScroll.scrollTop > 4);
     }, { passive: true });
   }
+  // the game page's hero runs under the top row at rest; once scrolled,
+  // Big Picture fades the page out under that row (style.css)
+  const gameScroll = $('#game-view');
+  if (gameScroll) {
+    gameScroll.addEventListener('scroll', () => {
+      gameScroll.classList.toggle('is-scrolled', gameScroll.scrollTop > 40);
+    }, { passive: true });
+  }
 
   const sideAcct = $('#side-account');
   if (sideAcct) sideAcct.onclick = () => openSettings('account');
@@ -9369,20 +9574,7 @@
       chart: '<path d="M4 20h16"/><path d="M7 16v-4M12 16V6M17 16v-7"/>'
     };
     const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    // First letter of the first two words that have one: letters only (any
-    // script), combining marks kept with their base so "Å" written as A+ring
-    // stays whole; punctuation, dashes, digits and emoji are skipped.
-    // "Ørkenvandrer — Ångström" → "ØÅ".
-    const LETTER = /\p{L}\p{M}*/u;
-    const initials = (t) => {
-      const out = [];
-      for (const word of String(t || '').split(/\s+/)) {
-        const m = LETTER.exec(word);
-        if (m) out.push(m[0].normalize('NFC').toLocaleUpperCase());
-        if (out.length === 2) break;
-      }
-      return out.join('') || '?';
-    };
+    const initials = (t) => GVLocale.initials(t);
     const mark = (t, q) => {
       if (!q) return esc(t);
       const i = String(t).toLowerCase().indexOf(String(q).toLowerCase());
@@ -10573,7 +10765,7 @@
   function bpStartClock() {
     const el = $('#bp-clock');
     const tick = () => {
-      if (el) el.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (el) el.textContent = new Date().toLocaleTimeString(LOC, { hour: 'numeric', minute: '2-digit' });
     };
     tick();
     clearInterval(bp.clock);
