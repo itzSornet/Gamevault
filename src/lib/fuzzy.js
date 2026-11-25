@@ -14,7 +14,8 @@
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
+      // letters and digits of every script (日本語, 한국어, кириллица), not just a-z
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
       .trim();
   }
 

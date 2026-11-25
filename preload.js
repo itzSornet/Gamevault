@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Games data
   loadGames:   () => ipcRenderer.invoke('games:load'),
+  loadIssue:   () => ipcRenderer.invoke('games:load-issue'),
   saveGames:   (g) => ipcRenderer.invoke('games:save', g),
   backupGames: () => ipcRenderer.invoke('games:backup'),
   getDataPath: () => ipcRenderer.invoke('games:data-path'),

@@ -472,3 +472,24 @@ test('formatDuration: thousands of hours get the locale separator', () => {
   setLocale('en-US');
   assert.equal(fd(999), '999h');
 });
+
+test('ledger: brief days only fold with the day next to them', () => {
+  const list = [mk(dayAt(2026, 10, 1, 10), 0.5 / 60), mk(dayAt(2026, 10, 20, 10), 0.5 / 60)];
+  const rows = Sx.ledger(list).months[0].rows;
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((r) => r.kind === 'brief' && r.days === 1));
+});
+
+test('dayGroups: overlapping sessions count their shared time once', () => {
+  // 13:00-17:00 and 15:00-17:00 on one day: 4 hours, not 6
+  const a = mk(dayAt(2026, 10, 18, 13), 4);
+  const b = mk(dayAt(2026, 10, 18, 15), 2);
+  const day = Sx.ledger([a, b]).months[0].rows[0];
+  assert.equal(day.hours, 4);
+});
+
+test('dayGroups: brief is decided before rounding', () => {
+  // 2.05 minutes is not a quick launch
+  const row = Sx.ledger([mk(dayAt(2026, 10, 3, 9), 2.05 / 60)]).months[0].rows[0];
+  assert.equal(row.kind, 'day');
+});

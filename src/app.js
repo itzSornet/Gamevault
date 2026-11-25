@@ -59,6 +59,9 @@
 
   const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+  // Names compared for "same game": letters and digits of any script, case
+  // and width folded ('ゼルダの伝説' stays itself, not '')
+  const nameKey = (x) => String(x || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
   // Dates and numbers: English words, in the order and separators of the
   // user's regional format (lib/locale.js)
@@ -367,7 +370,15 @@
 
   /** Change some prefs, apply them now, save them (and stamp the change for sync). */
   function setUi(patch, { persist = true } = {}) {
-    const next = UiPrefs.normalize({ ...(state.ui || state.config.ui), ...patch });
+    // the background file failed to load and fluid is only shown for now: other
+    // changes keep the saved choice, so a missing file is never written over it
+    let base = state.ui || state.config.ui;
+    const wanted = state._uiWanted;
+    state._uiWanted = null;
+    if (wanted && !('background' in patch) && !('backgroundFile' in patch) && !('backgroundKind' in patch)) {
+      base = { ...base, background: wanted.background, backgroundFile: wanted.backgroundFile, backgroundKind: wanted.backgroundKind };
+    }
+    const next = UiPrefs.normalize({ ...base, ...patch });
     applyUi(next);
     if (persist) {
       saveConfigPatch({ ui: next, uiAt: Date.now() });
@@ -503,10 +514,15 @@
       const withArt = state.games.filter((g) => artOf(g));
       return withArt.sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))[0] || null;
     };
+    const broken = new Set();
     const missing = (what) => {
       // the copy is gone (cleaned up, another PC's settings): back to the moving colours here only
       if (warned !== what) { warned = what; toast(`Couldn’t load your background ${what}`, 'error'); }
-      if (state.ui) applyUi({ ...state.ui, background: 'fluid' });
+      if (!state.ui || state.ui.background === 'fluid') return;
+      if (state.ui.backgroundFile) broken.add(state.ui.backgroundFile);
+      const wanted = state.ui;
+      applyUi({ ...state.ui, background: 'fluid' });
+      state._uiWanted = wanted; // setUi keeps this as the saved choice
     };
 
     function showImage(url, key, kind) {
@@ -587,7 +603,7 @@
       }, 220);
     }
 
-    return { sync, art, play };
+    return { sync, art, play, isBroken: (file) => !!file && broken.has(file) };
   })();
 
   // The places the sidebar leads to, in order (Ctrl+1..6 and the Go-to menu).
@@ -1491,11 +1507,18 @@
     const buckets = unit === 'day' ? Sessions.dayBuckets(sessions, 30, now) : Sessions.weekBuckets(sessions, 12, now);
     const rangeHours = buckets.reduce((t, b) => t + b.hours, 0);
     // what each bar was made of (for its hover card)
-    const span = unit === 'day' ? 864e5 : 7 * 864e5;
-    for (const b of buckets) b.games = new Map();
+    // each bar ends where the next one starts (calendar days, so a
+    // daylight-saving day of 23 or 25 hours still lines up with its bar)
+    buckets.forEach((b, i) => {
+      b.games = new Map();
+      if (buckets[i + 1]) { b.end = buckets[i + 1].start; return; }
+      const d = new Date(b.start);
+      d.setDate(d.getDate() + (unit === 'day' ? 1 : 7));
+      b.end = d.getTime();
+    });
     for (const x of sessions) {
       if (x.start < buckets[0].start) break;
-      const b = buckets.find((k) => x.start >= k.start && x.start < k.start + span);
+      const b = buckets.find((k) => x.start >= k.start && x.start < k.end);
       if (b) b.games.set(String(x.gameId), (b.games.get(String(x.gameId)) || 0) + x.duration);
     }
     for (const b of buckets) {
@@ -1526,7 +1549,8 @@
 
     // days, newest first, each with the games played that day
     const days = Sessions.daysByGame(sessions, 14);
-    if (!state._actDay || !days.some((d) => d.day === state._actDay.day)) state._actDay = { day: days.length ? days[0].day : null };
+    // the newest day starts open; a day the user folded (day: null) stays folded
+    if (!state._actDay || (state._actDay.day !== null && !days.some((d) => d.day === state._actDay.day))) state._actDay = { day: days.length ? days[0].day : null };
 
     // games you started and left: not finished, a few hours in, untouched
     // for three weeks or more; the most recently left first
@@ -1699,10 +1723,25 @@
       const sr = slot.getBoundingClientRect();
       const bar = slot.querySelector('i');
       const topY = bar ? bar.getBoundingClientRect().top : sr.bottom;
-      const half = tip.offsetWidth / 2;
-      const x = Math.min(cr.width - half, Math.max(half, sr.left + sr.width / 2 - cr.left));
-      tip.style.left = `${x}px`;
-      tip.style.top = `${topY - cr.top - 8}px`;
+      const w = tip.offsetWidth;
+      const h = tip.offsetHeight;
+      // above the bar while it fits inside the chart and under the top bar;
+      // a tall bar gets it beside the bar instead, so it never covers the
+      // range switch above the chart or slides under the top bar
+      const pane = view.getBoundingClientRect();
+      const minTop = Math.max(cr.top, pane.top + 8);
+      if (topY - 8 - h >= minTop) {
+        const half = w / 2;
+        tip.style.transform = '';
+        tip.style.left = `${Math.min(cr.width - half, Math.max(half, sr.left + sr.width / 2 - cr.left))}px`;
+        tip.style.top = `${topY - cr.top - 8}px`;
+      } else {
+        const right = sr.right + 10 + w <= cr.right;
+        const y = Math.min(cr.bottom - h, Math.max(minTop, topY));
+        tip.style.transform = 'none';
+        tip.style.left = `${(right ? sr.right + 10 : sr.left - 10 - w) - cr.left}px`;
+        tip.style.top = `${y - cr.top}px`;
+      }
     });
     chart.addEventListener('pointerleave', hide);
   }
@@ -1731,10 +1770,18 @@
   }
   function wishMeta(g) { return g.steamMeta && g.steamMeta.version === 3 ? g.steamMeta : null; }
 
+  // Whole calendar days between then and today, in local time: last night
+  // at 23:00 is "yesterday" at 09:00 (rounding absorbs 23/25-hour DST days)
+  function calendarDaysAgo(ts) {
+    const a = new Date(Number(ts)); a.setHours(0, 0, 0, 0);
+    const b = new Date(); b.setHours(0, 0, 0, 0);
+    return Math.round((b - a) / 86400000);
+  }
+
   function wishAgo(ts) {
     const t = Number(ts);
     if (!t) return '';
-    const days = Math.floor((Date.now() - t) / 86400000);
+    const days = calendarDaysAgo(t);
     if (days < 1) return 'today';
     if (days < 2) return 'yesterday';
     if (days < 14) return `${days} days ago`;
@@ -1792,8 +1839,11 @@
     return found;
   }
   function wishMoney(d) {
-    if (!d || typeof d.amount !== 'number') return '';
-    try { return new Intl.NumberFormat(LOC, { style: 'currency', currency: d.currency || 'USD' }).format(d.amount); } catch (_) { return String(d.amount); }
+    if (!d || typeof d.amount !== 'number' || !Number.isFinite(d.amount)) return '';
+    if (d.amount === 0) return 'Free';
+    // no currency in the answer: the number alone, never a guessed dollar sign
+    const fmt = d.currency ? { style: 'currency', currency: d.currency } : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    try { return new Intl.NumberFormat(LOC, fmt).format(d.amount); } catch (_) { return String(d.amount); }
   }
   function wishOnSale(g) { const p = wishPrice(g); return !!(p && p.current && p.current.cut > 0); }
   function loadWishPrices(list) {
@@ -2185,20 +2235,38 @@
     toast(`${g.name} is your top pick`, 'ok');
   }
 
+  // a second click while the first is still animating is ignored
+  const wishBusy = new WeakSet();
+
+  // Leaving the wishlist: a game that was Finished before it was moved to
+  // the wishlist (game page → Move to wishlist) is Finished again
+  function statusOutOfWishlist(g) {
+    const back = g._prevStatus === 'Finished' || g.status === 'Finished' ? 'Finished' : 'Playing';
+    delete g._prevStatus;
+    return back;
+  }
+
   async function wishGot(g) {
+    if (wishBusy.has(g)) return;
+    wishBusy.add(g);
+    const prev = { status: g.status, wishRank: g.wishRank, prevStatus: g._prevStatus };
     const before = wishOrder();
-    if (before[0] === g) await primeWishTop(before[1]);
-    const prev = { status: g.status, wishRank: g.wishRank };
+    try { if (before[0] === g) await primeWishTop(before[1]); } finally { wishBusy.delete(g); }
+    if (!state.games.includes(g) || !gvIsWishlisted(g)) return;
     wishTransition(() => {
       g.wishlisted = false;
-      if (g.status !== 'Finished') g.status = 'Playing';
+      g.status = statusOutOfWishlist(g);
       delete g.wishRank;
     });
     saveGamesSoon();
     state._shelfKey = '';
     const acts = [{ label: 'Undo', run: () => {
       if (!state.games.includes(g)) return;
-      wishTransition(() => { g.wishlisted = true; g.status = prev.status; if (Number.isFinite(prev.wishRank)) g.wishRank = prev.wishRank; });
+      wishTransition(() => {
+        g.wishlisted = true; g.status = prev.status;
+        if (prev.prevStatus) g._prevStatus = prev.prevStatus;
+        if (Number.isFinite(prev.wishRank)) g.wishRank = prev.wishRank;
+      });
       saveGamesSoon();
       state._shelfKey = '';
     } }];
@@ -2207,10 +2275,14 @@
   }
 
   async function wishRemove(g) {
+    if (wishBusy.has(g)) return;
+    wishBusy.add(g);
     const before = wishOrder();
-    if (before[0] === g) await primeWishTop(before[1]);
+    try { if (before[0] === g) await primeWishTop(before[1]); } finally { wishBusy.delete(g); }
     const idx = state.games.indexOf(g);
     if (idx < 0) return;
+    // removed from its own game page: that page closes with it
+    if (state.selectedId === String(g.id)) closeDetail();
     wishTransition(() => { state.games.splice(idx, 1); });
     saveGamesSoon();
     toast(`${g.name} removed from your wishlist`, 'ok', [{ label: 'Undo', run: () => {
@@ -2352,10 +2424,10 @@
     let results = [], active = -1, seq = 0, timer = 0, note = '', pending = null, searching = false;
     const term = () => input.value.trim();
     const close = () => { menu.hidden = true; input.setAttribute('aria-expanded', 'false'); };
-    const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const norm = nameKey;
     const have = (r) => state.games.find((g) => (r.appId && String(g.steamAppId || '') === String(r.appId))
       || (r.sgdbId && String(g.sgdbId || '') === String(r.sgdbId))
-      || norm(g.name) === norm(r.name));
+      || (norm(r.name) !== '' && norm(g.name) === norm(r.name)));
     const yearOf = (d) => {
       const n = Number(d);
       if (!n) return '';
@@ -2900,7 +2972,7 @@
   }
   function relativeDay(ts) {
     if (!ts) return '';
-    const days = Math.floor((Date.now() - ts) / 86400000);
+    const days = calendarDaysAgo(ts);
     if (days <= 0) return 'today';
     if (days === 1) return 'yesterday';
     if (days < 7) return `${days} days ago`;
@@ -3146,6 +3218,7 @@
     if (state.settingsOpen) closeSettings({ restoreFocus: false });
     const active = document.activeElement;
     state._focusReturn = (active && active.id === 'q') ? null : active;
+    state._focusReturnKey = state._focusReturn ? focusKey(state._focusReturn) : null;
     state.selectedId = String(id);
     backdrop.art(state.games.find((x) => String(x.id) === String(id)));
     renderDetail();
@@ -3175,8 +3248,9 @@
     renderLibrary();
     fadeIn(currentPane());
     document.title = 'GameVault';
-    const back = state._focusReturn;
-    if (back && typeof back.focus === 'function') back.focus();
+    // the page under it may have been re-rendered (Activity rebuilds its
+    // rows): find the same control again
+    refocus(state._focusReturn, state._focusReturnKey);
   }
 
   // ---------------------------------------------------------------------------
@@ -3800,7 +3874,8 @@
 
   function moveToLibrary(g) {
     g.wishlisted = false;
-    g.status = 'Playing';
+    g.status = statusOutOfWishlist(g);
+    delete g.wishRank;
     saveGamesSoon();
     state._shelfKey = '';
     renderDetail();
@@ -3848,7 +3923,10 @@
     const near = at < 0 ? null : (shown[at + 1] || shown[at - 1] || null);
     if (state.selectedId === id) closeDetail();
     state.games.splice(idx, 1);
-    if (g.sourceId) importIgnore(g.sourceId, true);
+    // remembered so auto sync doesn't bring it back: by its import id, and
+    // by its Steam id too (games added by hand or synced from another PC
+    // have no import id)
+    for (const key of new Set([g.sourceId, g.steamAppId ? `steam:${g.steamAppId}` : ''].filter(Boolean))) importIgnore(key, true);
     if (state.shelfId === id) state.shelfId = near ? String(near.id) : null;
     state._shelfKey = '';
     renderLibrary();
@@ -4425,12 +4503,16 @@
       roll.style.opacity = p < 0.94 ? '1' : String(Math.max(0, (1 - p) / 0.06).toFixed(3));
     };
     let rafId = 0;
+    let at = 0;          // how far the scroll is unrolled right now (0..1)
+    let closing = false; // Roll it up / Esc pressed: the unroll stops where it is
     const run = (from, to, ms, curve) => new Promise((done) => {
       cancelAnimationFrame(rafId);
       const t0 = performance.now();
       const step = (now) => {
-        const t = Math.min(1, (now - t0) / ms);
-        paint(from + (to - from) * curve(t));
+        if (closing && to > from) { done(); return; }
+        const t = Math.min(1, (now - t0) / Math.max(1, ms));
+        at = from + (to - from) * curve(t);
+        paint(at);
         if (t < 1 && root.isConnected) rafId = requestAnimationFrame(step); else done();
       };
       rafId = requestAnimationFrame(step);
@@ -4461,17 +4543,19 @@
         { transform: 'rotate(-1.2deg)', opacity: 1 },
       ], { duration: 560, easing: ease, fill: 'both' }).finished.catch(() => {});
       sheet.style.opacity = '';
-      if (!root.isConnected) return;
+      if (!root.isConnected || closing) return;
       await run(0, 1, 1250, easeOut);
       busy = false;
-      if (root.isConnected) sfx('success');
+      if (root.isConnected && !closing) sfx('success');
     };
 
+    // also while it is still unrolling: it rolls back up from where it is
     const rollUp = async () => {
-      if (busy) return;
+      if (closing) return;
       if (still) { closeModal(); return; }
+      closing = true;
       busy = true;
-      await run(1, 0, 760, easeIn);
+      await run(at, 0, 760 * Math.max(0.2, at), easeIn);
       if (!root.isConnected) return;
       const { dx, dy, sc } = fromScrap();
       sheet.animate([
@@ -4535,7 +4619,7 @@
         </div>
         <div class="rt-score" data-rt-score aria-live="polite"></div>
         <div class="rt-scale" role="radiogroup" aria-label="Rating out of 10">
-          ${steps.map((n) => `<button type="button" class="rt-step${n === 10 ? ' is-peak' : ''}" role="radio" data-rt="${n}" aria-checked="${Math.round(cur) === n}" aria-label="${n === 10 ? 'PEAK (10)' : n}">${n}</button>`).join('')}
+          ${steps.map((n) => `<button type="button" class="rt-step${n === 10 ? ' is-peak' : ''}" role="radio" data-rt="${n}" aria-checked="${cur === n}" aria-label="${n === 10 ? 'PEAK (10)' : n}">${n}</button>`).join('')}
         </div>
         <div class="rt-foot">
           <input class="rt-input" data-rt-input type="text" inputmode="decimal" maxlength="6" spellcheck="false" placeholder="Type a rating, like 7.5" value="${cur ? esc(cur >= Rating.PEAK ? 'peak' : Rating.label(cur)) : ''}" aria-label="Type a rating" />
@@ -4560,6 +4644,25 @@
     };
     show(cur);
     const done = (r) => { closeModal(); setRating(g, r); };
+    // typed text: a number (7, 7.5, 7,5), a PEAK word, or nothing (clears).
+    // Anything else keeps the dialog open instead of wiping the rating.
+    const typed = () => {
+      const t = input.value.trim();
+      if (!t) return 0;
+      if (/^\d{1,2}([.,]\d)?$/.test(t) || ['peak', 'goated', 'goat'].includes(t.toLowerCase())) return Rating.parse(t);
+      return null;
+    };
+    const saveTyped = () => {
+      const r = typed();
+      if (r === null) {
+        input.classList.add('is-bad');
+        input.setAttribute('aria-invalid', 'true');
+        input.focus();
+        input.select();
+        return;
+      }
+      done(r);
+    };
     for (const b of stepBtns) {
       b.onclick = () => done(Number(b.dataset.rt));
       b.onmouseenter = () => show(Number(b.dataset.rt));
@@ -4578,13 +4681,21 @@
         stepBtns[e.key === '0' ? 9 : Number(e.key) - 1].focus();
       }
     });
-    input.oninput = () => show(Rating.parse(input.value));
-    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); done(input.value); } };
-    card.querySelector('[data-rt-save]').onclick = () => done(input.value);
+    input.oninput = () => {
+      input.classList.remove('is-bad');
+      input.removeAttribute('aria-invalid');
+      const r = typed();
+      show(r === null ? cur : r);
+    };
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveTyped(); } };
+    card.querySelector('[data-rt-save]').onclick = saveTyped;
     const clear = card.querySelector('[data-rt-clear]');
     if (clear) clear.onclick = () => done(0);
-    const start = stepBtns[Math.max(0, Math.round(cur || 8) - 1)];
-    requestAnimationFrame(() => start.focus({ preventScroll: true }));
+    // focus never changes what is shown: a whole-number rating starts on its
+    // step, anything else (8.5, unrated) on the text box, so Enter alone
+    // never rates the game something it wasn't
+    const start = Number.isInteger(cur) && cur >= 1 ? stepBtns[cur - 1] : input;
+    requestAnimationFrame(() => { start.focus({ preventScroll: true }); if (start === input) input.select(); });
   }
 
   // ---------------------------------------------------------------------------
@@ -4593,11 +4704,33 @@
 
   let modalSeq = 0;
 
+  // A way to find "the same control" again after the page re-rendered it
+  // (the rate button, a wishlist card, an Activity row): its id, or its
+  // data-* hook inside the game it belongs to.
+  function focusKey(el) {
+    if (!el || el === document.body || !el.isConnected) return null;
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const attr = [...el.attributes].find((a) => a.name.startsWith('data-') && a.name !== 'data-i');
+    if (!attr) return null;
+    const own = `${el.tagName.toLowerCase()}[${attr.name}${attr.value ? `="${CSS.escape(attr.value)}"` : ''}]${el.dataset.id && attr.name !== 'data-id' ? `[data-id="${CSS.escape(el.dataset.id)}"]` : ''}`;
+    const host = el.dataset.id ? null : el.closest('[data-id]');
+    return host ? `[data-id="${CSS.escape(host.dataset.id)}"] ${own}` : own;
+  }
+  function refocus(el, key) {
+    const target = el && el.isConnected ? el : (key ? document.querySelector(key) : null);
+    if (target && typeof target.focus === 'function' && target.getClientRects().length) {
+      target.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }
+
   function openModal(html, { className = '' } = {}) {
     const wrap = $('#modal');
     sfx('open');
     modalSeq += 1;
     state._modalOpener = document.activeElement;
+    state._modalOpenerKey = focusKey(document.activeElement);
     const app = $('#app');
     if (app) app.inert = true;
     wrap.hidden = false;
@@ -4652,6 +4785,7 @@
     modalSeq += 1;
     const seq = modalSeq;
     const opener = state._modalOpener;
+    const openerKey = state._modalOpenerKey;
     if (app) app.inert = false;
     if (card) card.classList.remove('is-open');
     // while it fades the dialog lets clicks through to the app underneath
@@ -4663,7 +4797,7 @@
       wrap.classList.remove('is-closing');
       wrap.innerHTML = '';
       if (app) app.inert = false;
-      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus({ preventScroll: true });
+      refocus(opener, openerKey);
     }, 320);
   }
 
@@ -5104,7 +5238,7 @@
       // all make a reply stale: never reopen the menu for it
       const stale = () => seq !== comboSeq || !alive() || nameInput.value.trim() !== q || document.activeElement !== nameInput;
       const yearOf = (d) => { const n = Number(d); if (!n) return ''; const y = new Date(n < 1e11 ? n * 1000 : n).getFullYear(); return y > 1970 ? String(y) : ''; };
-      const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const norm = nameKey;
 
       // Steam's store search first: free, fast, and a pick brings Steam's own art
       let steamHits = [];
@@ -5536,18 +5670,30 @@
       const iconUrl = card.querySelector('#f-icon') ? card.querySelector('#f-icon').value.trim() : '';
       const notes = card.querySelector('#f-notes').value;
       const steamAppId = Number(card.querySelector('#f-steam').value) || null;
-      // Playtime only changes when the field was edited; the field shows a
-      // rounded value, so an untouched save must not round the real one.
+      // Playtime only changes when the field was edited (against what it
+      // showed when the dialog opened, so a session that ended meanwhile
+      // keeps its hours); the field shows a rounded value, so an untouched
+      // save must not round the real one.
       const hoursEl = card.querySelector('#f-hours');
       const typedHours = Math.max(0, Number(String(hoursEl.value).replace(',', '.')) || 0);
-      const shownHours = Number(g.hours) > 0 ? Math.round(Number(g.hours) * 10) / 10 : 0;
-      const hoursEdited = Number.isFinite(typedHours) && typedHours !== shownHours;
+      const hoursEdited = hoursEl.value !== hoursEl.defaultValue && Number.isFinite(typedHours);
+      const artTouched = ['#f-cover', '#f-hero', '#f-logo', '#f-icon'].some((sel) => {
+        const el = card.querySelector(sel);
+        return el && el.value.trim() !== el.defaultValue.trim();
+      });
       const launchTarget = card.querySelector('#f-launch').value.trim();
       const trackExe = trackModeEl.value === 'exe' ? trackExeEl.value.trim() : '';
       // "This program…" with nothing picked falls back to automatic
       const trackMode = trackModeEl.value === 'exe' && !trackExe ? 'auto' : trackModeEl.value;
 
       if (!name) { toast('A title is required', 'error'); saving = false; saveBtnEl.disabled = false; return; }
+      // text the number field can't read ('214e', '-') must not save as 0 h
+      const hoursBad = card.querySelector('#f-hours');
+      if (hoursBad && hoursBad.validity && hoursBad.validity.badInput) {
+        toast('Playtime needs a number of hours, like 12.5', 'error');
+        hoursBad.focus();
+        saving = false; saveBtnEl.disabled = false; return;
+      }
 
       // Artwork picked from the grid is a CDN url; download it once so the
       // banner survives restarts and works offline.
@@ -5639,7 +5785,9 @@
           launchTarget,
           trackMode,
           trackExe,
-          artVersion: 2,
+          // art the user set or cleared here is their choice: the automatic
+          // fill must not put something back (or swap a wide cover) later
+          ...(artTouched ? { artVersion: 3, heroTried: true, iconTried: true } : {}),
           ...(hoursEdited ? { hours: typedHours, hoursSetAt: Date.now() } : {}),
         });
       }
@@ -6911,6 +7059,8 @@
 
   async function openSettings(section) {
     if (state.selectedId) closeDetail();
+    // one place to change the look at a time (Appearance shows the same controls)
+    if (customize.isOpen()) customize.close();
     const view = settingsView();
     if (!view) return;
     if (!state.settingsOpen) {
@@ -7057,6 +7207,10 @@
       (menu.querySelector('[aria-selected="true"]') || items()[0]).focus({ preventScroll: true });
     };
     btn.onclick = () => (menu.hidden ? open() : close(false));
+    // Tab (or the pad) moving focus out of the list closes it
+    wrap.addEventListener('focusout', (e) => {
+      if (!menu.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) close(false);
+    });
     menu.onclick = (e) => {
       const item = e.target.closest('.pal-item');
       if (!item) return;
@@ -7188,7 +7342,7 @@
         pill.onclick = () => {
           const v = pill.dataset.value;
           const ui = state.ui;
-          if ((v === 'image' || v === 'video') && !(ui.backgroundFile && ui.backgroundKind === v)) { pickFile(v); return; }
+          if ((v === 'image' || v === 'video') && !(ui.backgroundFile && ui.backgroundKind === v && !backdrop.isBroken(ui.backgroundFile))) { pickFile(v); return; }
           setUi({ background: v });
           markBg();
         };
@@ -7253,9 +7407,10 @@
       built.wire(body);
       body.scrollTop = top;
     },
-    async open() {
+    async open({ back } = {}) {
       if (document.documentElement.classList.contains('is-bigpicture')) return;
-      if (state.settingsOpen) closeSettings({ restoreFocus: false });
+      // from Settings: focus goes back to what opened Settings, not a button that is gone
+      if (state.settingsOpen) { back = back || state._settingsFocusReturn; closeSettings({ restoreFocus: false }); }
       if (!this.el) {
         const el = document.createElement('aside');
         el.id = 'cz';
@@ -7285,7 +7440,10 @@
       }
       if (!state.config.uiHintSeen) saveConfigPatch({ uiHintSeen: true });
       const was = this.isOpen();
-      this._back = was ? this._back : document.activeElement;
+      if (!was) {
+        this._back = back || document.activeElement;
+        this._backKey = focusKey(this._back);
+      }
       await this.render();
       this.el.hidden = false;
       if (!was) {
@@ -7300,8 +7458,10 @@
       this.el.hidden = true;
       this.el.querySelector('.cz-body').innerHTML = '';
       const back = this._back;
+      const key = this._backKey;
       this._back = null;
-      if (back && back.isConnected && typeof back.focus === 'function') back.focus({ preventScroll: true });
+      this._backKey = null;
+      refocus(back, key);
     },
   };
 
@@ -7309,6 +7469,7 @@
   function initCustomize() {
     let menu = null;
     const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
+    let menuBack = null;
     document.addEventListener('contextmenu', (e) => {
       closeMenu();
       if (e.defaultPrevented) return;
@@ -7317,6 +7478,7 @@
       if (!$('#modal').hidden || spotHooks.isOpen()) return;
       if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], #cz')) return;
       e.preventDefault();
+      menuBack = document.activeElement;
       menu = document.createElement('div');
       menu.className = 'sort-menu cz-menu';
       menu.setAttribute('role', 'menu');
@@ -7331,7 +7493,7 @@
         const b = ev.target.closest('[data-m]');
         if (!b || b.disabled) return;
         closeMenu();
-        if (b.dataset.m === 'open') customize.open(); else undoLook();
+        if (b.dataset.m === 'open') customize.open({ back: menuBack }); else undoLook();
       });
       menu.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closeMenu(); }
@@ -7350,7 +7512,11 @@
     // Ctrl+Z undoes a look change while the Customize panel or Appearance is open
     document.addEventListener('keydown', (e) => {
       if (!(e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'z' || e.key === 'Z'))) return;
-      if (e.target.closest && e.target.closest('input[type="text"], input[type="search"], textarea, [contenteditable="true"]')) return;
+      // typing anywhere (an input with no type is a text box too) keeps its own undo
+      const t = e.target;
+      if (t && t.closest && (t.closest('textarea, [contenteditable=""], [contenteditable="true"]')
+        || (t.matches('input') && !/^(range|color|checkbox|radio|button|submit|reset)$/i.test(t.type)))) return;
+      if (!$('#modal').hidden || ($('#spot') && $('#spot').classList.contains('open'))) return;
       if (!customize.isOpen() && !(state.settingsOpen && state.settingsSection === 'appearance')) return;
       e.preventDefault();
       undoLook();
@@ -7394,7 +7560,9 @@
           stCard('In-game overlay',
             info.wayland
               ? stRow('Shortcut', 'Wayland blocks global hotkeys. Bind this in your compositor:<br><code class="st-code">gamevault --toggle-overlay</code>', '')
-              : stRow('Shortcut', 'Screenshots, clips and the AI advisor on top of your game. Works with borderless and windowed games.', `<kbd class="st-kbd">${esc(hotkey.replace(/\+/g, ' + '))}</kbd>`)),
+              : stRow('Shortcut', info.overlayHotkeyOk === false
+                ? 'Another app is already using this shortcut, so the overlay can’t open with it. Close that app or change its shortcut, then restart GameVault.'
+                : 'Screenshots, clips and the AI advisor on top of your game. Works with borderless and windowed games.', `<kbd class="st-kbd">${esc(hotkey.replace(/\+/g, ' + '))}</kbd>`)),
         wire(panel) {
           panel.querySelector('[data-autostart]').onchange = async (e) => {
             await api.setStartup(e.target.checked).catch(() => {});
@@ -7494,7 +7662,12 @@
             stRow('Motion', `Reduced stops things sliding, tilting and moving. Off also makes every change instant. Windows follows its own “Animation effects” setting, now <b>${sysReduced ? 'off' : 'on'}</b>.`,
               stPills('data-ui-motion-group', [['full', 'Windows'], ['reduced', 'Reduced'], ['off', 'Off']], ui.motion), { wide: true })),
         wire(panel) {
-          wirePalettePicker(panel, (v) => applyPalette(v, { announce: true, persist: true }));
+          wirePalettePicker(panel, (v) => {
+            applyPalette(v, { announce: true, persist: true });
+            // the "palette's own" accent swatch shows the palette now chosen
+            const own = panel.querySelector('.acc-sw.is-auto .pal-sw');
+            if (own) own.dataset.value = v;
+          });
           wirePills(panel, '[data-tier-group]', (v) => { applyTier(v, { announce: true, persist: true }); if (panel._showGlass) panel._showGlass(); });
           const showFor = () => {
             for (const el of panel.querySelectorAll('[data-ui-only]')) el.hidden = !el.dataset.uiOnly.split(' ').includes(state.ui.nav);
@@ -7559,7 +7732,8 @@
             const input = panel.querySelector('#st-sgdb');
             const key = input.value.trim();
             if (!key) { toast('Paste a SteamGridDB key first', 'error'); return; }
-            await api.sgdbKeySet(key).catch(() => null);
+            const saved = await api.sgdbKeySet(key).catch(() => null);
+            if (!saved || !saved.ok) { toast('Couldn’t save the SteamGridDB key', 'error'); return; }
             input.value = '';
             input.placeholder = 'Key saved — paste to replace';
             state.config.hasSgdbKey = true;
@@ -7710,10 +7884,9 @@
         wire(panel) {
           const sel = panel.querySelector('#st-ai-provider');
           const custom = panel.querySelector('[data-ai-custom]');
-          sel.onchange = async () => {
-            custom.hidden = sel.value !== 'custom';
-            await saveConfigPatch({ aiProvider: sel.value });
-          };
+          // the provider is saved with its key (Check & save): saving it alone
+          // would send the old provider's key to the new one
+          sel.onchange = () => { custom.hidden = sel.value !== 'custom'; };
           panel.querySelector('[data-ai-enabled]').onchange = async (e) => {
             await saveConfigPatch({ aiEnabled: e.target.checked });
             toast(e.target.checked ? 'AI advisor on — find it in the overlay' : 'AI advisor off', 'ok');
@@ -7722,13 +7895,16 @@
             const key = panel.querySelector('#st-ai-key').value.trim();
             const endpoint = panel.querySelector('#st-ai-endpoint')?.value.trim() || '';
             const modelName = panel.querySelector('#st-ai-model')?.value.trim() || '';
-            if (!key && sel.value !== 'custom') { toast('Paste an API key first', 'error'); return; }
+            const sameProvider = (state.config.aiProvider || 'openai') === sel.value;
+            if (!key && sel.value !== 'custom' && !(state.config.hasAiKey && sameProvider)) { toast('Paste an API key first', 'error'); return; }
             const res = api.aiValidateKey ? await api.aiValidateKey({ provider: sel.value, key, endpoint, modelName }).catch(() => null) : { valid: true };
             if (!res || !res.valid) { toast((res && res.error) || 'That key did not work', 'error'); return; }
-            await saveConfigPatch({ aiKey: key, aiProvider: sel.value, aiCustomEndpoint: endpoint, aiCustomModel: modelName });
+            // an empty box keeps the saved key (it was checked above)
+            await saveConfigPatch({ aiKey: key || (sameProvider ? undefined : ''), aiProvider: sel.value, aiCustomEndpoint: endpoint, aiCustomModel: modelName });
             panel.querySelector('#st-ai-key').value = '';
-            const d = panel.querySelector('#st-ai-desc'); if (d) d.textContent = 'A key is saved. Paste a new one to replace it.';
-            toast('AI key checked and saved', 'ok');
+            const d = panel.querySelector('#st-ai-desc');
+            if (d) d.textContent = state.config.hasAiKey ? 'A key is saved. Paste a new one to replace it.' : 'No key saved. This endpoint works without one.';
+            toast(key ? 'AI key checked and saved' : 'AI settings checked and saved', 'ok');
           };
         },
       };
@@ -8628,6 +8804,22 @@
 
     try {
       const [games, config] = await Promise.all([api.loadGames(), api.loadConfig()]);
+      // the library file was damaged: say so, and where the copy is
+      if (api.loadIssue) api.loadIssue().then((issue) => {
+        if (!issue) return;
+        const kept = issue.kept ? String(issue.kept) : '';
+        problemDialog({
+          title: issue.restored ? 'Your library was restored from a backup' : 'GameVault couldn’t read your library',
+          body: issue.restored
+            ? 'Your library file was damaged, so GameVault opened the last backup of it. Your most recent changes may be missing.'
+            : `Your library file was damaged and there was no backup to open, so the library looks empty.${kept ? ' A copy of the damaged file was kept, so nothing is lost for good.' : ''}`,
+          detail: kept,
+          fallback: issue.restored ? 'Library restored from a backup' : 'Couldn’t read your library',
+          actions: kept
+            ? [{ label: 'Show the copy', side: true, run: () => api.showInFolder(kept) }, { label: 'OK', primary: true }]
+            : [{ label: 'OK', primary: true }],
+        });
+      }).catch(() => {});
       const norm = normalizeGames(games);
       state.games = norm.games;
       state.config = (config && typeof config === 'object') ? config : {};
@@ -9397,8 +9589,11 @@
     const ease = 'cubic-bezier(0.2, 0.9, 0.25, 1)';
     const off = ui.nav === 'dock' ? 'translateY(26px)' : ui.nav === 'top' ? 'translateY(-10px)'
       : ui.navSide === 'right' ? 'translateX(22px)' : 'translateX(-22px)';
-    sideEl.animate([{ opacity: 0, transform: off }, { opacity: 1, transform: 'none' }], { duration: 340, easing: ease });
+    const anim = sideEl.animate([{ opacity: 0, transform: off }, { opacity: 1, transform: 'none' }], { duration: 340, easing: ease });
     if (mainEl) mainEl.animate([{ opacity: 0.55 }, { opacity: 1 }], { duration: 260, easing: 'ease-out' });
+    // things placed by measuring the nav (the in-nav search, the pill) were
+    // measured mid-slide: measure again once it has landed
+    anim.finished.then(() => { syncSidePill(); spotHooks.resync(); }).catch(() => {});
   };
   navHooks.apply = (ui) => {
     const nav = ui.nav;

@@ -55,7 +55,8 @@ const time = (v) => {
 
 function identity(g) {
   if (g.steamAppId) return `steam:${String(g.steamAppId).trim()}`;
-  const name = String(g.name || '').normalize('NFKC').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  // letters and digits of every script: 'ゲーム 2' and '디아블로 2' are not both '2'
+  const name = String(g.name || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   return name ? `name:${name}` : `id:${g.id}`;
 }
 

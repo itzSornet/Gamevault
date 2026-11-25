@@ -8,10 +8,11 @@ app.commandLine.appendSwitch('disk-cache-size', String(150 * 1024 * 1024));
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const http = require('http');
 const crypto = require('crypto');
 const platform = require('./src/backend/platform.js');
 
-const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
+const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
 const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
 const steamSource = require('./src/backend/sources/steam.js');
@@ -331,14 +332,15 @@ function launchWindowsFile(sid, gameId, pathToLaunch, exePath, installDir, steam
 
 function buildTrayMenu() {
   const games = loadGames();
-  const recent = games
-    .filter(g => (g.exePath || g.steamAppId) && g.lastPlayed)
+  // a hand-edited or damaged file can hold nulls or non-text names
+  const recent = (Array.isArray(games) ? games : [])
+    .filter(g => g && typeof g === 'object' && (g.exePath || g.steamAppId) && g.lastPlayed)
     .sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))
     .slice(0, 3);
 
   const recentItems = recent.length
     ? recent.map(g => ({
-      label: g.name.length > 28 ? g.name.slice(0, 28) + '…' : g.name,
+      label: (() => { const n = String(g.name || 'Untitled'); return n.length > 28 ? n.slice(0, 28) + '…' : n; })(),
       click: () => launchGame(g.id, g.exePath, g.installDir, g.steamAppId, g.launcherPath),
     }))
     : [{ label: 'No recent games', enabled: false }];
@@ -489,13 +491,20 @@ function toggleOverlay() {
   }
 }
 
+// false when another app already owns the overlay shortcut (Settings says so)
+let overlayHotkeyOk = true;
+
 function registerOverlayShortcut(hotkey) {
   globalShortcut.unregisterAll();
+  overlayHotkeyOk = true;
   if (!hotkey) return;
+  const logFile = path.join(path.dirname(DATA_PATH), 'overlay_debug.log');
+  // one line per start: a log that only grows is not kept past 256 KB
+  try { if (fs.statSync(logFile).size > 256 * 1024) fs.writeFileSync(logFile, ''); } catch (_) { /* no log yet */ }
   const debugLog = (msg) => {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
     console.log(line.trim());
-    fs.appendFileSync(path.join(path.dirname(DATA_PATH), 'overlay_debug.log'), line);
+    try { fs.appendFileSync(logFile, line); } catch (_) { /* logging never breaks the hotkey */ }
   };
   if (platform.isWayland()) {
     debugLog('Wayland session: global shortcuts unavailable; bind a compositor shortcut to `gamevault --toggle-overlay`');
@@ -507,9 +516,10 @@ function registerOverlayShortcut(hotkey) {
       debugLog('CALLBACK FIRED for ' + hotkey);
       toggleOverlay();
     });
+    overlayHotkeyOk = !!success;
     debugLog('Registration result: ' + success);
-    debugLog('isRegistered check: ' + globalShortcut.isRegistered(hotkey));
   } catch (e) {
+    overlayHotkeyOk = false;
     debugLog('ERROR: ' + e.message);
   }
 }
@@ -924,6 +934,7 @@ function createWindow() {
     platform: process.platform,
     wayland: platform.isWayland(),
     globalHotkeysSupported: !platform.isWayland(),
+    overlayHotkeyOk,
     protonPath: process.platform === 'linux' ? platform.findProton() : '',
   }));
   ipcMain.on('overlay:update-hotkey', (_, hotkey) => registerOverlayShortcut(hotkey));
@@ -1046,6 +1057,7 @@ function createWindow() {
   });
 
   const noMainExeDirs = new Set(); // install dirs where findMainExe found nothing (session)
+  ipcMain.handle('games:load-issue', () => lastLoadIssue());
   ipcMain.handle('games:load', () => enqueueGamesWrite(() => {
     const games = loadGames();
     let updated = false;
@@ -1814,6 +1826,9 @@ function createWindow() {
 
   // slots: only fetch these (bulk enrichment skips what a game already has).
   // bulk: no picker-thumbnail warmup (that's 100+ downloads per game).
+  // a name match this good or better (every word of the name found) is
+  // trusted by the automatic art fill; anything less is left for the picker
+  const BULK_NAME_SCORE = 300;
   ipcMain.handle('sgdb:autofill', sgdbWrap(async ({ id, name, steamAppId, slots, bulk, fresh } = {}) => {
     const want = Array.isArray(slots) && slots.length ? new Set(slots) : null;
     const keep = (slot) => !want || want.has(slot);
@@ -1824,7 +1839,7 @@ function createWindow() {
       steam = await steamPicks(steamAppId, keep);
       if ([...want].every((s) => steam[s])) return { match: null, assets: await cacheAssets(steam) };
     }
-    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId, fresh }), () => autofillWithKey({ id, name, steamAppId, keep }));
+    const cloud = await cloudFirst(() => cloudLookup({ id, name, steamAppId, fresh }), () => autofillWithKey({ id, name, steamAppId, keep, bulk }));
     if (cloud.viaKey) return cloud.data;
     // SteamGridDB doesn't know it, or can't answer right now (busy, hourly
     // limit): keep whatever Steam's own art had instead of nothing
@@ -1837,7 +1852,11 @@ function createWindow() {
     const game = data.game || {};
     const match = { ...game };
     if (data.matchScore != null) match.score = data.matchScore;
-    else if (!id) match.score = 1000; // matched by Steam app id
+    else if (!id && steamAppId) match.score = 1000; // matched by Steam app id
+    else if (!id) match.score = Fuzzy.score(name || '', game.name || '').score; // by name: SteamGridDB's first hit
+    // The automatic fill only takes a name match that really is that name:
+    // a game SteamGridDB doesn't know must not get another game's art
+    if (bulk && !id && !steamAppId && !(match.score >= BULK_NAME_SCORE)) return { match: null, assets: {} };
 
     // Steam games: Steam's own library art wins; SteamGridDB fills the gaps.
     const picks = {};
@@ -1850,7 +1869,7 @@ function createWindow() {
     return { match, assets };
   }));
 
-  async function autofillWithKey({ id, name, steamAppId, keep = () => true } = {}) {
+  async function autofillWithKey({ id, name, steamAppId, keep = () => true, bulk = false } = {}) {
     const client = sgdbOrThrow();
     let gameId = id;
     let match = null;
@@ -1860,7 +1879,7 @@ function createWindow() {
     }
     if (!gameId) {
       const hits = await client.searchGames(name || '');
-      const best = Fuzzy.bestMatch(name || '', hits, (h) => h.name, { threshold: 0, limit: 3 });
+      const best = Fuzzy.bestMatch(name || '', hits, (h) => h.name, { threshold: bulk ? BULK_NAME_SCORE : 0, limit: 3 });
       if (!best.item) return { match: null, assets: {} };
       match = { ...best.item, score: best.score };
       gameId = best.item.id;
@@ -1895,10 +1914,14 @@ function createWindow() {
   });
 
   ipcMain.handle('sgdb:key:set', (_e, key) => {
-    const cfg = loadConfig();
-    cfg.sgdbKey = String(key || '').trim();
-    saveConfig(cfg);
-    return { ok: true, hasKey: !!cfg.sgdbKey };
+    try {
+      const cfg = loadConfig();
+      cfg.sgdbKey = String(key || '').trim();
+      saveConfig(cfg);
+      return { ok: true, hasKey: !!cfg.sgdbKey };
+    } catch (err) {
+      return { ok: false, error: err && err.message };
+    }
   });
 
   ipcMain.handle('sgdb:key:test', sgdbWrap(async () => {
@@ -1959,6 +1982,9 @@ function createWindow() {
 
   ipcMain.handle('ai:validate-key', async (_, { provider, key, endpoint, modelName }) => {
     try {
+      // nothing typed: check with the key already saved, but only for the
+      // provider it was saved for (never send one provider's key to another)
+      if (!key) { const saved = loadConfig(); if (saved.aiProvider === provider) key = saved.aiKey || ''; }
       let url = '';
       let headers = { 'Content-Type': 'application/json' };
       let body = null;
@@ -1993,9 +2019,12 @@ function createWindow() {
       try { parsedUrl = new URL(url); } catch (e) { return { valid: false, error: 'Invalid Endpoint URL' }; }
       const reqPath = parsedUrl.pathname + parsedUrl.search;
 
+      if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return { valid: false, error: 'The endpoint must start with http:// or https://' };
       const resData = await new Promise((resolve, reject) => {
-        const req = https.request({
+        // a local server (Ollama, LM Studio) is often plain http on its own port
+        const req = (parsedUrl.protocol === 'http:' ? http : https).request({
           hostname: parsedUrl.hostname,
+          port: parsedUrl.port || undefined,
           path: reqPath,
           method,
           headers,
@@ -2038,7 +2067,7 @@ function createWindow() {
 
   ipcMain.handle('ai:chat', async (_, { message, history, specs, games: userGames, profile }) => {
     const cfg = loadConfig();
-    if (!cfg.aiEnabled || !cfg.aiKey) return { error: 'AI Assistant is not configured. Add an API key in Settings.' };
+    if (!cfg.aiEnabled || (!cfg.aiKey && !(cfg.aiProvider === 'custom' && cfg.aiCustomEndpoint))) return { error: 'AI Assistant is not configured. Add an API key in Settings.' };
     try {
       // Build library summary
       const libSummary = (userGames || []).filter(g => g.status !== 'Want').map(g => {
@@ -2106,7 +2135,7 @@ Already recommended (DO NOT suggest these again): ${alreadyRecommended}
       let url = '';
       let headers = { 'Content-Type': 'application/json' };
       let bodyData = null;
-      const openaiFormat = { model: cfg.aiCustomModel || 'gpt-4o-mini', messages, temperature: 0.85, max_tokens: 600 };
+      const openaiFormat = { model: (cfg.aiProvider === 'custom' && cfg.aiCustomModel) || 'gpt-4o-mini', messages, temperature: 0.85, max_tokens: 600 };
 
       if (cfg.aiProvider === 'openai') {
         url = 'https://api.openai.com/v1/chat/completions';
@@ -2138,9 +2167,11 @@ Already recommended (DO NOT suggest these again): ${alreadyRecommended}
       const body = JSON.stringify(bodyData);
       const reqPath = parsedUrl.pathname + parsedUrl.search;
 
+      if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return { error: 'Invalid AI Endpoint URL' };
       const text = await new Promise((resolve, reject) => {
-        const req = https.request({
+        const req = (parsedUrl.protocol === 'http:' ? http : https).request({
           hostname: parsedUrl.hostname,
+          port: parsedUrl.port || undefined,
           path: reqPath,
           method: 'POST',
           headers,
@@ -2219,7 +2250,8 @@ app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return;
   createWindow();
   createOverlayWindow();
-  createTray();
+  // a tray failure must not stop the rest of start-up (hotkeys, image cache)
+  try { createTray(); } catch (err) { console.warn('tray:', err && err.message); }
   const cfg = loadConfig();
   registerOverlayShortcut(cfg.overlayHotkey);
 

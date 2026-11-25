@@ -5589,6 +5589,7 @@ html.is-bigpicture.is-pad #grid .card:focus { outline: none !important; }
   outline: none;
 }
 .rt-input:focus { border-color: rgba(var(--accent-rgb), 0.6); }
+.rt-input.is-bad, .rt-input.is-bad:focus { border-color: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent); }
 .rt-input::placeholder { color: var(--text-mute); }
 
 /* ---- PEAK: gold foil with a slow light sweep. It is the player's best game
@@ -6805,7 +6806,9 @@ html.is-bigpicture .pkl { zoom: 1.25; }
 .wb { display: flex; flex-direction: column; gap: 14px; padding: 20px 20px 16px; overflow: auto; }
 .wb-kicker { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-mute); }
 .wb-game { margin-top: 4px; font-size: 20px; font-weight: 600; color: var(--text); }
-.wb-list { display: flex; flex-direction: column; gap: 4px; max-height: min(420px, 60vh); overflow: auto; }
+.wb-list { display: flex; flex-direction: column; gap: 4px; max-height: min(420px, 60vh); overflow: auto;
+  /* room for the focus ring of the first and last rows inside the scroller */
+  padding: 4px; margin: -4px; }
 .wb-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto 16px; align-items: center; gap: 10px;
   padding: 10px 12px; border: 0; border-radius: calc(10px * var(--radius-k, 1));

@@ -111,12 +111,22 @@ const BAK_PATH = `${DATA_PATH}.bak`;
 // True once games.json is known to hold a valid library (we parsed it or wrote
 // it). Only a known-good file is ever rotated into games.json.bak.
 let dataFileVerified = false;
+// What went wrong at the last load, for the app to tell the user:
+// { restored: true } = loaded games.json.bak; kept = the damaged copy
+let loadIssue = null;
+// The last load found no library it could read: before the first save over
+// games.json, keep a copy of whatever is there
+let protectOnSave = false;
+
+// read once by the app at start (the tray and launches load the file too)
+function lastLoadIssue() { const v = loadIssue; loadIssue = null; return v; }
 
 function loadGames() {
   const res = readJsonFile(DATA_PATH);
-  if (res.state === 'missing') return [];
+  if (res.state === 'missing') { protectOnSave = false; return []; }
   if (res.state === 'ok' && Array.isArray(res.value)) {
     dataFileVerified = true;
+    protectOnSave = false;
     return res.value;
   }
 
@@ -124,16 +134,19 @@ function loadGames() {
   // would wipe it. Preserve the bad file and fall back to the last good one.
   dataFileVerified = false;
   const why = res.error ? res.error.message : 'not a list of games';
+  let kept = null;
   if (res.state !== 'unreadable') {
-    const kept = quarantineCorrupt(DATA_PATH);
+    kept = quarantineCorrupt(DATA_PATH);
     if (kept) console.warn(`[data] games.json is unreadable (${why}); kept a copy at ${kept}`);
   } else {
     console.warn(`[data] games.json could not be read (${why})`);
   }
+  loadIssue = { restored: false, kept, why };
 
   const bak = readJsonFile(BAK_PATH);
   if (bak.state === 'ok' && Array.isArray(bak.value)) {
     console.warn('[data] restored the library from games.json.bak');
+    loadIssue.restored = true;
     if (res.state !== 'unreadable') {
       try {
         writeJsonAtomicSync(DATA_PATH, bak.value);
@@ -144,6 +157,7 @@ function loadGames() {
     }
     return bak.value;
   }
+  protectOnSave = true;
   return [];
 }
 
@@ -160,6 +174,13 @@ function rotateBackup() {
 
 function saveGames(games) {
   if (!Array.isArray(games)) throw new TypeError('saveGames expects an array');
+  if (protectOnSave) {
+    // the library couldn't be read at start: the first save never replaces
+    // the only copy of it
+    const kept = quarantineCorrupt(DATA_PATH);
+    if (kept) console.warn(`[data] kept the unreadable library at ${kept} before saving`);
+    protectOnSave = false;
+  }
   try {
     rotateBackup();
   } catch (err) {
@@ -462,7 +483,7 @@ function aiSaveProfile(profile, win, overlayWin) {
 
 module.exports = {
   DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH,
-  loadGames, saveGames, cacheImage, cacheGameImages, normalizeLegacyFileUrl,
+  loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl,
   loadConfig, saveConfig, mergeConfig, publicConfig, SECRET_KEYS,
   aiLoadProfile, aiSaveProfile,
   writeFileAtomicSync, writeJsonAtomicSync, readJsonFile,

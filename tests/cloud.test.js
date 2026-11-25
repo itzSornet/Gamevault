@@ -113,6 +113,15 @@ const T = 1_800_000_000_000;
 }
 
 // ------------------------------------------------------------ cloud against a fake backend
+{
+  // two different non-Latin games that share only a number are not folded into one
+  const r = mergeLibrary({ local: [{ id: 'a', name: 'ゲーム 2', sessions: [] }], remote: { games: [{ id: 'b', name: '디아블로 2' }] }, base: {}, now: T });
+  assert.deepStrictEqual(r.games.map((g) => g.id).sort(), ['a', 'b']);
+  // the same Japanese title added on two PCs still folds
+  const r2 = mergeLibrary({ local: [{ id: 'a', name: 'ゼルダの伝説', sessions: [] }], remote: { games: [{ id: 'b', name: 'ゼルダの伝説' }] }, base: {}, now: T });
+  assert.strictEqual(r2.games.length, 1);
+}
+
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-cloud-'));
   const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-sd-'));

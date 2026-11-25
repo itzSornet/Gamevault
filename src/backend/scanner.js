@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
+const http = require('http');
 const { loadConfig } = require('./data.js');
 const { httpsGet } = require('./api.js');
 const platform = require('./platform.js');
@@ -515,7 +516,7 @@ async function smartScan(targetWindow) {
   if (!filtered.length) return [];
 
   // Phase 3: AI Analysis + Name cleaning
-  if (cfg.aiEnabled && cfg.aiKey) {
+  if (cfg.aiEnabled && (cfg.aiKey || (cfg.aiProvider === 'custom' && cfg.aiCustomEndpoint))) {
     report(`AI analyzing ${filtered.length} potential games...`);
     filtered = await aiFilterCandidates(filtered, cfg);
   }
@@ -618,7 +619,7 @@ ${lines.join('\n')}`;
     let url = '';
     let headers = { 'Content-Type': 'application/json' };
     let bodyData = null;
-    const openaiFormat = { model: cfg.aiCustomModel || 'gpt-4o-mini', messages, temperature: 0.1, max_tokens: 2000 };
+    const openaiFormat = { model: (cfg.aiProvider === 'custom' && cfg.aiCustomModel) || 'gpt-4o-mini', messages, temperature: 0.1, max_tokens: 2000 };
 
     if (cfg.aiProvider === 'openai') {
         url = 'https://api.openai.com/v1/chat/completions';
@@ -646,14 +647,16 @@ ${lines.join('\n')}`;
 
     let parsedUrl;
     try { parsedUrl = new URL(url); } catch(e) { continue; }
+    if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') continue;
 
     const body = JSON.stringify(bodyData);
     const reqPath = parsedUrl.pathname + parsedUrl.search;
 
     try {
       const responseText = await new Promise((resolve, reject) => {
-        const req = https.request({
+        const req = (parsedUrl.protocol === 'http:' ? http : https).request({
           hostname: parsedUrl.hostname,
+          port: parsedUrl.port || undefined,
           path: reqPath,
           method: 'POST',
           headers,
@@ -681,6 +684,8 @@ ${lines.join('\n')}`;
           });
         });
         req.on('error', reject);
+        // the timeout option only reports; without this a stalled server hangs the scan
+        req.on('timeout', () => { req.destroy(); reject(new Error('AI request timed out')); });
         req.write(body);
         req.end();
       });

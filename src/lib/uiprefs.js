@@ -40,7 +40,7 @@
     fontScale: [90, 120],
     backgroundDim: [0, 100],
     'glass.blur': [0, 200],        // % of each surface's own blur
-    'glass.opacity': [20, 140],    // % of each surface's own opacity
+    'glass.opacity': [40, 140],    // % of each surface's own opacity; same floor as the Appearance slider
     'glass.saturation': [50, 150], // % of each surface's own saturation
   };
 
@@ -128,6 +128,9 @@
     if (out.search === 'in-nav' && (out.nav === 'none' || out.nav === 'top')) out.search = 'top-center';
     // a custom background needs its file; without it (another PC, file gone) use fluid
     if ((out.background === 'image' || out.background === 'video') && !out.backgroundFile) out.background = 'fluid';
+    // a pasted or synced look can ask for 'video' while this PC's file is a
+    // picture (or the other way round): show the file there is, never black
+    if ((out.background === 'image' || out.background === 'video') && out.backgroundKind && out.background !== out.backgroundKind) out.background = out.backgroundKind;
     return out;
   }
 

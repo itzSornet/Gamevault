@@ -164,7 +164,7 @@ test('share a look: round trip, no paths, bad input', () => {
   assert.equal(back.ui.background, 'fluid'); // no file on this PC
   const withFile = U.importLook(text, { backgroundFile: 'D:/mine.mp4', backgroundKind: 'video' }, ['ocean']);
   assert.equal(withFile.ui.backgroundFile, 'D:/mine.mp4');
-  assert.equal(withFile.ui.background, 'image');
+  assert.equal(withFile.ui.background, 'video'); // this PC's file is a video: show it, not black
   assert.equal(U.importLook('```' + text + '```', {}, []).palette, null);
   assert.equal(U.importLook('{"nav":"dock"}', {}, []), null);
   assert.equal(U.importLook('hello', {}, []), null);
@@ -198,4 +198,11 @@ test('the main panel thins faster than the small glass as opacity drops', () => 
   assert.ok(Number(v['--main-alpha-k']) < Number(v['--glass-alpha-k']));
   assert.equal(U.cssVars({})['--main-alpha-k'], '1');
   assert.equal(U.cssVars({ glass: { solid: true } })['--main-alpha-k'], '4');
+});
+
+test('normalize: background mode follows the kind of file this PC has', () => {
+  const u = U.normalize({ background: 'video', backgroundFile: 'C:/bg.jpg', backgroundKind: 'image' });
+  assert.equal(u.background, 'image');
+  const v = U.normalize({ background: 'image', backgroundFile: 'C:/bg.mp4', backgroundKind: 'video' });
+  assert.equal(v.background, 'video');
 });

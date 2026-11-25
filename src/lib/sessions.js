@@ -410,9 +410,18 @@
     }
     const out = Array.from(byDay.values()).sort((a, b) => b.dayNumber - a.dayNumber);
     for (const g of out) {
-      g.hours = round2(g.hours);
-      g.brief = g.hours < BRIEF_HOURS;
       g.items.sort((a, b) => a.start - b.start);
+      // two sessions that overlap (tracked twice) count their shared time once
+      let overlap = 0;
+      let reach = -Infinity;
+      for (const it of g.items) {
+        if (it.start < reach) overlap += Math.min(reach, it.end) - it.start;
+        if (it.end > reach) reach = it.end;
+      }
+      if (overlap > 0) g.hours = Math.max(g.longest, g.hours - overlap / 3600000);
+      // brief is decided on the real total, not the rounded one
+      g.brief = g.hours < BRIEF_HOURS;
+      g.hours = round2(g.hours);
     }
     return out;
   }
@@ -434,13 +443,14 @@
       month.count += d.count;
       month.days += 1;
       const prev = month.rows[month.rows.length - 1];
-      if (d.brief && prev && prev.kind === 'brief') {
+      if (d.brief && prev && prev.kind === 'brief' && prev.fromNumber - d.dayNumber === 1) {
         prev.from = d.day;
+        prev.fromNumber = d.dayNumber;
         prev.days += 1;
         prev.count += d.count;
         prev.hours = round2(prev.hours + d.hours);
       } else if (d.brief) {
-        month.rows.push({ kind: 'brief', from: d.day, to: d.day, days: 1, count: d.count, hours: d.hours });
+        month.rows.push({ kind: 'brief', from: d.day, to: d.day, fromNumber: d.dayNumber, days: 1, count: d.count, hours: d.hours });
       } else {
         month.rows.push({ kind: 'day', day: d.day, hours: d.hours, count: d.count, first: d.first, last: d.last, longest: d.longest, items: d.items });
       }
@@ -462,6 +472,7 @@
         if (run && run.fromNumber - d.dayNumber === 1) {
           run.fromNumber = d.dayNumber;
           run.from = d.day;
+          run.firstStart = d.first;
           run.days += 1;
           run.hours += d.hours;
           run.count += d.count;
