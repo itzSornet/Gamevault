@@ -206,6 +206,43 @@ const T = 1_800_000_000_000;
   await cloud.deleteBackup(oldest.id);
   assert.strictEqual(db.backups.length, 2);
 
+  // the overview groups copies per game
+  const ov = await cloud.overview();
+  assert.strictEqual(ov.games.length, 1);
+  assert.strictEqual(ov.games[0].gameId, 'a');
+  assert.strictEqual(ov.games[0].copies, 2);
+  assert.deepStrictEqual(ov.problems, {});
+
+  // with every copy deleted, unchanged saves are backed up again (not "skipped")
+  for (const b of await cloud.listBackups('a')) await cloud.deleteBackup(b.id);
+  assert.strictEqual(db.backups.length, 0);
+  clock += 1000;
+  const again = await cloud.backupSaves({ gameId: 'a', gameName: 'Alpha', saveDir });
+  assert.ok(again.backup, 'backed up again after the copies were deleted');
+  // a stale "unchanged" mark with no copy in the cloud doesn't skip either
+  db.backups = []; db.objects.clear();
+  clock += 1000;
+  assert.ok((await cloud.backupSaves({ gameId: 'a', gameName: 'Alpha', saveDir })).backup);
+
+  // a failed backup is remembered for Settings, and cleared by the next good one
+  await assert.rejects(cloud.backupSaves({ gameId: 'a', gameName: 'Alpha', saveDir: path.join(saveDir, 'gone') }), /isn’t there/);
+  assert.match((await cloud.overview()).problems.a.message, /isn’t there/);
+  clock += 1000;
+  fs.writeFileSync(path.join(saveDir, 'a.sav'), 'v9');
+  await cloud.backupSaves({ gameId: 'a', gameName: 'Alpha', saveDir });
+  assert.deepStrictEqual((await cloud.overview()).problems, {});
+
+  // the saves a restore replaces: kept, but only the newest few
+  for (let i = 0; i < 4; i++) {
+    clock += 1000;
+    const [latest] = await cloud.listBackups('a');
+    await cloud.restoreBackup({ gameId: 'a', backupId: latest.id, saveDir });
+  }
+  const safety = cloud.safetyFolder('a');
+  assert.ok(safety);
+  assert.strictEqual(fs.readdirSync(safety).length, 3);
+  assert.strictEqual(cloud.safetyFolder('nothing-here'), null);
+
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(saveDir, { recursive: true, force: true });
   console.log('cloud tests passed');

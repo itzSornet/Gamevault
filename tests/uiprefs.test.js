@@ -110,6 +110,15 @@ test('newer: last write wins, empty sides lose', () => {
   assert.equal(U.newer(null, null), null);
 });
 
+test('tintVars keeps a light palette light (Paper with a dark accent)', () => {
+  const paper = { '--bg': '#f4f1ea', '--surface': '#ffffff', '--surface-2': '#f7f4ee' };
+  const on = U.tintVars(paper, '#3b1d6e', 100);
+  const lum = (h) => { const n = parseInt(h.slice(1), 16); return ((n >> 16) + ((n >> 8) & 255) + (n & 255)) / 3; };
+  assert.ok(lum(on['--surface']) > 215, 'surface stays light: ' + on['--surface']);
+  assert.ok(lum(on['--bg']) > 205, 'background stays light: ' + on['--bg']);
+  assert.notEqual(on['--surface'], '#ffffff', 'but it is tinted');
+});
+
 test('tintVars leans the palette toward the accent and keeps each format', () => {
   const base = { '--surface': '#0f1117', '--main-glass': '6, 7, 10', '--bg': 'nonsense' };
   const off = U.tintVars(base, '#ff0000', 0);

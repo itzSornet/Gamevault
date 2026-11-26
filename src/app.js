@@ -3646,9 +3646,15 @@
     `;
   }
 
+  // signed in, save backups lead the rail; signed out, a small invite at the end
+  function railInner(g) {
+    const sv = '<div class="gvx-card sv-card" data-saves-card></div>';
+    return signedIn() ? sv + railHtml(g) : railHtml(g) + sv;
+  }
+
   function paintRail(g) {
     const rail = document.querySelector('#game-view [data-rail]');
-    if (rail) { rail.innerHTML = railHtml(g) + '<div class="gvx-card sv-card" data-saves-card></div>'; paintSavesCard(g); }
+    if (rail) { rail.innerHTML = railInner(g); paintSavesCard(g); }
   }
 
   async function loadSteamMeta(g) {
@@ -3790,7 +3796,7 @@
             <div class="gvx-list" data-ledger role="list" aria-label="Session history"></div>
             <section class="gvx-caps" data-captures hidden aria-label="Captures"></section>
           </div>
-          <aside class="gvx-rail" data-rail>${railHtml(g)}<div class="gvx-card sv-card" data-saves-card></div></aside>
+          <aside class="gvx-rail" data-rail>${railInner(g)}</aside>
         `}
       </div>
     `;
@@ -6766,8 +6772,10 @@
       icon: '<circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2.5M9.5 2.5h5"/>' },
     { id: 'controller', label: 'Controller & Big Picture', desc: 'Play from the couch with a gamepad.',
       icon: '<path d="M7 9h10a4 4 0 0 1 3.9 4.9l-.9 3.6a2 2 0 0 1-3.4.9L14.8 16H9.2l-1.8 2.4a2 2 0 0 1-3.4-.9l-.9-3.6A4 4 0 0 1 7 9z"/><path d="M8 12v3M6.5 13.5h3M15.5 13h.01M17.5 14.5h.01"/>' },
-    { id: 'account', label: 'Account & cloud', desc: 'Back up your saves and sync your library. Off until you turn it on.',
+    { id: 'account', label: 'Account & cloud', desc: 'Sign in, and sync your library across your PCs. Off until you turn it on.',
       icon: '<path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"/>' },
+    { id: 'backups', label: 'Backups', desc: 'Your game saves in the cloud, and copies of your library you can keep.',
+      icon: '<path d="M4 7.5h16v11a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z"/><path d="M3 4.5h18v3H3zM10 11.5h4"/>' },
     { id: 'performance', label: 'Performance', desc: 'Frame rate, GPU and diagnostics.',
       icon: '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4-5.5"/>' },
     { id: 'about', label: 'About', desc: 'Version, updates and credits.',
@@ -7114,8 +7122,8 @@
       stRow('Sync my library', syncDesc,
         (on && sync ? '<button type="button" class="btn btn-ghost" data-cloud="sync-now">Sync now</button>' : '') +
         stSwitch('data-cloud-sync', on && sync, { disabled: !on, label: 'Sync my library' }), { disabled: !on }) +
-      stRow('Back up my game saves', 'Saves are packed and encrypted on this PC before upload, with a key tied to your account. Up to 50 MB per backup, the latest 3 copies of each game. Backs up after you play; restore from the game’s page.',
-        stSwitch('data-cloud-saves', on && saves, { disabled: !on, label: 'Back up my game saves' }), { disabled: !on }) +
+      stRow('Back up my game saves', `${saves && on ? 'On.' : 'Off.'} Your saves, encrypted on this PC before upload. Every game and its copies are under Backups.`,
+        `<button type="button" class="btn btn-ghost" data-cloud="backups">Open Backups</button>`, { disabled: !on }) +
       `<p class="st-note">${on ? 'Both stay off until you turn them on.' : 'Sign in above to turn these on.'}</p>`;
   }
 
@@ -7193,6 +7201,154 @@
     });
     const now = card.querySelector('[data-cloud="sync-now"]');
     if (now) now.addEventListener('click', () => runCloudSync({ announce: true, force: true }));
+    const bk = card.querySelector('[data-cloud="backups"]');
+    if (bk) bk.addEventListener('click', () => openSettings('backups'));
+  }
+
+  // ---- Settings → Backups: every game's cloud saves, and library copies
+  function backupsSavesHtml() {
+    const on = signedIn();
+    const saves = !!state.config.cloudSaves;
+    let body = stRow('Back up my game saves',
+      'Each game’s save folder is packed and encrypted on this PC with a key tied to your account, then uploaded. It runs by itself after you play. Up to 50 MB per backup; the newest 3 copies of each game are kept.',
+      stSwitch('data-bk-switch', on && saves, { disabled: !on, label: 'Back up my game saves' }), { disabled: !on });
+    if (!on) {
+      body += stRow('Sign in first', 'Backups are tied to your GameVault account, so you can restore them on any PC.',
+        '<button type="button" class="btn btn-primary" data-bk="account">Sign in</button>');
+      return `<h2 class="st-card-title">Game saves</h2>${body}`;
+    }
+    if (!saves) return `<h2 class="st-card-title">Game saves</h2>${body}`;
+    const ov = state._bkOverview || { games: [], problems: {} };
+    const byId = new Map();
+    // games set up on this PC, then games with copies from another PC
+    for (const g of state.games) {
+      if (g && g.saveDir && !gvIsWishlisted(g)) byId.set(String(g.id), { id: String(g.id), name: g.name || 'Untitled', game: g, cloud: null });
+    }
+    for (const c of ov.games || []) {
+      const row = byId.get(c.gameId) || { id: c.gameId, name: (gameById(c.gameId) || {}).name || c.gameName || 'A removed game', game: gameById(c.gameId) || null, cloud: null };
+      row.cloud = c;
+      byId.set(c.gameId, row);
+    }
+    const rows = [...byId.values()].sort((a, b) => {
+      const ta = a.cloud ? new Date(a.cloud.latest).getTime() : 0;
+      const tb = b.cloud ? new Date(b.cloud.latest).getTime() : 0;
+      return tb - ta || String(a.name).localeCompare(String(b.name));
+    });
+    const list = rows.length
+      ? '<div class="bk-list">' + rows.map((r) => {
+        const prob = ov.problems && ov.problems[r.id];
+        const where = r.game && r.game.saveDir ? lastDirs(r.game.saveDir, 3) : 'No save folder on this PC';
+        const status = prob
+          ? `<span class="bk-bad">Last backup failed: ${esc(prob.message)}</span>`
+          : r.cloud
+            ? `Backed up ${esc(agoLabel(r.cloud.latest))} · ${copiesText(r.cloud.copies)} · ${mb(r.cloud.bytes)}`
+            : 'Not backed up yet';
+        return `<div class="bk-row${prob ? ' is-bad' : ''}">
+          <div class="bk-main"><b>${esc(r.name)}</b><span class="bk-status">${status}</span><span class="bk-where" title="${esc((r.game && r.game.saveDir) || '')}">${esc(where)}</span></div>
+          <div class="bk-acts">
+            ${r.game && r.game.saveDir ? `<button type="button" class="btn btn-ghost" data-bk="now" data-id="${esc(r.id)}">Back up now</button>` : ''}
+            ${r.game ? `<button type="button" class="btn btn-ghost" data-bk="open" data-id="${esc(r.id)}">Open game</button>` : ''}
+          </div>
+        </div>`;
+      }).join('') + '</div>'
+      : '<p class="st-note">No games are set up yet. Open a game’s page: its Save backups card finds where it saves.</p>';
+    const err = state._bkError ? `<p class="st-note cloud-bad">${esc(state._bkError)}</p>` : '';
+    const missing = state.games.filter((g) => g && !g.saveDir && !gvIsWishlisted(g) && (Number(g.hours) || 0) > 0).length;
+    const hint = rows.length && missing
+      ? `<p class="st-note">${fmtNum(missing)} played game${missing === 1 ? ' has' : 's have'} no save folder yet. Set one up from the game’s page.</p>`
+      : '';
+    return `<h2 class="st-card-title">Game saves</h2>${body}${err}${list}${hint}`;
+  }
+
+  function backupsLibraryHtml() {
+    const lib = state._bkLib || {};
+    return '<h2 class="st-card-title">Your library</h2>' +
+      stRow('Automatic safety copy',
+        'Every time your library is saved, GameVault keeps the version before it. If the file is ever damaged, it switches to that copy by itself.',
+        `<span class="bk-meta">${lib.at ? 'Updated ' + esc(agoLabel(lib.at)) : 'Made on the next change'}</span>`) +
+      stRow('Save a copy',
+        'One file with every game, its playtime, sessions, ratings and notes. Keep it on a USB stick or a cloud drive.',
+        '<button type="button" class="btn btn-ghost" data-bk="export">Save a copy…</button>') +
+      stRow('Restore from a copy',
+        'Replaces your library with a copy you saved. Your current library is copied aside first.',
+        '<button type="button" class="btn btn-ghost" data-bk="import">Restore…</button>');
+  }
+
+  function wireBackups(panel) {
+    const repaint = async () => { if (state.settingsOpen && state.settingsSection === 'backups') await renderSettings(); };
+    const sw = panel.querySelector('[data-bk-switch]');
+    if (sw) sw.addEventListener('change', async () => {
+      await saveConfigPatch({ cloudSaves: sw.checked });
+      if (state.selectedId) paintSavesCard(gameById(state.selectedId));
+      toast(sw.checked ? 'Save backups are on' : 'Save backups are off. Your copies stay in the cloud.', 'ok');
+      repaint();
+    });
+    for (const btn of panel.querySelectorAll('[data-bk]')) {
+      btn.addEventListener('click', async () => {
+        const act = btn.dataset.bk;
+        const g = btn.dataset.id ? gameById(btn.dataset.id) : null;
+        if (act === 'account') openSettings('account');
+        else if (act === 'open' && g) { closeSettings({ restoreFocus: false }); openDetail(g.id); }
+        else if (act === 'now' && g) {
+          btn.disabled = true;
+          btn.textContent = 'Backing up…';
+          await backupNow(g, { quiet: false, force: true });
+          repaint();
+        } else if (act === 'export') {
+          await persistGames();
+          const r = await api.libraryExport().catch((e) => ({ ok: false, error: e.message }));
+          if (r && r.ok) toast(`Saved a copy of your library to ${lastDirs(r.path, 2)}`, 'ok');
+          else if (r && !r.canceled) toast(r.error || 'Couldn’t save the copy', 'error');
+        } else if (act === 'import') restoreLibraryFromCopy();
+      });
+    }
+  }
+
+  async function restoreLibraryFromCopy() {
+    if (Object.values(state.live || {}).some((v) => v != null)) { toast('Close your running games first, then restore', 'error'); return; }
+    const r = await api.libraryReadCopy().catch((e) => ({ ok: false, error: e.message }));
+    if (!r || r.canceled) return;
+    if (!r.ok) { toast(r.error || 'That file couldn’t be read', 'error'); return; }
+    const { games } = normalizeGames(r.games);
+    if (!games.length) { toast('That copy has no games in it', 'error'); return; }
+    const syncing = cloudOn('cloudSync');
+    const card = openModal(`
+      <div class="modal-head">
+        <h2>Restore your library?</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body rm-body">
+        <p class="rm-text"><b>${esc(r.name)}</b> has ${fmtNum(games.length)} game${games.length === 1 ? '' : 's'} (saved ${esc(agoLabel(r.at))}). It replaces the ${fmtNum(state.games.length)} in your library now. Your current library is copied aside first.${syncing ? ' Library sync is on, so your other PCs get this library too.' : ''}</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close data-autofocus>Cancel</button>
+        <button class="btn btn-danger" data-restore>Replace my library</button>
+      </div>`, { className: 'rm-modal' });
+    if (!card) return;
+    for (const b of card.querySelectorAll('[data-close]')) b.onclick = closeModal;
+    card.querySelector('[data-restore]').onclick = async () => {
+      closeModal();
+      await persistGames();
+      const kept = api.backupGames ? await api.backupGames().catch(() => null) : null;
+      if (!kept && state.games.length) { toast('Couldn’t copy your current library aside, so nothing was changed', 'error'); return; }
+      const before = state.games;
+      const show = async (list) => {
+        state.games = list;
+        await persistGames();
+        if (state.selectedId) closeDetail();
+        state._shelfKey = '';
+        renderLibrary();
+        if (syncing) scheduleCloudSync(1500);
+        if (state.settingsOpen && state.settingsSection === 'backups') renderSettings();
+      };
+      await show(games);
+      for (const g of games) if (!g.coverUrl) refreshArt(g);
+      toast(`Library restored: ${fmtNum(games.length)} game${games.length === 1 ? '' : 's'}`, 'ok', [{ label: 'Undo', run: async () => {
+        await show(before);
+        toast('Your library is back the way it was', 'ok');
+      } }]);
+      if (state.settingsOpen && state.settingsSection === 'backups') renderSettings();
+    };
   }
 
   // -- library sync engine
@@ -7265,32 +7421,53 @@
   }
 
   // -- save backups, per game (rail card on the game page)
+  const SV_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"/><path d="M12 15.5v-5M9.8 12.6 12 10.4l2.2 2.2"/></svg>';
+  const copiesText = (n) => `${n} ${n === 1 ? 'copy' : 'copies'}`;
+  const lastDirs = (p, n = 2) => String(p || '').split(/[\\/]/).filter(Boolean).slice(-n).join(' › ');
+
   function savesCardHtml(g) {
-    const head = '<h3 class="gvx-card-head">Cloud saves</h3>';
-    if (!signedIn()) return head + '<p class="sv-text">Sign in to back up this game’s saves.</p><button type="button" class="sv-link" data-sv="settings">Open account settings</button>';
-    if (!state.config.cloudSaves) return head + '<p class="sv-text">Save backups are off.</p><button type="button" class="sv-link" data-sv="settings">Turn on in settings</button>';
+    const head = (state2) => `<div class="sv-head${state2 ? ' is-' + state2 : ''}"><span class="sv-ico">${SV_ICON}</span><h3 class="gvx-card-head">Save backups</h3></div>`;
+    const pitch = '<p class="sv-text">Keep this game’s saves safe in the cloud and bring them back on any PC.</p>';
+    if (!signedIn()) return head() + pitch + '<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="settings">Sign in to turn on</button></div>';
+    if (!state.config.cloudSaves) return head() + pitch + '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="turn-on">Turn on save backups</button></div>';
     const ui = state._sv && state._sv.id === String(g.id) ? state._sv : (state._sv = { id: String(g.id) });
     if (ui.finding) return head + '<p class="sv-text">Looking up where it saves…</p>';
     if (ui.found) {
       const list = ui.found.length
-        ? ui.found.map((c, i) => `<button type="button" class="sv-pick" data-sv="use" data-i="${i}" title="${esc(c.path)}"><b>${esc(c.path.split('\\').slice(-2).join('\\'))}</b><span>${c.files} file${c.files === 1 ? '' : 's'} · ${mb(c.bytes)} · changed ${agoLabel(c.newest)}</span></button>`).join('')
+        ? ui.found.map((c, i) => `<button type="button" class="sv-pick" data-sv="use" data-i="${i}" title="${esc(c.path)}"><b>${esc(lastDirs(c.path))}</b><span>${c.files} file${c.files === 1 ? '' : 's'} · ${mb(c.bytes)} · changed ${agoLabel(c.newest)}</span></button>`).join('')
         : '<p class="sv-text">No save folder found on this PC. Play once so the game makes one, or choose it yourself.</p>';
-      return head + list + '<div class="sv-row"><button type="button" class="sv-link" data-sv="pick">Choose folder…</button><button type="button" class="sv-link" data-sv="cancel">Cancel</button></div>';
+      return head() + '<p class="sv-text">Pick the folder this game saves to:</p>' + list + '<div class="sv-row"><button type="button" class="sv-link" data-sv="pick">Choose folder…</button><button type="button" class="sv-link" data-sv="cancel">Cancel</button></div>';
     }
     if (!g.saveDir) {
-      return head + '<p class="sv-text">Where does this game keep its saves?</p>' +
-        '<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>';
+      return head() + '<p class="sv-text">Backups are on. Where does this game keep its saves?</p>' +
+        '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>';
     }
     const backups = ui.backups;
-    const rows = !backups ? '<p class="sv-text">Loading backups…</p>'
-      : !backups.length ? '<p class="sv-text">No backups yet.</p>'
-        : backups.map((b) => `<div class="sv-backup"><span><b>${agoLabel(b.created_at)}</b>${esc(b.device || '')} · ${mb(b.size)}</span>` +
-          `<button type="button" class="sv-link${ui.confirm === b.id ? ' is-danger' : ''}" data-sv="restore" data-id="${esc(b.id)}">${ui.confirm === b.id ? 'Replace current saves?' : 'Restore'}</button></div>`).join('');
-    return head +
-      `<div class="sv-folder" title="${esc(g.saveDir)}">${esc(g.saveDir.split('\\').slice(-2).join('\\'))}</div>` +
-      rows +
+    const latest = backups && backups[0];
+    const bad = !!ui.error;
+    const status = !backups ? '<p class="sv-status">Checking backups…</p>'
+      : latest
+        ? `<p class="sv-status"><b>Backed up ${esc(agoLabel(latest.created_at))}</b><span>${copiesText(backups.length)} · ${mb(latest.size)}${latest.device ? ' · ' + esc(latest.device) : ''}</span></p>`
+        : '<p class="sv-status"><b>Not backed up yet</b><span>It backs up by itself after you play, or now.</span></p>';
+    const list = ui.open && backups && backups.length
+      ? '<div class="sv-list">' + backups.map((b) => {
+        const asking = ui.confirm === b.id;
+        const delAsk = ui.confirmDel === b.id;
+        return `<div class="sv-backup"><span><b>${esc(agoLabel(b.created_at))}</b>${esc(b.device || '')} · ${mb(b.size)}</span>` +
+          `<span class="sv-acts"><button type="button" class="sv-link${asking ? ' is-danger' : ''}" data-sv="restore" data-id="${esc(b.id)}">${asking ? 'Replace current saves?' : 'Restore'}</button>` +
+          (asking ? '' : `<button type="button" class="sv-link${delAsk ? ' is-danger' : ' is-quiet'}" data-sv="delete" data-id="${esc(b.id)}">${delAsk ? 'Delete it?' : 'Delete'}</button>`) +
+          '</span></div>';
+      }).join('') + '</div>'
+      : '';
+    return head(bad ? 'bad' : latest ? 'ok' : '') +
+      status +
       (ui.error ? `<p class="sv-text cloud-bad">${esc(ui.error)}</p>` : '') +
-      `<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="backup" ${ui.busy ? 'disabled' : ''}>${ui.busy || 'Back up now'}</button><button type="button" class="sv-link" data-sv="pick">Change folder</button></div>`;
+      `<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="backup" ${ui.busy ? 'disabled' : ''}>${ui.busy || 'Back up now'}</button>` +
+      (backups && backups.length ? `<button type="button" class="sv-link" data-sv="toggle" aria-expanded="${ui.open ? 'true' : 'false'}">${ui.open ? 'Hide copies' : 'Restore a copy…'}</button>` : '') +
+      '</div>' +
+      list +
+      `<div class="sv-foot"><span class="sv-folder" title="${esc(g.saveDir)}">${esc(lastDirs(g.saveDir, 3))}</span><button type="button" class="sv-link" data-sv="pick">Change</button></div>` +
+      (ui.hasPrev ? '<button type="button" class="sv-link sv-prev" data-sv="previous">Open the saves a restore replaced</button>' : '');
   }
 
   function paintSavesCard(g) {
@@ -7298,6 +7475,10 @@
     if (!el || !g) return;
     el.innerHTML = savesCardHtml(g);
     const ui = state._sv;
+    if (g.saveDir && cloudOn('cloudSaves') && ui && ui.id === String(g.id) && ui.hasPrev === undefined && api.savesHasPrevious) {
+      ui.hasPrev = false;
+      api.savesHasPrevious(String(g.id)).then((v) => { ui.hasPrev = !!v; if (v && state.selectedId === String(g.id)) paintSavesCard(g); }).catch(() => {});
+    }
     if (g.saveDir && cloudOn('cloudSaves') && ui && ui.id === String(g.id) && !ui.backups && !ui.loading) {
       ui.loading = true;
       api.savesList(String(g.id)).then((res) => {
@@ -7338,6 +7519,24 @@
     const act = btn.dataset.sv;
     const ui = state._sv;
     if (act === 'settings') { openSettings('account'); return; }
+    if (act === 'turn-on') {
+      await saveConfigPatch({ cloudSaves: true });
+      toast('Save backups are on', 'ok');
+      paintSavesCard(g);
+      return;
+    }
+    if (act === 'toggle') { ui.open = !ui.open; ui.confirm = null; ui.confirmDel = null; paintSavesCard(g); return; }
+    if (act === 'previous') { if (api.savesOpenPrevious) api.savesOpenPrevious(String(g.id)); return; }
+    if (act === 'delete') {
+      const id = btn.dataset.id;
+      if (ui.confirmDel !== id) { ui.confirmDel = id; ui.confirm = null; paintSavesCard(g); return; }
+      ui.confirmDel = null;
+      const res = await api.savesDelete(id).catch((e) => ({ ok: false, error: { message: e.message } }));
+      if (res && res.ok) { toast('Backup deleted', 'ok'); ui.backups = null; }
+      else toast((res && res.error && res.error.message) || 'Couldn’t delete that backup', 'error');
+      paintSavesCard(g);
+      return;
+    }
     if (act === 'find') {
       ui.finding = true; paintSavesCard(g);
       const res = await api.savesFind({ name: g.name, steamAppId: g.steamAppId, installDir: g.installDir });
@@ -7359,13 +7558,16 @@
       backupNow(g, { quiet: false, force: true });
     } else if (act === 'restore') {
       const id = btn.dataset.id;
-      if (ui.confirm !== id) { ui.confirm = id; paintSavesCard(g); return; }
+      if (ui.confirm !== id) { ui.confirm = id; ui.confirmDel = null; paintSavesCard(g); return; }
       ui.confirm = null;
       if (typeof state.live[String(g.id)] === 'number') { toast('Close the game before restoring its saves', 'error'); paintSavesCard(g); return; }
       ui.busy = 'Restoring…'; paintSavesCard(g);
       const res = await api.savesRestore({ gameId: String(g.id), backupId: id, saveDir: g.saveDir });
       ui.busy = null;
-      if (res && res.ok) toast(`Restored ${res.data.files} file${res.data.files === 1 ? '' : 's'}. Your previous saves were kept in GameVault’s cloud folder.`, 'ok');
+      if (res && res.ok) {
+        ui.hasPrev = !!res.data.safety || ui.hasPrev;
+        toast(`Restored ${res.data.files} file${res.data.files === 1 ? '' : 's'}. The saves it replaced are kept: open them from this card.`, 'ok');
+      }
       else {
         problemDialog({
           title: 'Saves weren’t restored',
@@ -7387,7 +7589,8 @@
       renderAccountCard();
       paintSideAccount();
       if (st.signedIn && !was) runCloudSync({});
-      if (state.selectedId) paintSavesCard(gameById(state.selectedId));
+      if (state.selectedId) { const sel = gameById(state.selectedId); if (sel && was !== !!st.signedIn) paintRail(sel); else paintSavesCard(sel); }
+      if (state.settingsOpen && state.settingsSection === 'backups' && was !== !!st.signedIn) renderSettings();
     });
   }
 
@@ -8275,6 +8478,24 @@
           `<section class="st-card acct-card" data-account>${accountCardHtml()}</section>` +
           `<section class="st-card" data-cloud-card>${cloudCardHtml()}</section>`,
         wire(panel) { wireAccountCard(panel.querySelector('[data-account]')); wireCloudCard(panel.querySelector('[data-cloud-card]')); },
+      };
+    },
+
+    async backups() {
+      const st = await window.api.accountStatus().catch(() => ({ needsRestart: true }));
+      state.account = st;
+      const on = cloudOn('cloudSaves');
+      const [ov, lib] = await Promise.all([
+        on && api.savesOverview ? api.savesOverview().catch(() => null) : null,
+        api.libraryBackupInfo ? api.libraryBackupInfo().catch(() => null) : null,
+      ]);
+      state._bkOverview = ov && ov.ok ? ov.data : null;
+      state._bkError = ov && !ov.ok ? (ov.error && ov.error.message) || 'Couldn’t load your backups' : null;
+      state._bkLib = lib;
+      return {
+        html: `<section class="st-card" data-bk-saves>${backupsSavesHtml()}</section>` +
+          `<section class="st-card" data-bk-library>${backupsLibraryHtml()}</section>`,
+        wire(panel) { wireBackups(panel); },
       };
     },
 
@@ -11296,6 +11517,17 @@
     } finally { bp.busy = false; }
     paintPadHints();
     padEnsureFocus(true);
+    // without a pad, padEnsureFocus does nothing: hand focus to the button that
+    // opens Big Picture (or the active section), never <body>
+    if (!pad.on) {
+      requestAnimationFrame(() => {
+        const a = document.activeElement;
+        if (a && a !== document.body && a.isConnected && a.offsetParent !== null) return;
+        const to = [$('#btn-bigpicture'), document.querySelector('.side-item.is-active'), document.querySelector('.tab.is-active')]
+          .find((el) => el && el.offsetParent !== null);
+        if (to) to.focus({ preventScroll: true });
+      });
+    }
   }
 
   /** Show one Big Picture section (Home, Library, Playing, …, Settings). */

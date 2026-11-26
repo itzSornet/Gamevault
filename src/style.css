@@ -7181,3 +7181,33 @@ html.is-bigpicture .activity-view { padding-bottom: calc(var(--bp-safe-y) + 72px
 .cap-nav:disabled { opacity: 0.3; cursor: default; }
 .cap-modal .modal-foot { align-items: center; }
 .cap-when { margin-right: auto; font-size: 12.5px; color: var(--text-mute); }
+
+/* ---- Save backups card (game page) and Settings → Backups */
+.sv-head { display: flex; align-items: center; gap: 8px; }
+.sv-head .gvx-card-head { margin: 0; }
+.sv-ico { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: calc(8px * var(--radius-k, 1)); background: rgba(var(--accent-rgb), 0.14); color: var(--accent-hi, var(--accent)); }
+.sv-head.is-ok .sv-ico { background: rgba(70, 200, 140, 0.16); color: #5fd3a0; }
+.sv-head.is-bad .sv-ico { background: rgba(255, 110, 110, 0.16); color: #ff8a8a; }
+.sv-status { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.sv-status b { font-size: 13px; font-weight: 600; color: var(--text); }
+.sv-status span { font-size: 11.5px; color: var(--text-mute); }
+.sv-list { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 2px; border-top: 1px solid var(--line); }
+.sv-acts { display: inline-flex; gap: 10px; flex: none; }
+.sv-link.is-quiet { color: var(--text-mute); }
+.sv-foot { display: flex; align-items: center; gap: 10px; padding-top: 6px; border-top: 1px solid var(--line); }
+.sv-foot .sv-folder { flex: 1; min-width: 0; direction: ltr; }
+.sv-prev { font-size: 11px; }
+.sv-card .btn-primary.sv-btn { border-color: transparent; }
+
+.bk-list { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.bk-row { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.bk-list + .st-note { border-top: 0; }
+.bk-row:last-child { border-bottom: 0; }
+.bk-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bk-main b { font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-status { font-size: 12px; color: var(--text-dim); }
+.bk-where { font-size: 11.5px; color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-bad { color: #ff8a8a; }
+[data-palette="paper"] .bk-bad { color: #c43c3c; }
+.bk-acts { display: flex; gap: 8px; flex: none; }
+.bk-meta { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; }

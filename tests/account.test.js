@@ -36,6 +36,8 @@ function fakeCloud() {
     if (p === 'token' && u.searchParams.get('grant_type') === 'refresh_token') {
       return refreshOk ? json(200, session('me@x.io')) : json(400, { msg: 'Invalid Refresh Token' });
     }
+    // Supabase: a sign-up for an address that has an account gets a user with no identities
+    if (p === 'signup' && body.email === 'taken@x.io') return json(200, { id: 'u9', email: body.email, identities: [] });
     if (p === 'signup' || p === 'recover') { challenge = body.code_challenge; return json(200, { id: 'u1', email: body.email }); }
     if (p === 'token' && u.searchParams.get('grant_type') === 'password') {
       return body.password === 'right-password' ? json(200, session(body.email)) : json(400, { error: 'invalid_grant', error_description: 'Invalid login credentials' });
@@ -152,6 +154,8 @@ async function get(url) {
   assert.ok(cloud.calls.some((c) => c.path === '/auth/v1/user'));
   await acct.signOut();
   await assert.rejects(acct.signUp('new@x.io', 'short'), /at least 8/);
+  await assert.rejects(acct.signUp('taken@x.io', 'long-enough-pw'), /already an account/);
+  assert.strictEqual(acct.status().pending, null, 'no link to wait for');
   await acct.signUp('new@x.io', 'long-enough-pw');
   assert.strictEqual(acct.status().pending.kind, 'signup');
   assert.strictEqual(acct.status().signedIn, false);
@@ -208,12 +212,12 @@ async function get(url) {
   assert.strictEqual(acct3.status().signedIn, false);
   assert.ok(!fs.existsSync(path.join(dir, 'session.bin')));
 
-  // an unreadable session says so and is removed
+  // an unreadable session says so, and is kept (the keychain may unlock later)
   fs.writeFileSync(path.join(dir, 'session.bin'), 'v1:garbage');
   const acct4 = mk();
   assert.strictEqual(acct4.status().signedIn, false);
   assert.match(acct4.status().error, /couldn’t be read/);
-  assert.ok(!fs.existsSync(path.join(dir, 'session.bin')));
+  assert.ok(fs.existsSync(path.join(dir, 'session.bin')));
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('account tests passed');

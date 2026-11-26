@@ -1514,6 +1514,51 @@ function createWindow() {
   ipcMain.handle('saves:list', (_, gameId) => accountReply(() => cloud().listBackups(gameId)));
   ipcMain.handle('saves:restore', (_, p) => accountReply(() => cloud().restoreBackup(p || {})));
   ipcMain.handle('saves:delete', (_, id) => accountReply(() => cloud().deleteBackup(id)));
+  // Settings → Backups: every game with copies in the cloud, and failed tries
+  ipcMain.handle('saves:overview', () => accountReply(() => cloud().overview()));
+  // the saves a restore replaced (kept in userData/cloud/before-restore)
+  ipcMain.handle('saves:has-previous', (_, gameId) => !!cloud().safetyFolder(String(gameId || '')));
+  ipcMain.handle('saves:open-previous', (_, gameId) => {
+    const d = cloud().safetyFolder(String(gameId || ''));
+    if (d) shell.openPath(d);
+    return !!d;
+  });
+
+  // A copy of the library the user keeps (export) and puts back (restore)
+  ipcMain.handle('library:backup-info', () => {
+    try { return { at: fs.statSync(`${DATA_PATH}.bak`).mtimeMs }; } catch (_) { return { at: null }; }
+  });
+  ipcMain.handle('library:export', async () => {
+    if (!fs.existsSync(DATA_PATH)) return { ok: false, error: 'There’s no library to save yet.' };
+    const day = new Date().toISOString().slice(0, 10);
+    const r = await dialog.showSaveDialog(win, {
+      title: 'Save a copy of your library',
+      defaultPath: path.join(app.getPath('documents'), `GameVault library ${day}.json`),
+      filters: [{ name: 'GameVault library', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+      fs.copyFileSync(DATA_PATH, r.filePath);
+      return { ok: true, path: r.filePath };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('library:read-copy', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: 'Restore your library from a copy',
+      defaultPath: app.getPath('documents'),
+      properties: ['openFile'],
+      filters: [{ name: 'GameVault library', extensions: ['json'] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+    try {
+      const st = fs.statSync(r.filePaths[0]);
+      if (st.size > 200 * 1024 * 1024) return { ok: false, error: 'That file is too big to be a GameVault library.' };
+      const v = JSON.parse(fs.readFileSync(r.filePaths[0], 'utf8'));
+      const games = Array.isArray(v) ? v : v && Array.isArray(v.games) ? v.games : null;
+      if (!games) return { ok: false, error: 'That file isn’t a GameVault library.' };
+      return { ok: true, games, name: path.basename(r.filePaths[0]), at: st.mtimeMs };
+    } catch (e) { return { ok: false, error: 'That file couldn’t be read as a GameVault library.' }; }
+  });
 
   // Cloud answers worth retrying with the user's key (NOT_FOUND is final).
   const CLOUD_SOFT_FAIL = new Set(['NO_CLOUD', 'NETWORK', 'RATE_LIMIT', 'BUSY', 'SERVER', 'UNAUTHENTICATED', 'AUTH']);

@@ -48,6 +48,10 @@ test('playStreak: current run ends today or yesterday', () => {
   assert.deepEqual(playStreak([], NOW), { current: 0, best: 0 });
   // two sessions on one day are one day
   assert.deepEqual(playStreak([s(at(2026, 7, 26, 9), 1), s(at(2026, 7, 26, 20), 1)], NOW), { current: 1, best: 1 });
+  // a few seconds of a game isn't a day of playing; short sessions add up
+  const secs = (d, h) => s(at(2026, 7, d, 20), h);
+  assert.deepEqual(playStreak([secs(24, 1), secs(25, 1), secs(26, 3 / 3600)], NOW), { current: 2, best: 2 }, '3 s today keeps yesterday’s run, adds nothing');
+  assert.deepEqual(playStreak([secs(26, 3 / 60), s(at(2026, 7, 26, 21), 3 / 60)], NOW), { current: 1, best: 1 }, '3 + 3 minutes count');
 });
 
 test('allSessions: every game, newest first, tagged with the game', () => {

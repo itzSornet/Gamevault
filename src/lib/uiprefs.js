@@ -30,7 +30,6 @@
     shelfSize: ['small', 'medium', 'large'],
     // full = follow Windows' own "animation effects" setting (the old behaviour)
     motion: ['full', 'reduced', 'off'],
-    colorScheme: ['palette', 'system'],
   };
 
   // [min, max] for numbers; the default sits in DEFAULTS
@@ -69,7 +68,6 @@
     showRatings: true,
     motion: 'full',
     fontScale: 100,
-    colorScheme: 'palette',
   });
 
   // the accent swatches in Settings → Appearance (any other colour works too)
@@ -224,10 +222,15 @@
     const v = {};
     const a = rgb(accent);
     const t = Math.min(100, Math.max(0, Number(tint) || 0)) / 100 * TINT_MAX;
+    // a light palette mixes in a pale accent: a dark accent at 20% turned
+    // Paper's surfaces grey and its dim text unreadable
+    const bg = base && parseColor(base['--bg']);
+    const light = !!(bg && luminance(bg.c) > 0.5);
+    const toward = a && light ? mix(a, [255, 255, 255], 0.6) : a;
     for (const k of TINT_KEYS) {
       const p = base && parseColor(base[k]);
       if (!a || !t || !p) { v[k] = null; continue; }
-      const m = mix(p.c, a, t);
+      const m = mix(p.c, toward, t);
       v[k] = p.triple ? m.map((x) => Math.round(x)).join(', ') : toHex(m);
     }
     return v;
@@ -307,7 +310,7 @@
 
   // A preset sets the layout, shape and glass. It keeps what is personal:
   // colours, background, size and motion (the last two are about comfort).
-  const KEEP_ON_PRESET = ['accent', 'tint', 'background', 'backgroundFile', 'backgroundKind', 'backgroundColor', 'backgroundDim', 'colorScheme', 'fontScale', 'motion'];
+  const KEEP_ON_PRESET = ['accent', 'tint', 'background', 'backgroundFile', 'backgroundKind', 'backgroundColor', 'backgroundDim', 'fontScale', 'motion'];
   const PRESETS = Object.freeze([
     { id: 'default', name: 'Default', desc: 'The classic GameVault look', patch: {} },
     { id: 'minimal', name: 'Minimal', desc: 'No navigation bar, search out of the way, solid panels', patch: { nav: 'none', search: 'hidden', glass: { solid: true } } },

@@ -272,11 +272,18 @@
 
   // Days in a row with play. The current streak is still alive when the
   // last day played was today or yesterday.
+  // a day joins a streak once it has this much play: opening a game for a few
+  // seconds (a launcher check, a crash) isn't a day of playing
+  const STREAK_MIN_HOURS = 5 / 60;
+
   function playStreak(sessions, now) {
-    const days = new Set();
+    const perDay = new Map();
     for (const s of Array.isArray(sessions) ? sessions : []) {
-      if (isValidSession(s)) days.add(localDayNumber(new Date(s.start)));
+      if (!isValidSession(s)) continue;
+      const d = localDayNumber(new Date(s.start));
+      perDay.set(d, (perDay.get(d) || 0) + s.duration);
     }
+    const days = new Set([...perDay].filter(([, h]) => h >= STREAK_MIN_HOURS - 1e-9).map(([d]) => d));
     if (!days.size) return { current: 0, best: 0 };
     const sorted = Array.from(days).sort((a, b) => a - b);
     let best = 1;

@@ -50,6 +50,12 @@ contextBridge.exposeInMainWorld('api', {
   savesList: (gameId) => ipcRenderer.invoke('saves:list', gameId),
   savesRestore: (p) => ipcRenderer.invoke('saves:restore', p),
   savesDelete: (id) => ipcRenderer.invoke('saves:delete', id),
+  savesOverview: () => ipcRenderer.invoke('saves:overview'),
+  savesHasPrevious: (gameId) => ipcRenderer.invoke('saves:has-previous', gameId),
+  savesOpenPrevious: (gameId) => ipcRenderer.invoke('saves:open-previous', gameId),
+  libraryBackupInfo: () => ipcRenderer.invoke('library:backup-info'),
+  libraryExport: () => ipcRenderer.invoke('library:export'),
+  libraryReadCopy: () => ipcRenderer.invoke('library:read-copy'),
   onAccountChanged: (cb) => ipcRenderer.on('account:changed', (_, st) => cb(st)),
 
   // Config (RAWG key etc)

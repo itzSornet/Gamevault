@@ -92,10 +92,10 @@ function createAccount(opts = {}) {
       console.warn('[account] session unreadable:', e.message);
     }
     if (!session) {
-      // Written with a key this PC can't use anymore (or damaged). Say so once
-      // instead of looking silently signed out forever, and start clean.
+      // Written with a key this PC can't use (or damaged), or the keychain
+      // isn't unlocked yet. Say so instead of looking silently signed out. The
+      // file stays: next start may read it, and signing in replaces it.
       lastError = 'Your saved sign-in couldn’t be read on this PC, so you’re signed out. Sign in again.';
-      try { fs.rmSync(FILE, { force: true }); } catch (_) {}
     }
     return session;
   }
@@ -346,6 +346,13 @@ function createAccount(opts = {}) {
     } catch (e) {
       cancel();
       throw e;
+    }
+    // An address that already has an account: Supabase sends nothing and
+    // answers with a user that has no identities
+    const u = json && (json.user || json);
+    if (kind === 'signup' && u && Array.isArray(u.identities) && u.identities.length === 0) {
+      cancel();
+      throw Object.assign(new Error('There’s already an account with that email. Sign in instead.'), { code: 'AUTH' });
     }
     // Projects with email confirmation off sign a new account straight in.
     if (json && json.access_token && json.refresh_token) {
