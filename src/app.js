@@ -7591,6 +7591,7 @@
       if (st.signedIn && !was) runCloudSync({});
       if (state.selectedId) { const sel = gameById(state.selectedId); if (sel && was !== !!st.signedIn) paintRail(sel); else paintSavesCard(sel); }
       if (state.settingsOpen && state.settingsSection === 'backups' && was !== !!st.signedIn) renderSettings();
+      welcome.onAccount(st);
     });
   }
 
@@ -7918,13 +7919,25 @@
   }
 
   // ---- presets, share, undo and reset (top of Appearance and the Customize panel)
-  const PRESET_ART = '<i class="pa-nav"></i><i class="pa-top"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i><i class="pa-c"></i>';
+  // A tiny made-up GameVault for each preset: sidebar, top bar, featured game
+  // and a shelf of invented covers (no real games). The CSS lays it out per preset.
+  function presetArt(id) {
+    const count = { compact: 7, couch: 3, minimal: 6, dock: 6 }[id] || 5;
+    const cover = (n) => `<i class="pa-cv pa-cv${n}"><b></b></i>`;
+    const shelf = Array.from({ length: count }, (_, i) => `<i class="pa-card${i === 0 ? ' is-on' : ''}">${cover(((i + 1) % 7) + 1)}<b></b></i>`).join('');
+    return `<span class="pa-win">` +
+      `<span class="pa-side"><i class="pa-logo"></i><i class="pa-item is-on"></i><i class="pa-item"></i><i class="pa-item"></i><i class="pa-gap"></i><i class="pa-item"></i><i class="pa-item"></i></span>` +
+      `<span class="pa-main"><span class="pa-top"><i class="pa-title"></i><i class="pa-search"></i><i class="pa-btn"></i></span>` +
+      `<span class="pa-hero"><span class="pa-hero-text"><i class="pa-kick"></i><i class="pa-name"></i><i class="pa-meta"></i><span class="pa-acts"><i class="pa-play"></i><i class="pa-more"></i></span></span>${cover(1).replace('pa-cv pa-cv1', 'pa-cv pa-cv1 pa-hero-cv')}</span>` +
+      `<span class="pa-shelf">${shelf}</span></span>` +
+      `<span class="pa-dock"><i></i><i class="is-on"></i><i></i><i></i><i></i></span></span>`;
+  }
   function stLookTools(ui, opts = {}) {
     const preset = UiPrefs.presetOf(ui);
     const isNew = !state.config.uiHintSeen && !opts.drawer;
     const presets = `<div class="cz-presets" role="group" aria-label="Presets">${UiPrefs.PRESETS.map((p) => `
       <button type="button" class="cz-preset${p.id === preset ? ' is-active' : ''}" data-look-preset="${p.id}" aria-pressed="${p.id === preset}" title="${esc(p.desc)}">
-        <span class="cz-art" data-art="${p.id}" aria-hidden="true">${PRESET_ART}</span>
+        <span class="cz-art" data-art="${p.id}" aria-hidden="true">${presetArt(p.id)}</span>
         <span class="cz-preset-name">${esc(p.name)}</span>
       </button>`).join('')}</div>`;
     return stCard(`Customize${isNew ? '<span class="st-soon">New</span>' : ''}`,
@@ -8580,13 +8593,15 @@
           stCard('GameVault',
             stRow('Version', `${esc(version)} · ${esc(osName)}`, '') +
             stRow('Updates', /experimental/i.test(version) ? 'This is an experimental build, so automatic updates are off.' : 'GameVault checks for updates on startup.', '') +
-            stRow('Your data', 'Library, settings and cached artwork live in one folder on this PC.', '<button type="button" class="btn btn-ghost" data-open-data>Open folder</button>')) +
+            stRow('Your data', 'Library, settings and cached artwork live in one folder on this PC.', '<button type="button" class="btn btn-ghost" data-open-data>Open folder</button>') +
+            stRow('Welcome', 'The first-run setup: colours, layout, games and sign-in.', '<button type="button" class="btn btn-ghost" data-welcome-again>Show it again</button>')) +
           stCard('Credits',
             stRow('SteamGridDB', 'Covers, banners, logos and icons come from the SteamGridDB community.', link('https://www.steamgriddb.com', 'steamgriddb.com')) +
             stRow('PCGamingWiki', 'Save-game locations (for cloud saves) come from PCGamingWiki via the Ludusavi manifest.', link('https://www.pcgamingwiki.com', 'pcgamingwiki.com')) +
             stRow('Source code', 'GameVault is open source under the MIT license.', link('https://github.com/itzSornet/Gamevault', 'GitHub'))),
         wire(panel) {
           for (const b of panel.querySelectorAll('[data-ext]')) b.onclick = () => api.openExternal && api.openExternal(b.dataset.ext);
+          panel.querySelector('[data-welcome-again]').onclick = () => welcome.open({ again: true });
           panel.querySelector('[data-open-data]').onclick = async () => {
             const p = await api.getDataPath().catch(() => '');
             if (p) api.showInFolder(p);
@@ -8595,6 +8610,302 @@
       };
     },
   };
+
+  // ---------------------------------------------------------------------------
+  // Welcome: a full-screen first run, shown once to everyone (people coming
+  // from 1.3 too). Every step can be skipped. The games step only shows to
+  // people with an empty library, the sign-in step only to people signed out.
+  // ---------------------------------------------------------------------------
+
+  // [id, name, background, surface, accent] for the palette swatches
+  const WELCOME_PALETTES = [
+    ['midnight', 'Midnight', '#08090c', '#161923', '#4c7dff'],
+    ['nebula', 'Nebula', '#0b0a12', '#191629', '#7c4dff'],
+    ['emerald', 'Emerald', '#080c0b', '#14201c', '#1fa774'],
+    ['ocean', 'Ocean', '#070b12', '#131c2b', '#2f7bff'],
+    ['sunset', 'Sunset', '#0d0908', '#231713', '#f0603a'],
+    ['paper', 'Paper', '#f3f0e9', '#ffffff', '#e4572e'],
+  ];
+  const WELCOME_HEX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path pathLength="1" d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>';
+  const WELCOME_CHECK = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
+
+  const welcome = (() => {
+    let el = null;
+    let steps = [];
+    let at = 0;
+    let watch = null;
+
+    const isOpen = () => !!(el && !el.hidden);
+    const signedIn = () => !!(state.account && state.account.signedIn);
+    const hoursText = (h) => `${fmtNum(Math.round(h))} hour${Math.round(h) === 1 ? '' : 's'}`;
+
+    function plan() {
+      const s = ['hello', 'colours', 'layout'];
+      if (!state.games.length) s.push('games');
+      if (!signedIn() && api.accountOAuth) s.push('account');
+      s.push('done');
+      return s;
+    }
+
+    function helloHtml() {
+      const games = state.games.filter((g) => !gvIsWishlisted(g));
+      if (games.length && !state.config.welcomeDone) {
+        const hours = games.reduce((t, g) => t + (Number(g.hours) || 0), 0);
+        return `<div class="wel-hex">${WELCOME_HEX}</div>
+          <span class="wel-kicker">Welcome to</span>
+          <h1 class="wel-title">GameVault 2.0</h1>
+          <p class="wel-lead">Your library came with you: ${fmtNum(games.length)} game${games.length === 1 ? '' : 's'} and ${hoursText(hours)} of play.</p>
+          <p class="wel-sub">A few quick choices to make it yours. You can skip any of them.</p>`;
+      }
+      return `<div class="wel-hex">${WELCOME_HEX}</div>
+        <span class="wel-kicker">Welcome to</span>
+        <h1 class="wel-title">GameVault</h1>
+        <p class="wel-lead">Every game you own in one place, from every launcher, with your playtime tracked for you.</p>
+        <p class="wel-sub">A few quick choices to make it yours. You can skip any of them.</p>`;
+    }
+
+    function coloursHtml() {
+      const ui = state.ui || UiPrefs.defaults();
+      const pal = WELCOME_PALETTES.map(([id, name, bg, surf, acc]) => `
+        <button type="button" class="wel-pal${state.palette === id ? ' is-active' : ''}" data-wel-pal="${id}" role="radio" aria-checked="${state.palette === id}">
+          <span class="wel-pal-art" style="--p-bg:${bg};--p-surf:${surf};--p-acc:${acc}" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="wel-pal-name">${name}</span>
+        </button>`).join('');
+      const own = !ui.accent;
+      const acc = [`<button type="button" class="wel-acc is-own${own ? ' is-active' : ''}" data-wel-acc="" role="radio" aria-checked="${own}" title="The palette’s own colour"><span>Auto</span></button>`]
+        .concat(UiPrefs.ACCENTS.map(([hex, name]) => `<button type="button" class="wel-acc${ui.accent === hex ? ' is-active' : ''}" data-wel-acc="${hex}" role="radio" aria-checked="${ui.accent === hex}" title="${name}" aria-label="${name}" style="--a:${hex}"></button>`)).join('');
+      return `<h2 class="wel-h">Pick your colours</h2>
+        <p class="wel-sub">The whole app changes as you pick. Settings → Appearance has more.</p>
+        <div class="wel-pals" role="radiogroup" aria-label="Palette">${pal}</div>
+        <div class="wel-label">Accent</div>
+        <div class="wel-accs" role="radiogroup" aria-label="Accent colour">${acc}</div>`;
+    }
+
+    function layoutHtml() {
+      const cur = UiPrefs.presetOf(state.ui);
+      const tiles = UiPrefs.PRESETS.map((p) => `
+        <button type="button" class="cz-preset wel-preset${p.id === cur ? ' is-active' : ''}" data-wel-preset="${p.id}" role="radio" aria-checked="${p.id === cur}">
+          <span class="cz-art" data-art="${p.id}" aria-hidden="true">${presetArt(p.id)}</span>
+          <span class="cz-preset-name">${esc(p.name)}</span>
+          <span class="wel-preset-desc">${esc(p.desc)}</span>
+        </button>`).join('');
+      return `<h2 class="wel-h">Choose a layout</h2>
+        <p class="wel-sub">Where the menu sits and how big things are. Right-click any empty spot later to fine-tune it live.</p>
+        <div class="wel-presets" role="radiogroup" aria-label="Layout">${tiles}</div>`;
+    }
+
+    function gamesLine() {
+      const n = state.games.filter((g) => !gvIsWishlisted(g)).length;
+      return n ? `${WELCOME_CHECK}<span>${fmtNum(n)} game${n === 1 ? '' : 's'} in your library</span>` : '';
+    }
+    function gamesHtml() {
+      return `<h2 class="wel-h">Bring in your games</h2>
+        <p class="wel-sub">GameVault finds what’s installed from Steam, Epic, GOG, Xbox, EA, Ubisoft and more, or you can add any game by hand.</p>
+        <div class="wel-actions">
+          <button type="button" class="btn btn-primary wel-big" data-wel="import">Find my games</button>
+          <button type="button" class="btn wel-big" data-wel="add">Add one by hand</button>
+        </div>
+        <p class="wel-done-line" data-wel-games aria-live="polite">${gamesLine()}</p>`;
+    }
+
+    function accountHtml() {
+      if (signedIn()) {
+        const u = state.account.user || {};
+        return `<h2 class="wel-h">You’re signed in</h2>
+          <p class="wel-done-line">${WELCOME_CHECK}<span>${esc(u.email || u.name || 'Signed in')}</span></p>
+          <p class="wel-sub">Turn on library sync and save backups any time in Settings → Account and Backups.</p>`;
+      }
+      const prov = state.accountProviders || {};
+      const social = SOCIAL.filter(([id]) => prov[id]);
+      const pending = state.account && state.account.pending && state.account.pending.kind === 'oauth';
+      const buttons = social.map(([id, name, icon]) => `<button type="button" class="btn acct-social wel-big" data-wel-oauth="${id}">${icon}<span>Continue with ${name}</span></button>`).join('');
+      return `<h2 class="wel-h">Sync and back up <span class="wel-opt">optional</span></h2>
+        <p class="wel-sub">A free account keeps your library in step across your PCs and backs up your game saves, encrypted. You can do this later in Settings.</p>
+        <div class="wel-actions is-col">${buttons}
+          <button type="button" class="acct-link" data-wel="email">Use email instead</button>
+        </div>
+        <p class="wel-wait" data-wel-wait aria-live="polite">${pending ? 'Finish signing in in your browser, then come back here.' : ''}</p>`;
+    }
+
+    function doneHtml() {
+      const tip = (k, t) => `<li><kbd>${k}</kbd><span>${t}</span></li>`;
+      return `<div class="wel-hex is-done">${WELCOME_HEX}</div>
+        <h2 class="wel-h">You’re all set</h2>
+        <p class="wel-sub">A few things worth knowing:</p>
+        <ul class="wel-tips">
+          ${tip('Ctrl F', 'Search your games or run a command')}
+          ${tip('Right-click', 'On an empty spot to change the look live')}
+          ${tip('Controller', 'Works everywhere. Big Picture is made for the couch')}
+        </ul>`;
+    }
+
+    const BODY = { hello: helloHtml, colours: coloursHtml, layout: layoutHtml, games: gamesHtml, account: accountHtml, done: doneHtml };
+
+    function build() {
+      el = document.createElement('div');
+      el.id = 'welcome';
+      el.className = 'welcome';
+      el.hidden = true;
+      el.setAttribute('role', 'dialog');
+      el.setAttribute('aria-modal', 'true');
+      el.setAttribute('aria-label', 'Welcome to GameVault');
+      el.innerHTML = `
+        <div class="wel-top"><button type="button" class="btn btn-ghost wel-skip" data-wel="skip">Skip setup</button></div>
+        <div class="wel-stage"><div class="wel-body" data-wel-body></div></div>
+        <div class="wel-foot">
+          <button type="button" class="btn btn-ghost wel-back" data-wel="back">Back</button>
+          <div class="wel-dots" data-wel-dots aria-hidden="true"></div>
+          <button type="button" class="btn btn-primary wel-next" data-wel="next">Next</button>
+        </div>`;
+      // the window is frameless and its own buttons hide with the app: a copy
+      const ctl = document.querySelector('.win-controls');
+      if (ctl) {
+        const copy = ctl.cloneNode(true);
+        for (const b of copy.querySelectorAll('[id]')) { b.dataset.win = b.id.replace('win-', ''); b.removeAttribute('id'); }
+        copy.addEventListener('click', (e) => { const b = e.target.closest('[data-win]'); if (b) api[{ min: 'minimize', max: 'maximize', close: 'close' }[b.dataset.win]](); });
+        el.querySelector('.wel-top').appendChild(copy);
+      }
+      document.body.appendChild(el);
+      el.addEventListener('click', onClick);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && $('#modal').hidden) { e.preventDefault(); if (at > 0) go(at - 1); }
+      });
+    }
+
+    function paint(dir) {
+      const id = steps[at];
+      const body = el.querySelector('[data-wel-body]');
+      body.innerHTML = BODY[id]();
+      body.dataset.step = id;
+      body.classList.remove('is-in', 'is-back');
+      void body.offsetWidth;
+      body.classList.add('is-in');
+      if (dir < 0) body.classList.add('is-back');
+      el.dataset.step = id;
+      el.querySelector('[data-wel-dots]').innerHTML = steps.map((s, i) => `<i class="${i === at ? 'is-on' : i < at ? 'is-past' : ''}"></i>`).join('');
+      el.querySelector('.wel-back').style.visibility = at > 0 && id !== 'done' ? '' : 'hidden';
+      el.querySelector('.wel-skip').style.visibility = id === 'done' ? 'hidden' : '';
+      const next = el.querySelector('.wel-next');
+      next.textContent = id === 'hello' ? 'Get started' : id === 'done' ? 'Start playing' : id === 'account' && !signedIn() ? 'Not now' : 'Next';
+      clearInterval(watch);
+      watch = null;
+      if (id === 'games') {
+        // the import and add dialogs open over the welcome: show what they added
+        let last = state.games.length;
+        watch = setInterval(() => {
+          if (state.games.length === last) return;
+          last = state.games.length;
+          const line = el.querySelector('[data-wel-games]');
+          if (line) line.innerHTML = gamesLine();
+          if (state.games.length) next.textContent = 'Next';
+        }, 600);
+      }
+      if (id === 'account' && !state.accountProviders && api.accountProviders) {
+        api.accountProviders().then((p) => { state.accountProviders = p; if (isOpen() && steps[at] === 'account') paint(0); }).catch(() => {});
+      }
+      requestAnimationFrame(() => {
+        const first = body.querySelector('.is-active') || (id === 'hello' || id === 'done' ? next : body.querySelector('button')) || next;
+        if (el.contains(document.activeElement) && document.activeElement !== document.body && dir === 0) return;
+        first.focus({ preventScroll: true });
+      });
+    }
+
+    function go(i) {
+      if (i < 0 || i >= steps.length) return;
+      const dir = i > at ? 1 : -1;
+      at = i;
+      sfx('move');
+      paint(dir);
+    }
+
+    function open({ again = false } = {}) {
+      if (!el) build();
+      if (state.settingsOpen) closeSettings();
+      steps = plan();
+      at = 0;
+      el.classList.toggle('is-again', again);
+      el.hidden = false;
+      document.documentElement.classList.add('is-welcome');
+      const app = $('#app');
+      if (app) app.inert = true;
+      void el.offsetWidth;
+      el.classList.add('is-open');
+      paint(1);
+    }
+
+    function finish({ skipped = false } = {}) {
+      clearInterval(watch);
+      watch = null;
+      saveConfigPatch({ welcomeDone: Date.now() });
+      el.classList.remove('is-open');
+      document.documentElement.classList.remove('is-welcome');
+      const app = $('#app');
+      if (app) app.inert = false;
+      const done = () => { el.hidden = true; };
+      if (prefersReducedMotion()) done(); else setTimeout(done, 260);
+      renderLibrary();
+      refreshCounts();
+      requestAnimationFrame(() => {
+        if (pad.on) padEnsureFocus(true);
+        else {
+          const to = [document.querySelector('.side-item.is-active'), document.querySelector('.tab.is-active'), $('#btn-bigpicture')].find((x) => x && x.offsetParent !== null);
+          if (to) to.focus({ preventScroll: true });
+        }
+      });
+      if (skipped) toast('Setup skipped. Settings has everything, and About can show it again.', 'ok');
+    }
+
+    function mark(sel, btn) {
+      for (const b of el.querySelectorAll(sel)) { const on = b === btn; b.classList.toggle('is-active', on); b.setAttribute('aria-checked', String(on)); }
+    }
+
+    function onClick(e) {
+      const pal = e.target.closest('[data-wel-pal]');
+      if (pal) { mark('[data-wel-pal]', pal); applyPalette(pal.dataset.welPal, { persist: true }); return; }
+      const acc = e.target.closest('[data-wel-acc]');
+      if (acc) { mark('[data-wel-acc]', acc); setUi({ accent: acc.dataset.welAcc || null }); return; }
+      const pre = e.target.closest('[data-wel-preset]');
+      if (pre) { mark('[data-wel-preset]', pre); applyLookPreset(pre.dataset.welPreset); return; }
+      const oauth = e.target.closest('[data-wel-oauth]');
+      if (oauth) {
+        oauth.disabled = true;
+        const wait = el.querySelector('[data-wel-wait]');
+        if (wait) wait.textContent = 'Opening your browser…';
+        window.api.accountOAuth(oauth.dataset.welOauth)
+          .then(() => { if (wait && !signedIn()) wait.textContent = 'Finish signing in in your browser, then come back here.'; })
+          .catch((err) => { if (wait) wait.textContent = (err && err.message) || 'Couldn’t open the browser. Try again.'; })
+          .finally(() => { oauth.disabled = false; });
+        return;
+      }
+      const b = e.target.closest('[data-wel]');
+      if (!b) return;
+      const act = b.dataset.wel;
+      if (act === 'next') { if (at === steps.length - 1) finish(); else go(at + 1); }
+      else if (act === 'back') go(at - 1);
+      else if (act === 'skip') finish({ skipped: true });
+      else if (act === 'import') openImportModal();
+      else if (act === 'add') openGameModal(null);
+      else if (act === 'email') { finish(); openSettings('account'); }
+    }
+
+    function onAccount(st) {
+      if (!isOpen() || steps[at] !== 'account') return;
+      paint(0);
+      if (st && st.signedIn) {
+        const next = el.querySelector('.wel-next');
+        next.textContent = 'Next';
+        next.focus({ preventScroll: true });
+      }
+    }
+
+    function maybeOpen() {
+      if (state.config.welcomeDone || bp.on) return;
+      if (document.documentElement.classList.contains('shot-mode')) return;
+      open();
+    }
+
+    return { open, maybeOpen, isOpen, onAccount, el: () => el };
+  })();
 
   // Spotlight hooks: filled in by the spotlight block at the end of the file.
   const spotHooks = { open: () => {}, close: () => {}, isOpen: () => false, resync: () => {} };
@@ -9490,6 +9801,20 @@
       });
     }
 
+    // one time, coming from 1.3: its colour theme becomes a palette and accent
+    try {
+      if (state.config.theme && !state.config.ui && !state.config.lookFrom131) {
+        const old = UiPrefs.fromOldTheme(state.config.theme, state.config.customTheme);
+        if (old) {
+          state.palette = old.palette;
+          state.ui = UiPrefs.normalize({ ...state.ui, accent: old.accent });
+          saveConfigPatch({ palette: old.palette, ui: state.ui, lookFrom131: true });
+        } else saveConfigPatch({ lookFrom131: true });
+      }
+    } catch (e) {
+      console.warn('1.3 theme carry-over failed', e);
+    }
+
     // one-time status model migration: Dropped → Playing, Want → Wishlist
     try {
       if (Number(state.config.statusModel || 0) < 2) {
@@ -9565,6 +9890,7 @@
     }
 
     initGovernor();
+    step('welcome', () => welcome.maybeOpen());
 
   }
 
@@ -10975,6 +11301,7 @@
   function padScope() {
     const modal = $('#modal');
     if (modal && !modal.hidden) return modal;
+    if (welcome.isOpen()) return welcome.el();
     if (spotHooks.isOpen()) return $('#spot');
     const sort = $('#sort-menu');
     const menuOpen = Array.from(document.querySelectorAll('[role="menu"]')).some((m) => !m.hidden && m.getClientRects().length && !m.closest('#cz'));

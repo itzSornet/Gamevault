@@ -122,6 +122,7 @@ let protectOnSave = false;
 function lastLoadIssue() { const v = loadIssue; loadIssue = null; return v; }
 
 function loadGames() {
+  keepUpgradeCopy();
   const res = readJsonFile(DATA_PATH);
   if (res.state === 'missing') { protectOnSave = false; return []; }
   if (res.state === 'ok' && Array.isArray(res.value)) {
@@ -435,8 +436,32 @@ function sweepDeadData() {
   try { fs.rmSync(path.join(path.dirname(DATA_PATH), 'overlay_debug.log'), { force: true }); } catch (_) {}
 }
 
+// The first time 2.0 opens a library from 1.x (games.json there, and none of
+// 2.0's own settings yet), copy the files as they were into before-2.0/
+// before anything converts them. Never overwritten.
+let upgradeCopyChecked = false;
+function keepUpgradeCopy() {
+  if (upgradeCopyChecked) return;
+  upgradeCopyChecked = true;
+  const dir = path.join(path.dirname(DATA_PATH), 'before-2.0');
+  try {
+    if (fs.existsSync(dir) || !fs.existsSync(DATA_PATH)) return;
+    const cfg = readJsonFile(CONFIG_PATH);
+    const c = cfg.state === 'ok' && cfg.value && typeof cfg.value === 'object' ? cfg.value : {};
+    if (c.statusModel || c.ui || c.uiAt) return; // already a 2.0 library
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of ['games.json', 'config.json', 'ai-profile.json']) {
+      const src = path.join(path.dirname(DATA_PATH), f);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+    }
+  } catch (err) {
+    console.warn('[data] could not keep a copy of the 1.x library:', err.message);
+  }
+}
+
 // Full config for main-process code, secrets included.
 function loadConfig() {
+  keepUpgradeCopy();
   sweepDeadData();
   const stored = readStoredConfig();
   const secrets = readSecrets();

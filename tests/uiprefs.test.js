@@ -215,3 +215,12 @@ test('normalize: background mode follows the kind of file this PC has', () => {
   const v = U.normalize({ background: 'image', backgroundFile: 'C:/bg.mp4', backgroundKind: 'video' });
   assert.equal(v.background, 'video');
 });
+
+test('fromOldTheme carries a 1.3 colour theme over', () => {
+  assert.deepEqual(U.fromOldTheme('custom', { accent: '#FF6A00' }), { palette: 'midnight', accent: '#ff6a00' });
+  assert.deepEqual(U.fromOldTheme('ocean'), { palette: 'ocean', accent: '#0ea5e9' });
+  assert.deepEqual(U.fromOldTheme('monochrome'), { palette: 'paper', accent: '#171717' });
+  assert.equal(U.fromOldTheme('default'), null, '1.3 default becomes 2.0 default');
+  assert.equal(U.fromOldTheme('custom', { accent: 'not a colour' }), null);
+  assert.equal(U.fromOldTheme(undefined), null);
+});

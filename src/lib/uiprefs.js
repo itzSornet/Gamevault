@@ -397,8 +397,29 @@
     return tb > ta ? b : a;
   }
 
+  // 1.3.x kept a colour theme in config.theme (and config.customTheme for
+  // "custom"). The closest 2.0 palette plus that theme's accent, or null for
+  // the 1.3 default (2.0's default look is its successor).
+  const OLD_THEMES = Object.freeze({
+    midnight: ['nebula', '#8b5cf6'],
+    cyberpunk: ['emerald', '#10b981'],
+    crimson: ['midnight', '#ef4444'],
+    monochrome: ['paper', '#171717'],
+    ocean: ['ocean', '#0ea5e9'],
+    amoled: ['midnight', '#f97316'],
+    sunset: ['sunset', '#f59e0b'],
+  });
+  function fromOldTheme(theme, custom) {
+    if (theme === 'custom') {
+      const a = hex(custom && custom.accent);
+      return a ? { palette: 'midnight', accent: a } : null;
+    }
+    const m = OLD_THEMES[theme];
+    return m ? { palette: m[0], accent: m[1] } : null;
+  }
+
   return {
-    VERSION, CHOICES, RANGES, DEFAULTS, ACCENTS, TINT_KEYS, ACCENT_KEYS,
+    VERSION, CHOICES, RANGES, DEFAULTS, ACCENTS, TINT_KEYS, ACCENT_KEYS, fromOldTheme,
     defaults, normalize, syncable, adopt, isDefault, cssVars, attrs, tintVars, zoom,
     PRESETS, applyPreset, presetOf, exportLook, importLook,
     onColor, readableAccent, contrast: (a, b) => contrast(rgb(a), rgb(b)), newer,
