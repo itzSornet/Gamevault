@@ -9,7 +9,6 @@ function setTrackerWindow(w) { trackerWin = w; win = w; }
 // Process tracking
 let trackedProcesses = {};
 let win = null;
-let overlayWin = null;
 let loopTimer = null;
 let isChecking = false;
 
@@ -70,7 +69,7 @@ function emit(gameId, t, events) {
   for (const e of events) {
     if (e.type === 'started') {
       t.running = true;
-      send('tracking:started', { gameId, sessionStart: e.sessionStart });
+      send('tracking:started', { gameId, sessionStart: e.sessionStart, resumed: !!e.resumed });
     } else if (e.type === 'tick') {
       send('tracking:tick', { gameId, sessionMins: e.sessionMs / 60000 });
     } else if (e.type === 'session-end') {
@@ -146,6 +145,9 @@ async function checkAllTrackedProcesses() {
     for (const gameId of gameIds) {
       const t = trackedProcesses[gameId];
       if (!t) continue;
+      // the launcher we spawned has exited: its PID may be given to another
+      // program later, so Stop must not kill by it any more
+      if (snapshot && snapshot.byPid && t.pid && !snapshot.byPid.has(t.pid)) t.pid = 0;
       if (configFor(gameId).trackMode === 'none') continue;
       const names = trackNamesFor(t);
 
@@ -361,6 +363,11 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
     for (const pid of pids) {
       await platform.runHelper('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 5000 });
     }
+    // Seen only through Steam and nothing here to close: the game is still
+    // running, so its session goes on (ending it would lose the rest)
+    if (!pids.length && t && t.steamSeen && (t.core.phase === 'running' || t.core.phase === 'grace')) {
+      return { ok: false, reason: 'not-found' };
+    }
   } else {
     await killLinuxGameTree(t, cleanExes);
   }
@@ -401,110 +408,20 @@ async function killLinuxGameTree(t, exeNames) {
   }
 }
 
-function detectLinuxSpecs() {
-  let cpu = 'Unknown';
-  try {
-    const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf-8');
-    const m = cpuInfo.match(/model name\s*:\s*(.+)/i);
-    if (m) cpu = m[1].trim();
-  } catch (e) {}
-
-  let ram = 'Unknown';
-  try {
-    const memInfo = fs.readFileSync('/proc/meminfo', 'utf-8');
-    const m = memInfo.match(/MemTotal:\s*(\d+)/i);
-    if (m) ram = Math.round(parseInt(m[1], 10) / (1024 * 1024)) + ' GB';
-  } catch (e) {}
-
-  let os = 'Linux';
-  try {
-    const osRel = fs.readFileSync('/etc/os-release', 'utf-8');
-    const m = osRel.match(/PRETTY_NAME="?([^"\n]+)"?/i);
-    if (m) os = m[1].trim();
-  } catch (e) {}
-
-  let gpus = [];
-  try {
-    const pci = platform.runHelperSync('lspci', [], { timeout: 3000 });
-    const lines = pci.split('\n').map(l => l.trim()).filter(l => l && /vga|3d|display/i.test(l));
-    gpus = lines.map(line => {
-      const colonIdx = line.indexOf(': ');
-      const name = colonIdx !== -1 ? line.slice(colonIdx + 2).trim() : line;
-      return { name, vram: 'Unknown' };
-    });
-  } catch (e) {}
-
-  const iGpuKeywords = ['intel', 'uhd', 'iris', 'integrated'];
-  const discrete = gpus.find(g => !iGpuKeywords.some(k => g.name.toLowerCase().includes(k)));
-  const primary = discrete || gpus[0] || { name: 'Unknown', vram: 'Unknown' };
-
-  return {
-    cpu,
-    gpu: primary.name,
-    vram: primary.vram,
-    ram,
-    os,
-    allGpus: gpus,
-  };
+// games being played right now, the one started last first
+function runningGameIds() {
+  return Object.values(trackedProcesses)
+    .filter((t) => t && t.core && (t.core.phase === 'running' || t.core.phase === 'grace'))
+    .sort((a, b) => (b.core.sessionStart || 0) - (a.core.sessionStart || 0))
+    .map((t) => String(t.gameId));
 }
 
-// Hardware detection
-let cachedSpecs = null;
-async function detectPCSpecs() {
-  if (cachedSpecs) return cachedSpecs;
-  if (process.platform !== 'win32') {
-    try {
-      cachedSpecs = detectLinuxSpecs();
-      return cachedSpecs;
-    } catch (e) {
-      console.error('Linux specs detection error:', e.message);
-      return { cpu: 'Unknown', gpu: 'Unknown', vram: 'Unknown', ram: 'Unknown', os: 'Linux', allGpus: [] };
-    }
-  }
-  try {
-    // Single async PowerShell call to get ALL specs at once (no UI freeze)
-    const psScript = '$cpu = (Get-CimInstance Win32_Processor | Select -First 1).Name; $ram = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory; $os = (Get-CimInstance Win32_OperatingSystem).Caption; $gpus = Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM; @{ cpu=$cpu; ram=$ram; os=$os; gpus=@($gpus) } | ConvertTo-Json -Depth 3';
-
-    const res = await platform.runHelper('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], { timeout: 12000 });
-    if (!res.ok) throw new Error(res.stderr.trim() || 'PowerShell failed');
-    const raw = res.stdout.replace(/^﻿/, '').trim();
-
-    const data = JSON.parse(raw);
-
-    // Parse GPUs
-    const gpuArr = Array.isArray(data.gpus) ? data.gpus : [data.gpus];
-    const gpus = gpuArr.filter(Boolean).map(g => {
-      const adapterBytes = parseInt(g.AdapterRAM);
-      const vram = (adapterBytes && adapterBytes > 0)
-        ? (adapterBytes / (1024 ** 3)).toFixed(1) + ' GB'
-        : 'Unknown';
-      return {
-        name: g.Name || 'Unknown',
-        vram,
-      };
-    });
-
-    // Pick discrete GPU over integrated
-    const iGpuKeywords = ['intel', 'uhd', 'iris', 'integrated'];
-    const discrete = gpus.find(g => !iGpuKeywords.some(k => g.name.toLowerCase().includes(k)));
-    const primary = discrete || gpus[0] || { name: 'Unknown', vram: 'Unknown' };
-
-    const ramGB = data.ram ? Math.round(parseInt(data.ram) / (1024 ** 3)) + ' GB' : 'Unknown';
-
-    cachedSpecs = {
-      cpu: data.cpu || 'Unknown',
-      gpu: primary.name,
-      vram: primary.vram,
-      ram: ramGB,
-      os: data.os || 'Windows',
-      allGpus: gpus,
-    };
-    return cachedSpecs;
-  } catch (e) {
-    console.error('Specs detection error:', e.message);
-    return { cpu: 'Unknown', gpu: 'Unknown', vram: 'Unknown', ram: 'Unknown', os: 'Windows', allGpus: [] };
-  }
+// the same, with each game's folder and when its session began
+function runningSessions() {
+  return Object.values(trackedProcesses)
+    .filter((t) => t && t.core && (t.core.phase === 'running' || t.core.phase === 'grace'))
+    .sort((a, b) => (b.core.sessionStart || 0) - (a.core.sessionStart || 0))
+    .map((t) => ({ gameId: String(t.gameId), installDir: t.installDir || '', sessionStart: t.core.sessionStart || 0 }));
 }
 
-
-module.exports = { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses };
+module.exports = { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions };

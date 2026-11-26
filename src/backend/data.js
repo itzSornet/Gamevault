@@ -335,15 +335,17 @@ function normalizeLegacyFileUrl(value) {
 // publicConfig() with has*Key flags.
 // ---------------------------------------------------------------------------
 
-const SECRET_KEYS = ['sgdbKey', 'steamKey', 'aiKey'];
-const DEAD_KEYS = ['deepseekKey', 'cornerRadius']; // unused since 2.0
+const SECRET_KEYS = ['sgdbKey', 'steamKey'];
+// unused since 2.0 (the AI advisor was removed: its key is deleted, not kept)
+const DEAD_KEYS = ['deepseekKey', 'cornerRadius', 'aiKey', 'aiEnabled', 'aiProvider', 'aiCustomEndpoint', 'aiCustomModel', 'overlayHotkey'];
+const DEAD_SECRETS = ['aiKey'];
 
 const CONFIG_DEFAULTS = {
-  overlayHotkey: 'Shift+Alt+G',
-  aiEnabled: false,
-  aiProvider: null,
-  aiCustomEndpoint: '',
-  aiCustomModel: '',
+  captureShotHotkey: 'Alt+Shift+S',
+  captureClipHotkey: 'Alt+Shift+R',
+  captureGameAudio: true,
+  captureMic: false,
+  captureFindOthers: true,
 };
 
 let secretsCache = null;
@@ -415,8 +417,27 @@ function readStoredConfig() {
   return {};
 }
 
+// The removed AI advisor's saved key and chat history: gone for good, once.
+let deadDataSwept = false;
+function sweepDeadData() {
+  // before the app is ready the keychain can't be read: try again later
+  if (deadDataSwept || !app.isReady()) return;
+  deadDataSwept = true;
+  try {
+    const secrets = readSecrets();
+    if (DEAD_SECRETS.some((k) => k in secrets)) {
+      for (const k of DEAD_SECRETS) delete secrets[k];
+      writeSecrets(secrets);
+    }
+  } catch (_) { /* secrets unavailable: nothing to sweep */ }
+  try { fs.rmSync(AI_PROFILE_PATH, { force: true }); } catch (_) {}
+  // the removed overlay's debug log
+  try { fs.rmSync(path.join(path.dirname(DATA_PATH), 'overlay_debug.log'), { force: true }); } catch (_) {}
+}
+
 // Full config for main-process code, secrets included.
 function loadConfig() {
+  sweepDeadData();
   const stored = readStoredConfig();
   const secrets = readSecrets();
   const out = { ...CONFIG_DEFAULTS, ...stored };
@@ -448,6 +469,9 @@ function saveConfig(cfg) {
 // value on disk, so a stale renderer snapshot cannot wipe keys main wrote
 // meanwhile (startupEnabled, snooze state...). Returns the full result.
 function mergeConfig(patch) {
+  // config.json exists but can't be read right now (locked by a sync tool or
+  // an antivirus): writing now would replace every setting with the defaults
+  if (readJsonFile(CONFIG_PATH).state === 'unreadable') throw new Error('The settings file is in use by another program');
   const merged = loadConfig();
   if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
     for (const [key, value] of Object.entries(patch)) {
@@ -464,27 +488,13 @@ function publicConfig(cfg) {
   const out = { ...(cfg || loadConfig()) };
   out.hasSgdbKey = !!out.sgdbKey;
   out.hasSteamKey = !!out.steamKey;
-  out.hasAiKey = !!out.aiKey;
   for (const k of SECRET_KEYS) delete out[k];
   return out;
 }
 
-function aiLoadProfile() {
-  const res = readJsonFile(AI_PROFILE_PATH);
-  if (res.state === 'ok' && res.value) return res.value;
-  return { preferences: { likedGenres: [], dislikedGenres: [], dislikedGames: [], recommendedBefore: [] }, chatHistory: [], pcSpecs: null };
-}
-
-function aiSaveProfile(profile, win, overlayWin) {
-  writeJsonAtomicSync(AI_PROFILE_PATH, profile);
-  if (win) win.webContents.send('ai:profile-updated', profile);
-  if (overlayWin) overlayWin.webContents.send('ai:profile-updated', profile);
-}
-
 module.exports = {
-  DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH,
+  DATA_PATH, CONFIG_PATH,
   loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl,
   loadConfig, saveConfig, mergeConfig, publicConfig, SECRET_KEYS,
-  aiLoadProfile, aiSaveProfile,
   writeFileAtomicSync, writeJsonAtomicSync, readJsonFile,
 };

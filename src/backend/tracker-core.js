@@ -21,6 +21,9 @@
 
 const DEFAULTS = Object.freeze({
   graceMs: 60 * 1000,
+  // polls run every few seconds while a game runs: a longer silence means the
+  // PC slept (or the app was frozen), and that time is not playtime
+  gapMs: 2 * 60 * 1000,
   minSessionMs: 30 * 1000,
   pendingTimeoutMs: 90 * 1000,
   steamPendingTimeoutMs: 180 * 1000, // Steam may update / compile shaders first
@@ -65,6 +68,19 @@ function sessionEvent(start, end, ms, cfg) {
   return { type: 'session-end', sessionStart: start, sessionEnd: end, sessionHours: ms / 3600000, discarded: false };
 }
 
+// Seen again after a long silence: the session ended when it was last seen,
+// and a new one starts now (the game is still open after the PC woke up).
+function resumeAfterGap(s, now, cfg, events) {
+  const start = s.sessionStart;
+  const end = s.lastSeen;
+  const ms = endSession(s, end);
+  events.push(sessionEvent(start, end, ms, cfg));
+  s.phase = 'running';
+  s.sessionStart = now;
+  s.lastSeen = now;
+  events.push({ type: 'started', sessionStart: now, resumed: true });
+}
+
 // One poll result. Returns the events to emit, in order.
 function observe(s, seen, now, opts) {
   const cfg = { ...DEFAULTS, ...(opts || {}) };
@@ -88,7 +104,9 @@ function observe(s, seen, now, opts) {
       break;
     }
     case 'running': {
-      if (seen) {
+      if (seen && now - s.lastSeen > cfg.gapMs) {
+        resumeAfterGap(s, now, cfg, events);
+      } else if (seen) {
         s.lastSeen = now;
         events.push({ type: 'tick', sessionMs: now - s.sessionStart });
       } else {
@@ -97,7 +115,9 @@ function observe(s, seen, now, opts) {
       break;
     }
     case 'grace': {
-      if (seen) {
+      if (seen && now - s.lastSeen > cfg.gapMs) {
+        resumeAfterGap(s, now, cfg, events);
+      } else if (seen) {
         s.phase = 'running';
         s.lastSeen = now;
         events.push({ type: 'tick', sessionMs: now - s.sessionStart });
@@ -120,7 +140,8 @@ function stop(s, now, opts) {
   const cfg = { ...DEFAULTS, ...(opts || {}) };
   if (s.phase === 'running' || s.phase === 'grace') {
     const start = s.sessionStart;
-    const end = s.phase === 'running' ? now : s.lastSeen;
+    // a Stop right after waking up ends at the last time it was seen
+    const end = s.phase === 'running' && now - s.lastSeen <= cfg.gapMs ? now : s.lastSeen;
     const ms = endSession(s, end);
     return [sessionEvent(start, end, ms, cfg)];
   }

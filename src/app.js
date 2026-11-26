@@ -61,7 +61,12 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
   // Names compared for "same game": letters and digits of any script, case
   // and width folded ('ゼルダの伝説' stays itself, not '')
-  const nameKey = (x) => String(x || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  // letters and digits of any script; a name made only of symbols or emoji
+  // keeps those, so two names made of the same emoji are still one game
+  const nameKey = (x) => {
+    const s = String(x || '').normalize('NFKC').toLowerCase();
+    return s.replace(/[^\p{L}\p{N}]+/gu, '') || s.replace(/[\s\u200B-\u200F\u2060-\u2064\uFEFF\uFE0E\uFE0F]+/g, '');
+  };
 
   // Dates and numbers: English words, in the order and separators of the
   // user's regional format (lib/locale.js)
@@ -704,10 +709,12 @@
     // Ctrl+1..6: Library, Active, Finished, Wishlist, Activity, Settings, in every layout
     addEventListener('keydown', (e) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.repeat) return;
-      if (!/^[1-6]$/.test(e.key) || document.documentElement.classList.contains('is-bigpicture')) return;
+      // the key's place, not its letter: AZERTY's 1 is '&' without Shift
+      const digit = (/^(?:Digit|Numpad)([1-6])$/.exec(e.code || '') || [])[1] || (/^[1-6]$/.test(e.key) ? e.key : '');
+      if (!digit || document.documentElement.classList.contains('is-bigpicture')) return;
       if (!$('#modal').hidden) return;
       if (spotHooks.isOpen()) spotHooks.close();
-      if (goNavPlace(e.key)) e.preventDefault();
+      if (goNavPlace(digit)) e.preventDefault();
     });
 
     // auto-hide dock: shows while the pointer is at its edge of the window
@@ -797,10 +804,26 @@
     if (!state._applyingSync) scheduleCloudSync();
     const run = saveChain
       .then(() => api.saveGames(snapshot))
-      .catch((e) => { console.warn('save failed', e); });
+      .then(() => {
+        if (saveFail.count) { saveFail.count = 0; clearTimeout(saveFail.timer); toast('Your library is saved again', 'ok'); }
+      })
+      .catch((e) => {
+        console.warn('save failed', e);
+        // never silent: say so, and keep trying (a file held by OneDrive or
+        // an antivirus usually frees up)
+        saveFail.count += 1;
+        clearTimeout(saveFail.timer);
+        saveFail.timer = setTimeout(() => queueGamesSave(), Math.min(60000, 5000 * saveFail.count));
+        if (saveFail.count === 1 || saveFail.count % 6 === 0) {
+          const why = String((e && e.message) || '').replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+          toast(`Couldn’t save your library${why ? ` (${why})` : ''}. GameVault keeps trying.`, 'error',
+            [{ label: 'Try now', run: () => queueGamesSave() }]);
+        }
+      });
     saveChain = run;
     return run;
   }
+  const saveFail = { count: 0, timer: 0 };
 
   function saveGamesSoon() {
     clearTimeout(saveTimer);
@@ -852,7 +875,7 @@
         return (b.lastPlayed || 0) - (a.lastPlayed || 0) || (b.added || 0) - (a.added || 0);
       }
       if (sort === 'name') return byName(a, b);
-      if (sort === 'hours') return (Number(b.hours) || 0) - (Number(a.hours) || 0);
+      if (sort === 'hours') return ((Number(b.hours) || 0) - (Number(a.hours) || 0)) || byName(a, b);
       if (sort === 'rating') return (Rating.value(b) - Rating.value(a)) || byName(a, b);
       if (sort === 'status') {
         const d = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
@@ -1374,6 +1397,7 @@
       if (wishView) wishView.hidden = true;
       actView.hidden = false;
       renderActivity();
+      refreshCounts(); // a game added from here still counts in the nav
       return;
     }
     if (wishMode && wishView) {
@@ -1490,6 +1514,187 @@
         <div class="act-tip" hidden></div>
       </div>
       ${total > 0 ? '' : '<p class="act-chart-empty">Nothing played in this stretch yet.</p>'}`;
+  }
+
+  // ---- Captures: screenshots and clips from the shortcuts -------------------
+  // main keeps the files in data_media and tags each with the game that was
+  // running, and adds the ones other apps made (Steam, NVIDIA, Game Bar,
+  // photo modes) where they lie; here they show on Activity and each game's page
+  state.media = null; // newest first; null until loaded
+  let mediaLoading = null;
+  function loadMedia(force) {
+    if (!api.getAllMedia) return Promise.resolve([]);
+    if (mediaLoading && !force) return mediaLoading;
+    const p = api.getAllMedia().catch(() => []).then((list) => {
+      if (mediaLoading === p) mediaLoading = null;
+      state.media = Array.isArray(list) ? list : [];
+      return state.media;
+    });
+    mediaLoading = p;
+    return p;
+  }
+  const mediaFor = (gameId) => (state.media || []).filter((m) => m.gameId === String(gameId));
+  const keyLabel = (a) => String(a || '').replace(/\+/g, ' + ');
+  const captureKeys = () => ({ shot: state.config.captureShotHotkey || 'Alt+Shift+S', clip: state.config.captureClipHotkey || 'Alt+Shift+R' });
+  const CAP_PLAY = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+
+  function capWhen(ts) {
+    try { return fmtDay(ts, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) { return fmtDate(ts); }
+  }
+
+  // "From Steam" for captures another app made
+  const capFrom = (m) => (m.external && m.source ? (m.source === 'Photo mode' ? 'From the game' : `From ${m.source}`) : '');
+
+  function capTileHtml(m, i, showGame) {
+    const g = showGame && m.gameId ? gameById(m.gameId) : null;
+    const label = `${m.video ? 'Clip' : 'Screenshot'}${g ? ' · ' + (g.name || 'Untitled') : ''} · ${capWhen(m.time)}${capFrom(m) ? ' · ' + capFrom(m) : ''}`;
+    return `<button type="button" class="cap-tile${m.video ? ' is-clip' : ''}" data-cap="${i}" aria-label="${esc(label)}" title="${esc(label)}">
+      ${m.video
+        ? `<video src="${esc(m.url)}" preload="metadata" muted playsinline tabindex="-1" aria-hidden="true"></video><span class="cap-badge" aria-hidden="true">${CAP_PLAY}</span>`
+        : `<img src="${esc(m.thumb || m.url)}" alt="" loading="lazy" decoding="async" />`}
+      ${g ? `<span class="cap-game">${esc(g.name || 'Untitled')}</span>` : ''}
+    </button>`;
+  }
+
+  function capCountText(list) {
+    const clips = list.filter((m) => m.video).length;
+    const shots = list.length - clips;
+    const bits = [];
+    if (shots) bits.push(`${fmtNum(shots)} screenshot${shots === 1 ? '' : 's'}`);
+    if (clips) bits.push(`${fmtNum(clips)} clip${clips === 1 ? '' : 's'}`);
+    return bits.join(' · ');
+  }
+
+  // a grid of captures with "Show all" past the first few
+  function capGridHtml(list, { showGame, limit, all }) {
+    const shown = all ? list : list.slice(0, limit);
+    return `<div class="cap-grid">${shown.map((m, i) => capTileHtml(m, i, showGame)).join('')}</div>`
+      + (list.length > limit && !all ? `<button type="button" class="btn btn-ghost cap-more" data-cap-more>Show all ${fmtNum(list.length)}</button>` : '');
+  }
+
+  function wireCapGrid(el, list, repaint) {
+    for (const t of el.querySelectorAll('[data-cap]')) t.onclick = () => openCaptureViewer(list, Number(t.dataset.cap));
+    const more = el.querySelector('[data-cap-more]');
+    // the first tile that was hidden gets the focus
+    if (more) more.onclick = () => { const n = el.querySelectorAll('[data-cap]').length; repaint(true); el.querySelectorAll('[data-cap]')[n]?.focus(); };
+    const folder = el.querySelector('[data-cap-folder]');
+    if (folder) folder.onclick = () => api.openCapturesFolder && api.openCapturesFolder();
+  }
+
+  function paintActivityCaptures(all) {
+    const el = $('#activity-view [data-act-captures]');
+    if (!el) return;
+    if (all) state._capAllAct = true;
+    const list = state.media || [];
+    const keys = captureKeys();
+    el.innerHTML = `
+      <div class="act-card-head">
+        <h2>Captures <span>${list.length ? capCountText(list) : 'screenshots and clips you take in games'}</span></h2>
+        <button type="button" class="btn btn-ghost" data-cap-folder>Open folder</button>
+      </div>
+      ${list.length
+        ? capGridHtml(list, { showGame: true, limit: 12, all: !!state._capAllAct })
+        : `<p class="act-empty">Press <kbd class="st-kbd">${esc(keyLabel(keys.shot))}</kbd> for a screenshot, or <kbd class="st-kbd">${esc(keyLabel(keys.clip))}</kbd> to start and stop a clip, while you play. They show up here and on the game's page, with the ones you take in Steam, NVIDIA, the Xbox Game Bar or a game's photo mode.</p>`}`;
+    wireCapGrid(el, list, paintActivityCaptures);
+  }
+
+  function paintGameCaptures(g, all) {
+    const el = $('#game-view [data-captures]');
+    if (!el || !g) return;
+    if (all) el.dataset.all = '1';
+    const list = mediaFor(g.id);
+    el.hidden = !list.length;
+    if (!list.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `
+      <div class="gvx-ledger-head cap-head">
+        <h2>Captures</h2>
+        <span class="gvx-ledger-count">${capCountText(list)}</span>
+      </div>
+      ${capGridHtml(list, { showGame: false, limit: 8, all: el.dataset.all === '1' })}`;
+    wireCapGrid(el, list, (a) => paintGameCaptures(g, a));
+  }
+
+  function repaintCaptures() {
+    if (state.filter === 'Activity' && !state.selectedId && !state.settingsOpen) paintActivityCaptures();
+    if (state.selectedId) paintGameCaptures(gameById(state.selectedId));
+  }
+
+  function openCaptureViewer(list, idx) {
+    if (!list.length) return;
+    let i = Math.max(0, Math.min(idx, list.length - 1));
+    const card = openModal(`
+      <div class="modal-head">
+        <h2 data-cap-title>Capture</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body cap-view">
+        <button type="button" class="cap-nav is-prev" data-cap-prev aria-label="Previous">‹</button>
+        <div class="cap-stage" data-cap-stage></div>
+        <button type="button" class="cap-nav is-next" data-cap-next aria-label="Next">›</button>
+      </div>
+      <div class="modal-foot">
+        <span class="cap-when" data-cap-when></span>
+        <button class="btn btn-ghost" data-cap-show>Show in folder</button>
+        <button class="btn btn-ghost" data-cap-hide hidden title="Stop showing it in GameVault. The file stays where it is.">Hide</button>
+        <button class="btn btn-ghost" data-cap-del>Delete</button>
+        <button class="btn btn-primary" data-cap-open data-autofocus>Open</button>
+      </div>`, { className: 'cap-modal' });
+    if (!card) return;
+    const stage = card.querySelector('[data-cap-stage]');
+    const prev = card.querySelector('[data-cap-prev]');
+    const next = card.querySelector('[data-cap-next]');
+    const show = () => {
+      const m = list[i];
+      const g = m.gameId ? gameById(m.gameId) : null;
+      card.querySelector('[data-cap-title]').textContent = `${m.video ? 'Clip' : 'Screenshot'}${g ? ' · ' + (g.name || 'Untitled') : ''}`;
+      card.querySelector('[data-cap-when]').textContent = capWhen(m.time) + (capFrom(m) ? ' · ' + capFrom(m) : '');
+      card.querySelector('[data-cap-hide]').hidden = !m.external;
+      stage.innerHTML = m.video
+        ? `<video src="${esc(m.url)}" controls autoplay playsinline></video>`
+        : `<img src="${esc(m.url)}" alt="" />`;
+      prev.disabled = i <= 0;
+      next.disabled = i >= list.length - 1;
+    };
+    const go = (d) => { const n = i + d; if (n < 0 || n >= list.length) return; i = n; show(); };
+    prev.onclick = () => go(-1);
+    next.onclick = () => go(1);
+    card.addEventListener('keydown', (e) => {
+      if (e.target && e.target.tagName === 'VIDEO') return; // its own arrow keys seek
+      if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); go(1); }
+    });
+    for (const b of card.querySelectorAll('[data-close]')) b.onclick = closeModal;
+    card.querySelector('[data-cap-open]').onclick = () => api.openMedia && api.openMedia(list[i].path);
+    card.querySelector('[data-cap-show]').onclick = () => api.showMediaInFolder && api.showMediaInFolder(list[i].path);
+    // after Hide or Delete: drop it here and move to the next one
+    const dropCurrent = async () => {
+      list.splice(i, 1);
+      await loadMedia(true);
+      repaintCaptures();
+      if (!list.length) { closeModal(); return; }
+      i = Math.min(i, list.length - 1);
+      show();
+    };
+    card.querySelector('[data-cap-hide]').onclick = async () => {
+      const m = list[i];
+      const ok = api.hideMedia ? await api.hideMedia(m.path).catch(() => false) : false;
+      if (!ok) { toast('Couldn’t hide that one. Try again.', 'error'); return; }
+      toast('Hidden. The file is still in its folder.', 'ok');
+      await dropCurrent();
+    };
+    card.querySelector('[data-cap-del]').onclick = async () => {
+      const m = list[i];
+      const ok = api.deleteMedia ? await api.deleteMedia(m.path).catch(() => false) : false;
+      if (!ok) { toast('Couldn’t delete that file. It may be open in another program.', 'error'); return; }
+      toast('Moved to the Recycle Bin', 'ok');
+      list.splice(i, 1);
+      await loadMedia(true);
+      repaintCaptures();
+      if (!list.length) { closeModal(); return; }
+      i = Math.min(i, list.length - 1);
+      show();
+    };
+    show();
   }
 
   function renderActivity() {
@@ -1615,6 +1820,7 @@
           </div>
           ${actChartHtml(buckets, unit)}
         </section>
+        <section class="act-card act-captures" data-act-captures></section>
         <div class="act-cols">
           <section class="act-card">
             <div class="act-card-head"><h2>Day by day <span>the last ${days.length || 14} days you played</span></h2></div>
@@ -1653,6 +1859,8 @@
       </div>`;
 
     wireActivity(view, buckets, unit);
+    paintActivityCaptures();
+    if (state.media == null) loadMedia().then(() => paintActivityCaptures());
   }
 
   function wireActivity(view, buckets, unit) {
@@ -2608,7 +2816,17 @@
     }
 
     if (!state.shelfId || !list.some((g) => String(g.id) === state.shelfId)) {
-      state.shelfId = String(list[0].id);
+      // the picked game left this view (finished, wishlisted…): pick the one
+      // next to where it stood, not the first game far off-screen
+      const before = (state._shelfShown || '').split(',');
+      const at = before.indexOf(state.shelfId);
+      const inList = new Set(list.map((g) => String(g.id)));
+      let near = null;
+      if (at >= 0) {
+        for (let i = at + 1; i < before.length && !near; i++) if (inList.has(before[i])) near = before[i];
+        for (let i = at - 1; i >= 0 && !near; i--) if (inList.has(before[i])) near = before[i];
+      }
+      state.shelfId = near || String(list[0].id);
     }
     const current = list.find((g) => String(g.id) === state.shelfId) || list[0];
 
@@ -2619,7 +2837,11 @@
     const key = list.map((g) => String(g.id)).join(',');
     // _shelfKey is cleared to force a repaint; _shelfShown is what was really on screen
     const prevKey = state._shelfShown || '';
-    const inPlace = state._shelfFilter === state.filter && isRemovalOnly(prevKey ? prevKey.split(',') : [], key.split(','));
+    const sameFilter = state._shelfFilter === state.filter;
+    const inPlace = sameFilter && isRemovalOnly(prevKey ? prevKey.split(',') : [], key.split(','));
+    // a forced repaint (rating, edit, layout switch) with the same order on
+    // screen is only a repaint: the rail keeps its place
+    if (key !== state._shelfKey && key === prevKey && strip.querySelector('.shelf-tile')) state._shelfKey = key;
     state._shelfFilter = state.filter;
     state._shelfShown = key;
     if (key !== state._shelfKey && inPlace) {
@@ -2637,6 +2859,7 @@
         if (g) paintShelfTile(tile, g);
         tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
         tile.setAttribute('aria-selected', String(tile.dataset.id === state.shelfId));
+        tile.tabIndex = tile.dataset.id === state.shelfId ? 0 : -1; // one tab stop: the picked cover
       }
     } else if (key !== state._shelfKey) {
       state._shelfKey = key;
@@ -2659,16 +2882,31 @@
           tile.className = 'shelf-tile';
           tile.dataset.id = id;
           tile.setAttribute('role', 'option');
-          tile.onclick = () => { if (shelfDragMoved) return; selectShelfGame(tile.dataset.id); };
+          tile.onclick = (e) => {
+            if (shelfDragMoved) return;
+            // Enter or Space on the picked cover opens it (a mouse double-clicks)
+            if (e.detail === 0 && tile.dataset.id === state.shelfId) { openDetail(tile.dataset.id); return; }
+            selectShelfGame(tile.dataset.id);
+          };
           tile.ondblclick = () => openDetail(tile.dataset.id);
         }
         paintShelfTile(tile, g);
         tile.classList.toggle('is-active', id === state.shelfId);
         tile.setAttribute('aria-selected', String(id === state.shelfId));
+        tile.tabIndex = id === state.shelfId ? 0 : -1;
         frag.appendChild(tile);
       }
       for (const leftover of existing.values()) leftover.remove();
       strip.appendChild(frag);
+      // same view, new order (sort): stay with the picked game
+      if (sameFilter) {
+        const tile = strip.querySelector(`[data-id="${CSS.escape(state.shelfId)}"]`);
+        if (tile) {
+          const x = Math.max(0, tile.offsetLeft - (strip.clientWidth - tile.offsetWidth) / 2);
+          strip.scrollLeft = x;
+          if (strip._spring) strip._spring.x = strip.scrollLeft;
+        }
+      }
     } else {
       const byId = new Map(list.map((g) => [String(g.id), g]));
       for (const tile of strip.querySelectorAll('.shelf-tile')) {
@@ -2676,10 +2914,22 @@
         if (g) paintShelfTile(tile, g);
         tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
         tile.setAttribute('aria-selected', String(tile.dataset.id === state.shelfId));
+        tile.tabIndex = tile.dataset.id === state.shelfId ? 0 : -1; // one tab stop: the picked cover
       }
     }
 
     refreshCounts();
+    // focus was on a tile that is gone (it left the view, or was rebuilt):
+    // the picked tile takes it, so the keyboard and pad keep their place
+    if (!strip._focusWired) {
+      strip._focusWired = true;
+      strip.addEventListener('focusin', () => { strip._hadFocus = true; });
+      // a tile removed under focus reports no new target: that still counts as here
+      strip.addEventListener('focusout', (e) => { if (e.relatedTarget && !strip.contains(e.relatedTarget)) strip._hadFocus = false; });
+    }
+    if (strip._hadFocus && (document.activeElement === document.body || !document.activeElement) && $('#modal').hidden && !$('#shelf').hidden) {
+      strip.querySelector('.shelf-tile.is-active')?.focus({ preventScroll: true });
+    }
     syncShelfNav();
     requestAnimationFrame(syncShelfNav);
     setTimeout(syncShelfNav, 120);
@@ -2712,7 +2962,11 @@
     for (const tile of $('#shelf-strip').querySelectorAll('.shelf-tile')) {
       tile.classList.toggle('is-active', tile.dataset.id === state.shelfId);
       tile.setAttribute('aria-selected', String(tile.dataset.id === state.shelfId));
+      tile.tabIndex = tile.dataset.id === state.shelfId ? 0 : -1;
     }
+    // the keyboard follows the pick, so Delete and Enter act on the game shown
+    const strip = $('#shelf-strip');
+    if (strip.contains(document.activeElement)) strip.querySelector(`.shelf-tile[data-id="${CSS.escape(state.shelfId)}"]`)?.focus({ preventScroll: true });
     const g = state.games.find((x) => String(x.id) === state.shelfId);
     if (g) {
       await preloadHero(heroUrlOf(g));
@@ -2921,6 +3175,7 @@
       ? statusLabel(g)
       : `${running ? 'Now playing' : statusLabel(g)} · ${fmtHours(running ? base + live / 60 : base)}`;
     shelfDom.title.textContent = g.name || '';
+    shelfDom.title.title = g.name || ''; // the whole title when two lines cut it
     const logoSrc = g._logo || g.logoUrl || '';
     const logoUrl = logoSrc ? toFileUrl(logoSrc) : '';
     const useLogo = !!logoUrl && shelfDom.logoFailed !== logoUrl;
@@ -3038,9 +3293,13 @@
     play.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(g.id); });
     el.addEventListener('click', () => openDetail(g.id));
     el.addEventListener('keydown', (e) => {
+      if (e.target !== el) return; // Enter on the Play button plays
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(g.id); }
     });
-    el.addEventListener('dblclick', () => togglePlay(g.id));
+    el.addEventListener('dblclick', (e) => {
+      if (e.target.closest && e.target.closest('.card-play')) return; // its two clicks already did it
+      togglePlay(g.id);
+    });
 
     return refs;
   }
@@ -3150,6 +3409,7 @@
     const wish = gvIsWishlisted(g);
 
     ref.title.textContent = g.name || 'Untitled';
+    if (g.source) ref.el.title = `${g.name || 'Untitled'} · ${g.source}`;
     ref.media.dataset.initials = cardInitials(g.name);
     ref.media.style.setProperty('--card-hue', String(cardHue(g.name)));
     setCardImage(ref, g._cover || g.coverUrl || '');
@@ -3188,11 +3448,14 @@
 
     ref.play.hidden = wish && !running;
     ref.play.title = running ? 'Stop' : launching ? 'Launching… (click to cancel)' : live === 'stopping' ? 'Stopping…' : 'Launch';
-    const playKind = running ? 'stop' : 'play';
+    // the button says what is happening, like the shelf and the game page
+    const playKind = running ? 'stop' : launching ? 'launching' : live === 'stopping' ? 'stopping' : 'play';
     if (ref.play.dataset.kind !== playKind) {
       ref.play.dataset.kind = playKind;
-      ref.play.innerHTML = running
+      ref.play.innerHTML = playKind === 'stop'
         ? '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span>Stop</span>'
+        : playKind === 'launching' || playKind === 'stopping'
+          ? `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span>${playKind === 'launching' ? 'Launching…' : 'Stopping…'}</span>`
         : '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg><span>Play</span>';
     }
   }
@@ -3202,6 +3465,7 @@
     if (!g) return;
     updateCard(g);
     refreshStage(g);
+    refreshCounts(); // Active counts a game while it runs
   }
 
   // ---------------------------------------------------------------------------
@@ -3524,6 +3788,7 @@
             </div>
             <div class="gvx-ses-top" data-ses-top></div>
             <div class="gvx-list" data-ledger role="list" aria-label="Session history"></div>
+            <section class="gvx-caps" data-captures hidden aria-label="Captures"></section>
           </div>
           <aside class="gvx-rail" data-rail>${railHtml(g)}<div class="gvx-card sv-card" data-saves-card></div></aside>
         `}
@@ -3540,6 +3805,7 @@
     if (!wish) paintLedger(g);
     wireDetail(g, wish);
     if (!wish) paintSavesCard(g);
+    if (!wish) { paintGameCaptures(g); if (state.media == null) loadMedia().then(() => { if (String(state.selectedId) === String(g.id)) paintGameCaptures(g); }); }
     startDetailTick(g);
     state._detailRunning = { id: String(g.id), running: typeof state.live[String(g.id)] === 'number' };
     if (!wish) loadSteamMeta(g);
@@ -3889,17 +4155,21 @@
   function askRemoveGame(g) {
     if (!g || !state.games.includes(g)) return;
     if (gvIsWishlisted(g)) { wishRemove(g); return; }
-    if (state.live[String(g.id)] != null) {
-      toast(`Stop ${g.name || 'the game'} before removing it`, 'error');
+    const liveNow = state.live[String(g.id)];
+    if (liveNow != null && typeof liveNow !== 'number') {
+      toast(`Wait until ${g.name || 'the game'} has ${liveNow === 'stopping' ? 'stopped' : 'started'}, then remove it`, 'error');
       return;
     }
+    // running (or always running, like a wallpaper app): timing stops, the
+    // program itself stays open
+    const running = typeof liveNow === 'number';
     const card = openModal(`
       <div class="modal-head">
         <h2>Remove from library?</h2>
         <button class="close-x" data-close aria-label="Close">✕</button>
       </div>
       <div class="modal-body rm-body">
-        <p class="rm-text"><b>${esc(g.name || 'Untitled')}</b> leaves your library, with its playtime and sessions. The game's files stay on your PC.</p>
+        <p class="rm-text"><b>${esc(g.name || 'Untitled')}</b> leaves your library, with its playtime and sessions. The game's files stay on your PC.${running ? ' It’s running now: GameVault stops timing it, and leaves it open.' : ''}</p>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" data-close data-autofocus>Cancel</button>
@@ -3909,7 +4179,20 @@
     for (const btn of card.querySelectorAll('[data-close]')) btn.onclick = closeModal;
     card.querySelector('[data-rm]').onclick = () => {
       closeModal();
-      removeGame(g);
+      const id = String(g.id);
+      // it may have started while the dialog was open (tray, outside GameVault):
+      // end its session first so the hours are in the game Undo brings back
+      if (state.live[id] == null) { removeGame(g); return; }
+      if (api.trackingStop) api.trackingStop(g.id);
+      const t0 = Date.now();
+      const wait = () => {
+        if (state.live[id] == null || Date.now() - t0 > 3000) {
+          delete state.live[id];
+          if (state.liveStart) delete state.liveStart[id];
+          removeGame(g);
+        } else setTimeout(wait, 100);
+      };
+      wait();
     };
   }
 
@@ -3926,7 +4209,8 @@
     // remembered so auto sync doesn't bring it back: by its import id, and
     // by its Steam id too (games added by hand or synced from another PC
     // have no import id)
-    for (const key of new Set([g.sourceId, g.steamAppId ? `steam:${g.steamAppId}` : ''].filter(Boolean))) importIgnore(key, true);
+    const ignoredKeys = [...new Set([g.sourceId, g.steamAppId ? `steam:${g.steamAppId}` : ''].filter(Boolean))];
+    for (const key of ignoredKeys) importIgnore(key, true);
     if (state.shelfId === id) state.shelfId = near ? String(near.id) : null;
     state._shelfKey = '';
     renderLibrary();
@@ -3935,7 +4219,7 @@
     setTimeout(() => focusGameIfLost(near), 360);
     toast(`${g.name || 'Game'} removed from your library`, 'ok', [{ label: 'Undo', run: () => {
       if (state.games.includes(g)) return;
-      if (g.sourceId) importIgnore(g.sourceId, false);
+      for (const key of ignoredKeys) importIgnore(key, false);
       state.games.splice(Math.min(idx, state.games.length), 0, g);
       state._shelfKey = '';
       renderLibrary();
@@ -4695,7 +4979,9 @@
     // step, anything else (8.5, unrated) on the text box, so Enter alone
     // never rates the game something it wasn't
     const start = Number.isInteger(cur) && cur >= 1 ? stepBtns[cur - 1] : input;
-    requestAnimationFrame(() => { start.focus({ preventScroll: true }); if (start === input) input.select(); });
+    // the dialog's own first focus must land here too (on step 1 it would show 1 / 10)
+    start.setAttribute('data-autofocus', '');
+    requestAnimationFrame(() => { start.focus({ preventScroll: true }); if (start === input) input.select(); show(cur); });
   }
 
   // ---------------------------------------------------------------------------
@@ -4729,8 +5015,19 @@
     const wrap = $('#modal');
     sfx('open');
     modalSeq += 1;
-    state._modalOpener = document.activeElement;
-    state._modalOpenerKey = focusKey(document.activeElement);
+    // the Big Picture menu gives way to the dialog (the pad must reach it);
+    // focus later goes back to what had it before the menu opened
+    let menuBack = null;
+    if (bp.on && bp.menuOpen) { menuBack = bp.menuReturn; bpCloseMenu({ refocus: false }); }
+    // a dialog opened from a dialog that is closing (a menu's Rate or Edit,
+    // Try again): keep the first opener, the button it came from is going away
+    const a = document.activeElement;
+    const fromDialog = !!(a && wrap.contains(a) && state._modalOpener);
+    if (!fromDialog) {
+      const opener = menuBack && menuBack.isConnected ? menuBack : a;
+      state._modalOpener = opener;
+      state._modalOpenerKey = focusKey(opener);
+    }
     const app = $('#app');
     if (app) app.inert = true;
     wrap.hidden = false;
@@ -5589,7 +5886,7 @@
     paintStatus();
 
     card.querySelector('[data-browse]').onclick = async () => {
-      const file = await api.pickExe();
+      const file = await api.pickExe(card.querySelector('#f-exe').value.trim().replace(/^"|"$/g, '') || g.installDir || '');
       if (file) card.querySelector('#f-exe').value = file;
     };
 
@@ -5599,6 +5896,7 @@
     const trackRow = card.querySelector('[data-track-exe-row]');
     const detectList = card.querySelector('[data-detect-list]');
     trackModeEl.value = ['auto', 'exe', 'steam', 'none'].includes(g.trackMode) ? g.trackMode : (g.trackExe ? 'exe' : 'auto');
+    const trackModeAtOpen = trackModeEl.value;
     const adv = card.querySelector('.adv-launch');
     const advSum = adv && adv.querySelector('summary');
     if (advSum) advSum.addEventListener('click', (e) => {
@@ -5624,7 +5922,8 @@
     trackModeEl.onchange = syncTrackRow;
     syncTrackRow();
     card.querySelector('[data-browse-launch]').onclick = async () => {
-      const file = await api.pickExe();
+      const start = card.querySelector('#f-launch').value.trim().replace(/^"|"$/g, '') || card.querySelector('#f-exe').value.trim().replace(/^"|"$/g, '') || g.installDir || '';
+      const file = await api.pickExe(start, 'target');
       if (file) card.querySelector('#f-launch').value = file;
     };
     card.querySelector('[data-detect]').onclick = async () => {
@@ -5662,14 +5961,23 @@
       if (saving || !alive()) return;
       saving = true;
       saveBtnEl.disabled = true;
+      // zero-width and other invisible characters alone are not a title
       const name = card.querySelector('#f-name').value.trim();
-      const exePath = card.querySelector('#f-exe').value.trim();
+      const nameVisible = name.replace(/[\u200B-\u200F\u2060-\u2064\uFEFF\u00AD\s]+/g, '') !== '';
+      // Explorer's "Copy as path" wraps the path in quotes
+      const unquote = (v) => v.trim().replace(/^"(.*)"$/s, '$1').trim();
+      const exePath = unquote(card.querySelector('#f-exe').value);
       const coverUrl = card.querySelector('#f-cover').value.trim();
       const heroUrl = card.querySelector('#f-hero').value.trim();
       const logoUrl = card.querySelector('#f-logo') ? card.querySelector('#f-logo').value.trim() : '';
       const iconUrl = card.querySelector('#f-icon') ? card.querySelector('#f-icon').value.trim() : '';
       const notes = card.querySelector('#f-notes').value;
-      const steamAppId = Number(card.querySelector('#f-steam').value) || null;
+      // a store or steam:// link gives its id; other text is refused below
+      const steamRaw = card.querySelector('#f-steam').value.trim();
+      const steamMatch = /^\d+$/.test(steamRaw) ? [steamRaw, steamRaw]
+        : steamRaw.match(/(?:store\.steampowered\.com\/app|steamcommunity\.com\/app|steamdb\.info\/app|steam:\/\/(?:rungameid|run|launch|install|nav\/games\/details))\/(\d+)/i);
+      const steamAppId = steamMatch ? Number(steamMatch[1]) || null : null;
+      const steamBad = !!steamRaw && !steamMatch;
       // Playtime only changes when the field was edited (against what it
       // showed when the dialog opened, so a session that ended meanwhile
       // keeps its hours); the field shows a rounded value, so an untouched
@@ -5681,12 +5989,22 @@
         const el = card.querySelector(sel);
         return el && el.value.trim() !== el.defaultValue.trim();
       });
-      const launchTarget = card.querySelector('#f-launch').value.trim();
+      const launchTarget = unquote(card.querySelector('#f-launch').value);
       const trackExe = trackModeEl.value === 'exe' ? trackExeEl.value.trim() : '';
       // "This program…" with nothing picked falls back to automatic
       const trackMode = trackModeEl.value === 'exe' && !trackExe ? 'auto' : trackModeEl.value;
 
-      if (!name) { toast('A title is required', 'error'); saving = false; saveBtnEl.disabled = false; return; }
+      const refuse = (msg, sel) => {
+        toast(msg, 'error');
+        const el = sel && card.querySelector(sel);
+        if (el) el.focus();
+        saving = false; saveBtnEl.disabled = false;
+      };
+      if (!name || !nameVisible) { refuse('A title is required', '#f-name'); return; }
+      if (steamBad) { refuse('Steam AppID needs the number from the store link, like 1245620', '#f-steam'); return; }
+      const looksAbsolute = (v) => /^[a-zA-Z]:[\\/]|^\\\\|^\//.test(v) || /^[a-z][a-z0-9+.-]+:/i.test(v);
+      if (exePath && !looksAbsolute(exePath)) { refuse('The .exe needs its full path, like C:\\Games\\Game\\game.exe', '#f-exe'); return; }
+      if (launchTarget && !looksAbsolute(launchTarget)) { refuse('“Launch with” needs a full path or a link like steam://…', '#f-launch'); return; }
       // text the number field can't read ('214e', '-') must not save as 0 h
       const hoursBad = card.querySelector('#f-hours');
       if (hoursBad && hoursBad.validity && hoursBad.validity.badInput) {
@@ -5778,18 +6096,27 @@
           source: 'Manual',
         });
       } else {
-        Object.assign(g, {
-          name, exePath, coverUrl: coverLocal, heroUrl: heroLocal, logoUrl: logoLocal, iconUrl: iconLocal, notes, status: nextStatus, wishlisted: isWish,
-          sgdbId: chosen ? chosen.id : (g.sgdbId || null),
-          steamAppId,
-          launchTarget,
-          trackMode,
-          trackExe,
-          // art the user set or cleared here is their choice: the automatic
-          // fill must not put something back (or swap a wide cover) later
-          ...(artTouched ? { artVersion: 3, heroTried: true, iconTried: true } : {}),
-          ...(hoursEdited ? { hours: typedHours, hoursSetAt: Date.now() } : {}),
-        });
+        // only what was changed here: art that filled in, a session that
+        // ended, a sync from another PC while the dialog was open all stay
+        const edited = (sel) => { const el = card.querySelector(sel); return !!el && el.value.trim() !== el.defaultValue.trim(); };
+        const patch = {};
+        if (edited('#f-name')) patch.name = name;
+        if (edited('#f-exe')) patch.exePath = exePath;
+        if (edited('#f-cover')) patch.coverUrl = coverLocal;
+        if (edited('#f-hero')) patch.heroUrl = heroLocal;
+        if (edited('#f-logo')) patch.logoUrl = logoLocal;
+        if (edited('#f-icon')) patch.iconUrl = iconLocal;
+        if (edited('#f-notes')) patch.notes = notes;
+        if (edited('#f-steam')) patch.steamAppId = steamAppId;
+        if (edited('#f-launch')) patch.launchTarget = launchTarget;
+        if (trackModeEl.value !== trackModeAtOpen || edited('#f-track-exe')) { patch.trackMode = trackMode; patch.trackExe = trackExe; }
+        if (finished !== editFinished || wishlisted !== editWish) { patch.status = nextStatus; patch.wishlisted = isWish; }
+        if (chosen && chosen.id !== g.sgdbId) patch.sgdbId = chosen.id;
+        // art the user set or cleared here is their choice: the automatic
+        // fill must not put something back (or swap a wide cover) later
+        if (artTouched) Object.assign(patch, { artVersion: 3, heroTried: true, iconTried: true });
+        if (hoursEdited) Object.assign(patch, { hours: typedHours, hoursSetAt: Date.now() });
+        Object.assign(g, patch);
       }
 
       const target = isNew ? state.games[0] : g;
@@ -5884,6 +6211,20 @@
     return null;
   }
 
+  // A wishlisted game turned up installed (Import or auto sync): it moves to
+  // the library, keeping its art and place, with what the scan knows added.
+  function wishToLibraryFrom(g, c) {
+    if (!g.exePath && c.exePath) g.exePath = c.exePath;
+    if (!g.installDir && c.installDir) g.installDir = c.installDir;
+    if (!g.steamAppId && c.steamAppId) g.steamAppId = Number(c.steamAppId) || c.steamAppId;
+    if (!g.sourceId && c.sourceId) g.sourceId = c.sourceId;
+    if (!g.launchTarget && c.launchTarget) g.launchTarget = c.launchTarget;
+    if (!(Number(g.hours) > 0) && Number(c.hours) > 0) g.hours = Number(c.hours);
+    g.wishlisted = false;
+    g.status = statusOutOfWishlist(g);
+    delete g.wishRank;
+  }
+
   function gameFromCandidate(c, sourceLabel) {
     const g = {
       id: crypto.randomUUID(),
@@ -5956,7 +6297,12 @@
           if (c.sourceId && ignored.has(String(c.sourceId))) continue;
           // only what can actually be started
           if (!c.exePath && !c.launchTarget && !c.steamAppId) continue;
-          if (importFind(ix, c)) continue;
+          const have = importFind(ix, c);
+          if (have) {
+            // on the wishlist and now installed: it's yours
+            if (gvIsWishlisted(have)) { wishToLibraryFrom(have, c); added.push(have); ix = importIndex(); }
+            continue;
+          }
           const g = gameFromCandidate(c, src.label);
           state.games.unshift(g);
           added.push(g);
@@ -6098,7 +6444,9 @@
     let libIndex = null;
     const buildLibIndex = () => { libIndex = importIndex(); return libIndex; };
     const existingFor = (c) => importFind(libIndex && libIndex.size === state.games.length ? libIndex : buildLibIndex(), c);
-    const isNew = (c) => !existingFor(c);
+    // a wishlisted game found installed is offered too: it moves to the library
+    const onWish = (c) => { const e = !c.wishlisted && existingFor(c); return !!(e && gvIsWishlisted(e)); };
+    const isNew = (c) => !existingFor(c) || onWish(c);
     const picked = () => candidates.filter((c) => c._checked && isNew(c));
     const labelOf = (id) => (sources.find((s) => s.id === id) || {}).label || id;
 
@@ -6241,6 +6589,7 @@
     const metaFor = (c) => {
       const bits = [];
       if (c.wishlisted) bits.push('Wishlist · not owned yet');
+      else if (onWish(c)) bits.push('On your wishlist · moves to your library');
       else if (c.source) bits.push(c.source);
       if (c.hours > 0) bits.push(`${fmtNum(c.hours, 1)}h`);
       if (c.kind) bits.push(c.kind);
@@ -6283,8 +6632,8 @@
           const existing = existingFor(candidates[Number(upd.dataset.update)]);
           if (!existing) return;
           upd.dataset.busy = '1'; upd.disabled = true; upd.textContent = 'Updating…';
-          Promise.resolve(refreshArt(existing, { focus: false }))
-            .then(() => toast(`Updated ${existing.name}`, 'ok'))
+          // look the artwork up again (refreshArt only repaints what is there)
+          Promise.resolve(refetchArtwork(existing))
             .finally(() => { upd.textContent = 'Update art'; upd.disabled = false; delete upd.dataset.busy; });
         };
       }
@@ -6375,7 +6724,9 @@
       for (let i = 0; i < total; i++) {
         primaryBtn.textContent = `Importing ${i + 1}/${total}…`;
         const c = list[i];
-        state.games.unshift(gameFromCandidate(c, labelOf(activeId)));
+        const wishEntry = onWish(c) ? existingFor(c) : null;
+        if (wishEntry) wishToLibraryFrom(wishEntry, c);
+        else state.games.unshift(gameFromCandidate(c, labelOf(activeId)));
         // importing it by hand means you want it: auto sync may add it again later
         if (c.sourceId && Array.isArray(state.config.importIgnored) && state.config.importIgnored.includes(String(c.sourceId))) importIgnore(c.sourceId, false);
       }
@@ -6405,7 +6756,7 @@
   // ---------------------------------------------------------------------------
 
   const SETTINGS_SECTIONS = [
-    { id: 'general', label: 'General', desc: 'Startup, the window and the in-game overlay.',
+    { id: 'general', label: 'General', desc: 'Startup, the window, sounds, screenshots and clips.',
       icon: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>' },
     { id: 'appearance', label: 'Appearance', desc: 'Layout, colours, size and motion.',
       icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17z" fill="currentColor" stroke="none"/>' },
@@ -6417,8 +6768,6 @@
       icon: '<path d="M7 9h10a4 4 0 0 1 3.9 4.9l-.9 3.6a2 2 0 0 1-3.4.9L14.8 16H9.2l-1.8 2.4a2 2 0 0 1-3.4-.9l-.9-3.6A4 4 0 0 1 7 9z"/><path d="M8 12v3M6.5 13.5h3M15.5 13h.01M17.5 14.5h.01"/>' },
     { id: 'account', label: 'Account & cloud', desc: 'Back up your saves and sync your library. Off until you turn it on.',
       icon: '<path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"/>' },
-    { id: 'ai', label: 'AI advisor', desc: 'Optional game suggestions in the overlay, with your own API key.',
-      icon: '<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>' },
     { id: 'performance', label: 'Performance', desc: 'Frame rate, GPU and diagnostics.',
       icon: '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4-5.5"/>' },
     { id: 'about', label: 'About', desc: 'Version, updates and credits.',
@@ -7376,7 +7725,8 @@
         <span class="cz-preset-name">${esc(p.name)}</span>
       </button>`).join('')}</div>`;
     return stCard(`Customize${isNew ? '<span class="st-soon">New</span>' : ''}`,
-      (opts.drawer ? '' : stRow('Customize live', 'A panel beside your library, so you see each change as you make it. Right-click any empty spot to open it too.', '<button type="button" class="btn btn-primary" data-cz-open>Customize…</button>')) +
+      // Big Picture keeps its own layout: the live panel only opens outside it
+      (opts.drawer || bp.on ? '' : stRow('Customize live', 'A panel beside your library, so you see each change as you make it. Right-click any empty spot to open it too.', '<button type="button" class="btn btn-primary" data-cz-open>Customize…</button>')) +
       stRow('Presets', 'A starting point to tweak. Your colours, background, size and motion stay as they are.', presets, { wide: true }) +
       stRow('Share a look', 'Copy your look as a short code to send to a friend, or paste one you got. Pictures and videos stay on this PC.',
         '<div class="st-inline"><button type="button" class="btn btn-ghost" data-look-copy>Copy look</button><button type="button" class="btn btn-ghost" data-look-paste>Paste look</button></div>') +
@@ -7534,12 +7884,66 @@
     }
   }
 
+  // "Change" listens for the next key press with a modifier (or an F key) and
+  // saves it as an Electron accelerator; main re-registers and says if it took
+  function wireCaptureSettings(panel) {
+    const audio = panel.querySelector('[data-cap-audio]');
+    if (audio) audio.onchange = () => saveConfigPatch({ captureGameAudio: audio.checked });
+    const mic = panel.querySelector('[data-cap-mic]');
+    if (mic) mic.onchange = () => saveConfigPatch({ captureMic: mic.checked });
+    const others = panel.querySelector('[data-cap-others]');
+    if (others) others.onchange = async () => {
+      await saveConfigPatch({ captureFindOthers: others.checked });
+      await loadMedia(true);
+    };
+    const folder = panel.querySelector('[data-cap-folder]');
+    if (folder) folder.onclick = () => api.openCapturesFolder && api.openCapturesFolder();
+    for (const btn of panel.querySelectorAll('[data-key-set]')) {
+      btn.onclick = () => {
+        const field = btn.dataset.keySet;
+        const show = panel.querySelector(`[data-key-show="${field}"]`);
+        const before = show.textContent;
+        show.textContent = 'Press keys…';
+        btn.textContent = 'Cancel';
+        const done = (label) => {
+          document.removeEventListener('keydown', onKey, true);
+          show.textContent = label;
+          btn.textContent = 'Change';
+          btn.onclick = null;
+          wireCaptureSettings(panel);
+        };
+        const onKey = async (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (e.key === 'Escape') { done(before); return; }
+          const k = /^Key([A-Z])$/.exec(e.code) ? e.code.slice(3) : /^Digit(\d)$/.exec(e.code) ? e.code.slice(5) : /^F([1-9]|1\d|2[0-4])$/.test(e.code) ? e.code : null;
+          if (!k) return; // a modifier on its own: keep listening
+          const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Super'].filter(Boolean);
+          if (!mods.length && !/^F\d/.test(k)) { show.textContent = 'Add Ctrl, Alt or Shift'; return; }
+          if (e.ctrlKey && e.altKey) { show.textContent = 'Ctrl + Alt is AltGr on many keyboards'; return; }
+          const accel = [...mods, k].join('+');
+          const other = field === 'captureShotHotkey' ? captureKeys().clip : captureKeys().shot;
+          if (accel === other) { show.textContent = 'That’s the other shortcut'; return; }
+          done(keyLabel(accel));
+          await saveConfigPatch({ [field]: accel });
+          const res = api.updateCaptureHotkeys ? await api.updateCaptureHotkeys().catch(() => null) : null;
+          const ok = !res || res[field === 'captureShotHotkey' ? 'shot' : 'clip'] !== false;
+          const d = panel.querySelector(field === 'captureShotHotkey' ? '#st-key-shot' : '#st-key-clip');
+          if (d && !ok) d.textContent = 'Another app already uses this shortcut. Pick a different one.';
+          toast(ok ? `Shortcut set to ${keyLabel(accel)}` : 'Another app already uses that shortcut', ok ? 'ok' : 'error');
+        };
+        document.addEventListener('keydown', onKey, true);
+        btn.onclick = () => done(before);
+      };
+    }
+  }
+
   const SETTINGS_RENDERERS = {
     async general() {
       const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
       const startupOn = await api.getStartup().catch(() => false);
       const toTray = state.config.closeToTray !== false;
-      const hotkey = state.config.overlayHotkey || 'Shift+Alt+G';
+      const keys = captureKeys();
+      const hk = info.captureHotkeyOk || {};
       return {
         html:
           stCard('Startup',
@@ -7557,12 +7961,19 @@
               stPills('data-sfx-theme', [['crisp', 'Crisp'], ['airy', 'Airy']], state.config.sfxTheme || 'crisp', { disabled: state.config.sfx === false })) +
             stRow('Navigation sounds', 'A tiny sound each time you move to another item with a controller or the arrow keys.',
               stSwitch('data-sfx-nav', state.config.sfxNav !== false, { label: 'Navigation sounds', disabled: state.config.sfx === false }))) +
-          stCard('In-game overlay',
-            info.wayland
-              ? stRow('Shortcut', 'Wayland blocks global hotkeys. Bind this in your compositor:<br><code class="st-code">gamevault --toggle-overlay</code>', '')
-              : stRow('Shortcut', info.overlayHotkeyOk === false
-                ? 'Another app is already using this shortcut, so the overlay can’t open with it. Close that app or change its shortcut, then restart GameVault.'
-                : 'Screenshots, clips and the AI advisor on top of your game. Works with borderless and windowed games.', `<kbd class="st-kbd">${esc(hotkey.replace(/\+/g, ' + '))}</kbd>`)),
+          stCard('Screenshots & clips',
+            (info.wayland
+              ? stRow('Shortcuts', 'Wayland blocks global shortcuts. Bind these in your compositor:<br><code class="st-code">gamevault --screenshot</code><br><code class="st-code">gamevault --record</code>', '')
+              : stRow('Screenshot', hk.shot === false ? 'Another app already uses this shortcut. Pick a different one.' : 'Saves the screen you’re on, tagged with the game you’re playing.',
+                  `<div class="st-inline"><kbd class="st-kbd" data-key-show="captureShotHotkey">${esc(keyLabel(keys.shot))}</kbd><button type="button" class="btn btn-ghost" data-key-set="captureShotHotkey">Change</button></div>`, { descId: 'st-key-shot' }) +
+                stRow('Record a clip', hk.clip === false ? 'Another app already uses this shortcut. Pick a different one.' : 'Press once to start and again to stop. You get a notification for each.',
+                  `<div class="st-inline"><kbd class="st-kbd" data-key-show="captureClipHotkey">${esc(keyLabel(keys.clip))}</kbd><button type="button" class="btn btn-ghost" data-key-set="captureClipHotkey">Change</button></div>`, { descId: 'st-key-clip' })) +
+            stRow('Game sound in clips', 'Records what you hear from the PC.', stSwitch('data-cap-audio', state.config.captureGameAudio !== false, { label: 'Game sound in clips' })) +
+            stRow('Microphone in clips', 'Adds your voice on top.', stSwitch('data-cap-mic', state.config.captureMic === true, { label: 'Microphone in clips' })) +
+            stRow('Captures from other apps', 'Also shows screenshots and clips from Steam, NVIDIA, AMD, Ubisoft Connect and the Xbox Game Bar, plus photo-mode shots a game saves while you play. They stay in their own folders.',
+              stSwitch('data-cap-others', state.config.captureFindOthers !== false, { label: 'Captures from other apps' })) +
+            stRow('Where they go', 'Shown under Activity and on each game’s page. Works with borderless and windowed games; exclusive fullscreen can come out black.',
+              '<button type="button" class="btn btn-ghost" data-cap-folder>Open folder</button>')),
         wire(panel) {
           panel.querySelector('[data-autostart]').onchange = async (e) => {
             await api.setStartup(e.target.checked).catch(() => {});
@@ -7579,6 +7990,7 @@
             if (v !== state.view) cycleView();
           });
           wireBpSettings(panel);
+          wireCaptureSettings(panel);
           const sfxOn = panel.querySelector('[data-sfx-on]');
           const sfxVol = panel.querySelector('[data-sfx-vol]');
           if (sfxOn) sfxOn.onchange = () => {
@@ -7863,50 +8275,6 @@
           `<section class="st-card acct-card" data-account>${accountCardHtml()}</section>` +
           `<section class="st-card" data-cloud-card>${cloudCardHtml()}</section>`,
         wire(panel) { wireAccountCard(panel.querySelector('[data-account]')); wireCloudCard(panel.querySelector('[data-cloud-card]')); },
-      };
-    },
-
-    async ai() {
-      const cfg = state.config;
-      const provider = cfg.aiProvider || 'openai';
-      const providers = [['openai', 'OpenAI'], ['anthropic', 'Anthropic (Claude)'], ['google', 'Google Gemini'], ['deepseek', 'DeepSeek'], ['custom', 'Custom (OpenAI-compatible)']];
-      return {
-        html: stCard('AI advisor',
-          stRow('Use the AI advisor', 'Adds an AI tab to the in-game overlay for game suggestions based on your library and PC.', stSwitch('data-ai-enabled', cfg.aiEnabled === true, { label: 'Use the AI advisor' })) +
-          stRow('Provider', '', `<select class="select" id="st-ai-provider" aria-label="AI provider">${providers.map(([v, l]) => `<option value="${v}" ${v === provider ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`) +
-          `<div data-ai-custom ${provider === 'custom' ? '' : 'hidden'}>` +
-            stRow('Endpoint', 'Base URL of an OpenAI-compatible API.', `<input class="input" id="st-ai-endpoint" value="${esc(cfg.aiCustomEndpoint || '')}" placeholder="https://…/v1" spellcheck="false" />`, { wide: true }) +
-            stRow('Model', '', `<input class="input" id="st-ai-model" value="${esc(cfg.aiCustomModel || '')}" placeholder="model name" spellcheck="false" />`) +
-          '</div>' +
-          stRow('API key', cfg.hasAiKey ? 'A key is saved. Paste a new one to replace it.' : 'Stored encrypted on this PC and only sent to the provider you pick.',
-            `<div class="st-inline"><input class="input" id="st-ai-key" type="password" placeholder="${cfg.hasAiKey ? 'Key saved — paste to replace' : 'API key'}" autocomplete="off" spellcheck="false" aria-label="AI API key" />
-             <button type="button" class="btn btn-ghost" data-ai-save>Check &amp; save</button></div>`, { wide: true, descId: 'st-ai-desc' })),
-        wire(panel) {
-          const sel = panel.querySelector('#st-ai-provider');
-          const custom = panel.querySelector('[data-ai-custom]');
-          // the provider is saved with its key (Check & save): saving it alone
-          // would send the old provider's key to the new one
-          sel.onchange = () => { custom.hidden = sel.value !== 'custom'; };
-          panel.querySelector('[data-ai-enabled]').onchange = async (e) => {
-            await saveConfigPatch({ aiEnabled: e.target.checked });
-            toast(e.target.checked ? 'AI advisor on — find it in the overlay' : 'AI advisor off', 'ok');
-          };
-          panel.querySelector('[data-ai-save]').onclick = async () => {
-            const key = panel.querySelector('#st-ai-key').value.trim();
-            const endpoint = panel.querySelector('#st-ai-endpoint')?.value.trim() || '';
-            const modelName = panel.querySelector('#st-ai-model')?.value.trim() || '';
-            const sameProvider = (state.config.aiProvider || 'openai') === sel.value;
-            if (!key && sel.value !== 'custom' && !(state.config.hasAiKey && sameProvider)) { toast('Paste an API key first', 'error'); return; }
-            const res = api.aiValidateKey ? await api.aiValidateKey({ provider: sel.value, key, endpoint, modelName }).catch(() => null) : { valid: true };
-            if (!res || !res.valid) { toast((res && res.error) || 'That key did not work', 'error'); return; }
-            // an empty box keeps the saved key (it was checked above)
-            await saveConfigPatch({ aiKey: key || (sameProvider ? undefined : ''), aiProvider: sel.value, aiCustomEndpoint: endpoint, aiCustomModel: modelName });
-            panel.querySelector('#st-ai-key').value = '';
-            const d = panel.querySelector('#st-ai-desc');
-            if (d) d.textContent = state.config.hasAiKey ? 'A key is saved. Paste a new one to replace it.' : 'No key saved. This endpoint works without one.';
-            toast(key ? 'AI key checked and saved' : 'AI settings checked and saved', 'ok');
-          };
-        },
       };
     },
 
@@ -8264,6 +8632,17 @@
   }
 
   const openedBefore = new Map();
+  // a launch that never ran must not count as "last played" either
+  const playedBefore = new Map();
+  function undoPlayed(g) {
+    const key = g && String(g.id);
+    if (!key || !playedBefore.has(key)) return;
+    const was = playedBefore.get(key);
+    playedBefore.delete(key);
+    if (was == null) delete g.lastPlayed; else g.lastPlayed = was;
+    undoOpened(g);
+  }
+
   function undoOpened(g) {
     const key = g && String(g.id);
     if (!key || !openedBefore.has(key)) return;
@@ -8306,8 +8685,8 @@
     const name = (g && g.name) || 'The game';
     const msg = `${name} launched, but GameVault never saw it running. Edit → Launch & tracking to pick what to track`;
     if (!g || untrackedAsked.has(String(g.id))) { toast(msg, 'error'); return; }
-    untrackedAsked.add(String(g.id));
-    problemDialog({
+    // asked once per run, but only once it was really shown (not a toast)
+    const shown = problemDialog({
       title: 'This session isn’t being timed',
       body: `<b>${esc(name)}</b> was started, but GameVault never saw it running, so this session isn’t counted. This usually means the ${IS_WINDOWS ? '.exe' : 'program'} is only a launcher. Pick the program that really runs the game, while it’s running.`,
       fallback: msg,
@@ -8324,6 +8703,7 @@
         },
       ],
     });
+    if (shown) untrackedAsked.add(String(g.id));
   }
 
   function togglePlay(id) {
@@ -8341,13 +8721,24 @@
         refreshGameUi(g);
       };
       api.killGame(g.id, g.exePath, g.installDir, g.steamAppId, g.launcherPath)
-        .then(done)
+        .then((res) => {
+          if (res && res.ok === false) {
+            // still running (Steam-tracked, nothing found to close): keep timing it
+            if (state.live[key] === 'stopping') state.live[key] = 0;
+            refreshGameUi(g);
+            toast(`Couldn’t close ${g.name || 'the game'}. Close it from the game itself; its time is still counted.`, 'error');
+            return;
+          }
+          done();
+        })
         .catch(() => { done(); toast('Could not stop the game', 'error'); });
       return;
     }
 
-    // a second click while launching cancels the wait
+    // a second click while launching cancels the wait (not the click of a
+    // double click: that would cancel and then launch a second copy)
     if (live === 'launching') {
+      if (Date.now() - (launchClickAt.get(key) || 0) < 1500) return;
       clearLaunchWatchdog(key);
       delete state.live[key];
       refreshGameUi(g);
@@ -8359,21 +8750,29 @@
       return;
     }
 
-    if (!g.exePath && !g.steamAppId) {
+    // Heroic, Lutris, Bottles and hand-set games only have "What to open"
+    if (!g.exePath && !g.steamAppId && !g.launchTarget && !g.launcherPath) {
       askForExe(g);
       return;
     }
 
     sfx('launch');
+    launchClickAt.set(key, Date.now());
     // a launch that fails puts this back (it must not count as playing)
     openedBefore.set(key, g.lastOpened);
+    playedBefore.set(key, g.lastPlayed);
     g.lastOpened = Date.now();
     saveGamesSoon();
     state.live[key] = 'launching';
     armLaunchWatchdog(g);
     refreshGameUi(g);
-    api.launchGame(g.exePath, g.steamAppId, g.id, g.installDir, g.launcherPath);
+    // main reads what to open and how to track it from games.json: write a
+    // just-saved edit (or a just-added game) first
+    flushGames().then(() => {
+      if (state.live[key] === 'launching') api.launchGame(g.exePath, g.steamAppId, g.id, g.installDir, g.launcherPath);
+    });
   }
+  const launchClickAt = new Map();
 
   // ---------------------------------------------------------------------------
   // Wiring
@@ -8452,6 +8851,8 @@
 
     strip.addEventListener('pointermove', (e) => {
       if (!dragging) return;
+      // the button went up outside the rail before the drag began: over
+      if (e.buttons === 0) { endDrag(); return; }
       const dx = e.clientX - startX;
       if (!shelfDragMoved && Math.abs(dx) > 4) {
         shelfDragMoved = true;
@@ -8485,6 +8886,8 @@
       if (Math.abs(v) > 0.08) glide(v);
     };
     strip.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
     strip.addEventListener('pointercancel', endDrag);
     strip.addEventListener('dragstart', (e) => e.preventDefault());
 
@@ -8537,6 +8940,10 @@
       document.addEventListener('pointerdown', (e) => {
         if (!sortMenu.hidden && !e.target.closest('#sort-wrap')) closeSort();
       });
+      // Tab out of the list closes it
+      $('#sort-wrap')?.addEventListener('focusout', (e) => {
+        if (!sortMenu.hidden && e.relatedTarget && !e.relatedTarget.closest('#sort-wrap')) closeSort();
+      });
     }
 
     $('#btn-view').onclick = cycleView;
@@ -8576,7 +8983,9 @@
       if (modalOpen || spotHooks.isOpen()) return;
       const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-      if (!typing && (!e.gvPad || padInShelfStrip()) && state.view === 'shelf' && !onPageFilter() && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+      // not while a menu or the Customize panel has the keyboard
+      const inMenu = !!(document.activeElement && document.activeElement.closest && document.activeElement.closest('#sort-wrap, #nav-menu, #cz, .sort-menu, .cz-menu'));
+      if (!typing && !inMenu && !customize.isOpen() && (!e.gvPad || padInShelfStrip()) && state.view === 'shelf' && !onPageFilter() && !state.settingsOpen && !state.selectedId && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
         const list = filteredGames();
         if (list.length) {
           const idx = Math.max(0, list.findIndex((g) => String(g.id) === state.shelfId));
@@ -8649,15 +9058,19 @@
       return findGame(id);
     };
 
-    if (api.onTrackingStarted) api.onTrackingStarted(({ gameId }) => {
+    if (api.onCaptureChanged) api.onCaptureChanged(() => { loadMedia(true).then(repaintCaptures); });
+    if (api.onTrackingStarted) api.onTrackingStarted(({ gameId, resumed }) => {
+      // already shown as running (noticed outside GameVault, or back from sleep)
+      const quiet = resumed || typeof state.live[String(gameId)] === 'number';
       const g = markRunning(gameId);
+      if (g) g.lastPlayed = Date.now();
       if (g && g.status !== 'Finished' && g.status !== 'Playing' && !gvIsWishlisted(g)) {
         g.status = 'Playing';
         saveGamesSoon();
       }
       refreshGameUi(g);
       backdrop.play();
-      toast(`Launched ${g ? g.name : 'game'}`, 'ok');
+      if (!quiet) toast(`Launched ${g ? g.name : 'game'}`, 'ok');
     });
 
     if (api.onTrackingTick) api.onTrackingTick(({ gameId, sessionMins }) => {
@@ -8705,11 +9118,16 @@
     if (api.onTrackingGaveUp) api.onTrackingGaveUp(({ gameId, reason }) => {
       const id = String(gameId);
       clearLaunchWatchdog(id);
-      if (state.live[id] !== 'launching' && reason !== 'untracked') return;
+      const was = state.live[id];
+      if (was == null || was === 'stopping') return;
       delete state.live[id];
       if (state.liveStart) delete state.liveStart[id];
       const g = findGame(id);
       refreshGameUi(g);
+      // noticed outside GameVault and gone before tracking began: just clear it
+      if (was !== 'launching' && reason !== 'untracked') return;
+      // it never ran: it was not played
+      if (g && reason !== 'untracked') undoPlayed(g);
       const name = (g && g.name) || 'The game';
       if (reason === 'untracked') toast(`${name} launched — playtime tracking is off for this game`, 'ok');
       else showNotTracked(g);
@@ -9777,7 +10195,8 @@
     };
     const score = (t, q) => {
       t = String(t).toLowerCase(); q = String(q).toLowerCase();
-      const i = t.indexOf(q); if (i >= 0) return 100 - i;
+      // a match deep in a long title still beats a loose letter match
+      const i = t.indexOf(q); if (i >= 0) return Math.max(41, 100 - i);
       let j = 0; for (const c of t) if (c === q[j]) j++;
       return j === q.length ? 40 : 0;
     };
@@ -9785,7 +10204,7 @@
     const actions = () => [
       { icon: 'plus', title: 'Add game', run: () => $('#btn-add')?.click() },
       { icon: 'down', title: 'Import games', run: () => $('#btn-import')?.click() },
-      { icon: 'star', title: 'Open wishlist', run: () => setFilter('Want') },
+      { icon: 'star', title: 'Open wishlist', run: () => (bp.on ? bpGo('wishlist') : setFilter('Want')) },
       { icon: 'chart', title: 'Open activity', run: () => (bp.on ? bpGo('activity') : setFilter('Activity')) },
       { icon: 'sliders', title: 'Open settings', run: () => (bp.on ? bpGo('settings') : $('#btn-settings')?.click()) },
       bp.on
@@ -10384,6 +10803,13 @@
 
   function padFocus(el, { select = true } = {}) {
     if (!el) return;
+    // up out of a scrolled page into the top row: the page goes back to its
+    // top too, so its title and stats are not left hidden
+    const from = document.activeElement;
+    const pane = from && from.closest && from.closest('#library, #wishlist-view, #activity-view, #game-view, .st-panel');
+    if (pane && !pane.contains(el) && el.closest && el.closest('.topbar') && pane.scrollTop > 0) {
+      pane.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    }
     el.focus({ preventScroll: true });
     el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
     if (select && el.classList.contains('shelf-tile') && el.dataset.id) selectShelfGame(el.dataset.id);
@@ -10416,7 +10842,8 @@
   function padEnsureFocus(force = false) {
     clearTimeout(pad.ensure);
     const check = (again) => {
-      if (!pad.on) return;
+      // Big Picture always keeps something focused (a keyboard needs it too)
+      if (!pad.on && !bp.on) return;
       const a = document.activeElement;
       const scope = padScope();
       const ok = a && a !== document.body && scope.contains(a) && padFocusable(a);
@@ -10757,6 +11184,18 @@
 
   function initBigPicture() {
     if (!window.BigPicture) return;
+    // Big Picture with a keyboard: the arrows move between covers and rows
+    // like the pad does (the normal layout keeps Tab and the shelf arrows)
+    document.addEventListener('keydown', (e) => {
+      if (!bp.on || e.gvPad || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
+      if (!dir) return;
+      const a = document.activeElement;
+      if (a && a.matches && a.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (a && a !== document.body && !(a.closest && a.closest('#grid, #shelf, #wishlist-view, #activity-view, #game-view, .topbar, #bp-menu'))) return;
+      e.preventDefault();
+      padMove(dir);
+    });
     const menu = document.createElement('div');
     menu.id = 'bp-menu';
     menu.className = 'bp-menu';

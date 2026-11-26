@@ -681,7 +681,8 @@ function autostartDesktopEntry(execPathOrCommand, args) {
 function parseCliArgs(argv) {
   const args = Array.isArray(argv) ? argv.slice(1) : [];
   return {
-    toggleOverlay: args.includes('--toggle-overlay'),
+    screenshot: args.includes('--screenshot'),
+    record: args.includes('--record'),
     show: args.includes('--show'),
     hidden: args.includes('--hidden'),
     bigPicture: args.includes('--bigpicture'),

@@ -102,7 +102,7 @@ contextBridge.exposeInMainWorld('api', {
   onLaunchError: (cb) => ipcRenderer.on('game:launch-error', (_, d) => cb(d)),
 
   // Pick exe file
-  pickExe: (startAt) => ipcRenderer.invoke('pick:exe', typeof startAt === 'string' ? startAt : ''),
+  pickExe: (startAt, kind) => ipcRenderer.invoke('pick:exe', typeof startAt === 'string' ? startAt : '', kind === 'target' ? 'target' : 'exe'),
   showInFolder: (path) => ipcRenderer.send('game:show-in-folder', path),
 
   // SteamGridDB search
@@ -137,27 +137,21 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: (url) => ipcRenderer.send('open-external', url),
 
   // Overlay
-  updateOverlayHotkey: (hotkey) => ipcRenderer.send('overlay:update-hotkey', hotkey),
-  hideOverlay: () => ipcRenderer.send('overlay:hide'),
-  toggleOverlay: () => ipcRenderer.send('overlay:toggle'),
-  onOverlayOpened: (cb) => ipcRenderer.on('overlay:opened', () => cb()),
+  updateCaptureHotkeys: () => ipcRenderer.invoke('capture:update-hotkeys'),
 
   // Media Capture
-  getScreenSourceId: () => ipcRenderer.invoke('capture:get-screen'),
-  saveMedia: (data) => ipcRenderer.invoke('capture:save-media', data),
+  takeScreenshot: () => ipcRenderer.send('capture:screenshot'),
+  toggleRecording: () => ipcRenderer.send('capture:toggle-record'),
+  isRecording: () => ipcRenderer.invoke('capture:is-recording'),
+  onCaptureChanged: (cb) => ipcRenderer.on('capture:changed', () => cb()),
+  onRecordingChanged: (cb) => ipcRenderer.on('capture:recording', (_, on) => cb(!!on)),
+  openCapturesFolder: () => ipcRenderer.send('capture:open-folder'),
+  openMedia: (path) => ipcRenderer.send('capture:open', path),
   getRecentMedia: (limit) => ipcRenderer.invoke('capture:get-recent', limit),
   getAllMedia: () => ipcRenderer.invoke('capture:get-all'),
   deleteMedia: (path) => ipcRenderer.invoke('capture:delete-media', path),
   showMediaInFolder: (path) => ipcRenderer.send('capture:show-folder', path),
-
-  // AI Chat
-  aiChat: (data) => ipcRenderer.invoke('ai:chat', data),
-  aiDetectSpecs: () => ipcRenderer.invoke('ai:detect-specs'),
-  aiLoadProfile: () => ipcRenderer.invoke('ai:load-profile'),
-  aiSaveProfile: (profile) => ipcRenderer.invoke('ai:save-profile', profile),
-  onProfileUpdated: (cb) => ipcRenderer.on('ai:profile-updated', (_, p) => cb(p)),
-  aiValidateKey: (data) => ipcRenderer.invoke('ai:validate-key', data),
-  pickGcpKey: () => ipcRenderer.invoke('pick:gcpkey'),
+  hideMedia: (path) => ipcRenderer.invoke('capture:hide-media', path),
 
   // In-App Updater
   getAppVersion: () => ipcRenderer.invoke('updater:get-version'),

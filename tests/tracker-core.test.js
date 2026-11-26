@@ -128,3 +128,27 @@ test('steamAppIdFromUri accepts rungameid/run/launch only', () => {
   assert.equal(platform.steamAppIdFromUri('steam://store/730'), '');
   assert.equal(platform.steamAppIdFromUri('https://store.steampowered.com/app/730'), '');
 });
+
+test('sleep: a long silence while running is not playtime', () => {
+  const s = core.createState();
+  core.launch(s, 0);
+  const ev = [];
+  for (let t = 3000; t <= 10 * MIN; t += 3000) ev.push(...core.observe(s, true, t));
+  // the PC sleeps for 8 hours with the game open, then wakes and plays 5 more minutes
+  const wake = 10 * MIN + 8 * 60 * MIN;
+  for (let t = wake; t <= wake + 5 * MIN; t += 3000) ev.push(...core.observe(s, true, t));
+  ev.push(...core.stop(s, wake + 5 * MIN));
+  const ends = ev.filter((e) => e.type === 'session-end');
+  assert.equal(ends.length, 2);
+  assert.ok(Math.abs(ends[0].sessionHours - (10 * MIN - 3000) / 3600000) < 1e-9);
+  assert.ok(Math.abs(ends[1].sessionHours - 5 / 60) < 1e-9);
+  assert.ok(ev.some((e) => e.type === 'started' && e.resumed));
+});
+
+test('sleep: Stop right after waking ends at the last sighting', () => {
+  const s = core.createState();
+  core.launch(s, 0);
+  for (let t = 3000; t <= 10 * MIN; t += 3000) core.observe(s, true, t);
+  const [end] = core.stop(s, 10 * MIN + 8 * 60 * MIN);
+  assert.equal(end.sessionEnd, 10 * MIN);
+});

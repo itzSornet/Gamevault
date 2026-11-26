@@ -1,8 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const https = require('https');
-const http = require('http');
 const { loadConfig } = require('./data.js');
 const { httpsGet } = require('./api.js');
 const platform = require('./platform.js');
@@ -344,40 +342,30 @@ function detectLutrisGames() {
 // Custom folder scan
 function scanFolder(folderPath) {
   const games = [];
-  const SKIP = ['unins', 'setup', 'crash', 'redist', 'dxsetup', 'vcredist', 'directx', 'vc_redist', 'unarc'];
+  const entryFor = (dir, exe) => ({
+    name: path.basename(dir).replace(/[_\-.]/g, ' ').replace(/\s+/g, ' ').trim(),
+    source: 'Custom',
+    exePath: exe,
+    installDir: dir,
+    status: 'Playing',
+    hours: 0,
+    notes: '',
+    added: Date.now(),
+    id: crypto.randomUUID(),
+  });
   try {
+    // each folder inside is a game; its exe may sit deeper (bind, Binaries\Win64)
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const subDir = path.join(folderPath, entry.name);
-      try {
-        const files = fs.readdirSync(subDir);
-        const exes = files.filter(f => {
-          const fl = f.toLowerCase();
-          if (SKIP.some(s => fl.includes(s))) return false;
-          return isGameExecutableName(subDir, f);
-        });
-        if (exes.length === 0) continue;
-        let bestExe = exes[0];
-        let bestSize = 0;
-        for (const exe of exes) {
-          try {
-            const stat = fs.statSync(path.join(subDir, exe));
-            if (stat.size > bestSize) { bestSize = stat.size; bestExe = exe; }
-          } catch (e) {}
-        }
-        games.push({
-          name: entry.name.replace(/[_\-.]/g, ' ').replace(/\s+/g, ' ').trim(),
-          source: 'Custom',
-          exePath: path.join(subDir, bestExe),
-          installDir: subDir,
-          status: 'Playing',
-          hours: 0,
-          notes: '',
-          added: Date.now(),
-          id: crypto.randomUUID(),
-        });
-      } catch (e) {}
+      const exe = findMainExe(subDir);
+      if (exe) games.push(entryFor(subDir, exe));
+    }
+    // nothing inside, but the picked folder runs a game itself: it is the game
+    if (!games.length) {
+      const exe = findMainExe(folderPath);
+      if (exe) games.push(entryFor(folderPath, exe));
     }
   } catch (e) {}
   return games;
@@ -515,11 +503,6 @@ async function smartScan(targetWindow) {
   let filtered = basicFilterCandidates(rawCandidates);
   if (!filtered.length) return [];
 
-  // Phase 3: AI Analysis + Name cleaning
-  if (cfg.aiEnabled && (cfg.aiKey || (cfg.aiProvider === 'custom' && cfg.aiCustomEndpoint))) {
-    report(`AI analyzing ${filtered.length} potential games...`);
-    filtered = await aiFilterCandidates(filtered, cfg);
-  }
   if (!filtered.length) return [];
 
   // Phase 3: Auto-fetch covers from SteamGridDB
@@ -571,146 +554,6 @@ function basicFilterCandidates(candidates) {
     if (['bin', 'app', 'data', 'src', 'lib', 'temp', 'tmp', 'tools', 'util', 'config'].includes(name)) return false;
     return true;
   });
-}
-
-async function aiFilterCandidates(candidates, cfg) {
-  // Build compact descriptions for AI (batch up to 50 at a time)
-  const BATCH_SIZE = 50;
-  const allResults = [];
-
-  for (let batchStart = 0; batchStart < candidates.length; batchStart += BATCH_SIZE) {
-    const batch = candidates.slice(batchStart, batchStart + BATCH_SIZE);
-    const lines = batch.map((c, i) => {
-      const folderName = path.basename(c.installDir || '');
-      const exeName = path.basename(c.exePath || '');
-      // Build parent folder chain for path context (helps identify games in nested dirs)
-      const exeDir = path.dirname(c.exePath || '');
-      const pathParts = exeDir.split(path.sep).slice(-4).join(' > '); // last 4 folders
-      // Also check for game-engine DLLs in the folder
-      let hints = '';
-      try {
-        const files = fs.readdirSync(c.installDir || '').map(f => f.toLowerCase());
-        if (files.includes('steam_api.dll') || files.includes('steam_api64.dll')) hints += ' [has steam_api]';
-        if (files.includes('unityplayer.dll')) hints += ' [Unity engine]';
-        if (files.some(f => f.includes('unreal') || f.includes('ue4'))) hints += ' [Unreal engine]';
-      } catch (e) {}
-      return `${i}: folder="${folderName}" exe="${exeName}" path="${pathParts}"${hints}`;
-    });
-
-    const prompt = `Below are ${batch.length} executable files found on a Windows PC. For each, decide if it is the MAIN executable for a PC VIDEO GAME.
-
-STRICT RULES:
-1. If it's a generic launcher (e.g. "launcher.exe", "EasyAntiCheat"), a game utility, a redistributable, or an updater -> mark game: false.
-2. Do NOT guess or hallucinate a game name. If an exe is related to "War Thunder", the game is "War Thunder". Do NOT hallucinate names like "Ace Combat".
-3. If it IS a game, provide the correct OFFICIAL game name (e.g. "Grand Theft Auto V" not "GTA5_v1.2-CODEX").
-4. If you are not 100% sure it's a game, mark it as game: false.
-
-RESPOND WITH ONLY A JSON ARRAY. Each element: {"i": <index>, "game": true/false, "name": "Official Game Name"}
-Include ALL entries. For non-games, set name to "".
-
-Entries:
-${lines.join('\n')}`;
-
-    const messages = [
-        { role: 'system', content: 'You are a PC game identification expert. You know thousands of games and can identify them from folder names, exe names, and engine hints. Reply with ONLY a valid JSON array, no markdown, no code fences.' },
-        { role: 'user', content: prompt },
-    ];
-
-    let url = '';
-    let headers = { 'Content-Type': 'application/json' };
-    let bodyData = null;
-    const openaiFormat = { model: (cfg.aiProvider === 'custom' && cfg.aiCustomModel) || 'gpt-4o-mini', messages, temperature: 0.1, max_tokens: 2000 };
-
-    if (cfg.aiProvider === 'openai') {
-        url = 'https://api.openai.com/v1/chat/completions';
-        headers['Authorization'] = `Bearer ${cfg.aiKey}`;
-        bodyData = openaiFormat;
-    } else if (cfg.aiProvider === 'anthropic') {
-        url = 'https://api.anthropic.com/v1/messages';
-        headers['x-api-key'] = cfg.aiKey;
-        headers['anthropic-version'] = '2023-06-01';
-        bodyData = { model: 'claude-3-haiku-20240307', system: messages[0].content, messages: [messages[1]], max_tokens: 2000, temperature: 0.1 };
-    } else if (cfg.aiProvider === 'deepseek') {
-        url = 'https://api.deepseek.com/chat/completions';
-        headers['Authorization'] = `Bearer ${cfg.aiKey}`;
-        openaiFormat.model = 'deepseek-chat';
-        bodyData = openaiFormat;
-    } else if (cfg.aiProvider === 'google') {
-        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cfg.aiKey}`;
-        bodyData = { systemInstruction: { parts: [{text: messages[0].content}] }, contents: [{ role: 'user', parts: [{text: prompt}] }], generationConfig: { temperature: 0.1, maxOutputTokens: 2000 } };
-    } else if (cfg.aiProvider === 'custom') {
-        url = (cfg.aiCustomEndpoint || '').replace(/\/+$/, '');
-        if (!url.endsWith('/chat/completions')) url += '/chat/completions';
-        if (cfg.aiKey) headers['Authorization'] = `Bearer ${cfg.aiKey}`;
-        bodyData = openaiFormat;
-    }
-
-    let parsedUrl;
-    try { parsedUrl = new URL(url); } catch(e) { continue; }
-    if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') continue;
-
-    const body = JSON.stringify(bodyData);
-    const reqPath = parsedUrl.pathname + parsedUrl.search;
-
-    try {
-      const responseText = await new Promise((resolve, reject) => {
-        const req = (parsedUrl.protocol === 'http:' ? http : https).request({
-          hostname: parsedUrl.hostname,
-          port: parsedUrl.port || undefined,
-          path: reqPath,
-          method: 'POST',
-          headers,
-          timeout: 45000
-        }, res => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const dataObj = JSON.parse(data);
-              if (dataObj.error) reject(new Error(dataObj.error.message));
-              
-              let contentStr = '';
-              if (cfg.aiProvider === 'google') {
-                contentStr = dataObj.candidates?.[0]?.content?.parts?.[0]?.text || '';
-              } else if (cfg.aiProvider === 'anthropic') {
-                contentStr = dataObj.content?.[0]?.text || '';
-              } else {
-                contentStr = dataObj.choices?.[0]?.message?.content || '';
-              }
-              
-              const match = contentStr.match(/\[.*\]/s);
-              resolve(match ? match[0] : contentStr);
-            } catch (e) { reject(new Error('Failed to parse AI response')); }
-          });
-        });
-        req.on('error', reject);
-        // the timeout option only reports; without this a stalled server hangs the scan
-        req.on('timeout', () => { req.destroy(); reject(new Error('AI request timed out')); });
-        req.write(body);
-        req.end();
-      });
-
-      const aiResults = JSON.parse(responseText);
-
-      for (const result of aiResults) {
-        if (result.game && result.name) {
-          const original = batch[result.i];
-          if (original) {
-            allResults.push({
-              ...original,
-              name: result.name,
-              source: 'Smart Scan',
-            });
-          }
-        }
-      }
-    } catch (e) {
-      console.error('AI filter batch error:', e.message);
-      allResults.push(...basicFilterCandidates(batch));
-    }
-  }
-
-  return allResults;
 }
 
 async function autoFetchCovers(games, sgdbKey) {

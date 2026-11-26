@@ -1,5 +1,5 @@
 // GameVault v1.3.1 - Main Process
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, desktopCapturer, nativeImage, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, safeStorage } = require('electron');
 app.name = 'GameVault Experimental';
 if (app.setName) app.setName('GameVault Experimental');
 // Cap Chromium's disk caches: headless capture runs used to inflate them to GBs.
@@ -12,11 +12,11 @@ const http = require('http');
 const crypto = require('crypto');
 const platform = require('./src/backend/platform.js');
 
-const { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync, aiLoadProfile, aiSaveProfile } = require('./src/backend/data.js');
+const { DATA_PATH, CONFIG_PATH, loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync } = require('./src/backend/data.js');
 const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
 const steamSource = require('./src/backend/sources/steam.js');
-const { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses } = require('./src/backend/tracker.js');
+const { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions } = require('./src/backend/tracker.js');
 
 const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
@@ -29,9 +29,10 @@ const { createCloud } = require('./src/backend/cloud.js');
 const { findSaveFolders } = require('./src/backend/save-locations.js');
 const { httpsGet } = require('./src/backend/api.js');
 const Fuzzy = require('./src/lib/fuzzy.js');
+const Capture = require('./src/backend/capture.js');
+const Finder = require('./src/backend/capture-finder.js');
 
 let win = null;
-let overlayWin = null;
 let tray = null;
 let forceQuit = false;
 let bgPollInterval = null;
@@ -66,6 +67,42 @@ function patchGame(gameId, patch) {
   });
 }
 
+// Download the remote covers of a saved library, then swap the local copies
+// into games.json (only where the file still has that same web address).
+let imageCacheRun = Promise.resolve();
+function cacheImagesAfterSave(games) {
+  const remote = /^https?:/i;
+  const copies = (games || [])
+    .filter((g) => g && typeof g === 'object' && (remote.test(g.coverUrl || '') || remote.test(g.heroUrl || '')))
+    .map((g) => ({ id: g.id, coverUrl: g.coverUrl, heroUrl: g.heroUrl }));
+  if (!copies.length) return;
+  imageCacheRun = imageCacheRun.then(async () => {
+    if (forceQuit) return;
+    const before = copies.map((c) => ({ ...c }));
+    await cacheGameImages(copies);
+    if (forceQuit) return;
+    const swaps = new Map();
+    copies.forEach((c, i) => {
+      for (const field of ['coverUrl', 'heroUrl']) {
+        if (c[field] && c[field] !== before[i][field]) swaps.set(`${c.id}|${field}`, [before[i][field], c[field]]);
+      }
+    });
+    if (!swaps.size) return;
+    await enqueueGamesWrite(() => {
+      const list = loadGames();
+      let changed = false;
+      for (const g of list) {
+        if (!g || typeof g !== 'object') continue;
+        for (const field of ['coverUrl', 'heroUrl']) {
+          const swap = swaps.get(`${g.id}|${field}`);
+          if (swap && g[field] === swap[0]) { g[field] = swap[1]; changed = true; }
+        }
+      }
+      if (changed) saveGames(list);
+    });
+  }).catch((err) => console.warn('[games] image cache:', err && err.message));
+}
+
 // extra: { code: 'NOT_FOUND', path, isExe } lets the app offer a fix
 function sendLaunchError(gameId, error, extra) {
   if (win && !win.isDestroyed()) win.webContents.send('game:launch-error', { ...(extra || {}), gameId, error });
@@ -85,7 +122,7 @@ const shotState = stateIdx !== -1 ? process.argv[stateIdx + 1] : '';
 const delayIdx = process.argv.indexOf('--shot-delay');
 const shotDelay = delayIdx !== -1 ? Number(process.argv[delayIdx + 1]) || 900 : 900;
 
-// A second launch must never create a second library window or overlay.
+// A second launch must never create a second library window.
 // It hands its flags to the running instance instead.
 const shotMode = process.argv.includes('--shot');
 const hasSingleInstanceLock = shotMode ? true : app.requestSingleInstanceLock();
@@ -98,7 +135,9 @@ if (process.platform === 'linux') {
 
 app.on('second-instance', (_event, argv) => {
   const flags = platform.parseCliArgs(argv);
-  if (flags.toggleOverlay) { toggleOverlay(); return; }
+  // Wayland has no global shortcuts: a compositor binding runs these instead
+  if (flags.screenshot) { Capture.screenshot(); return; }
+  if (flags.record) { Capture.toggleRecording(); return; }
   if (win && !win.isDestroyed()) {
     win.show(); win.focus();
     // `GameVault --bigpicture` while it's already running: switch the open window
@@ -146,6 +185,18 @@ function setLinuxAutostart(enable) {
 
 function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
   const sid = String(gameId);
+  // already running, or launched a moment ago (a double click, the tray while
+  // it starts): a second copy is never what was meant
+  const already = trackedProcesses[sid];
+  if (already && already.core) {
+    const ph = already.core.phase;
+    if (ph === 'running' || ph === 'grace') return;
+    if (ph === 'pending' && Date.now() - (already.core.launchedAt || 0) < 5000) return;
+  }
+  // "Copy as path" quotes
+  const unquote = (v) => (typeof v === 'string' ? v.trim().replace(/^"(.*)"$/s, '$1').trim() : v);
+  exePath = unquote(exePath);
+  launcherPath = unquote(launcherPath);
   const games = loadGames();
   const gameRecord = games.find(x => String(x.id) === sid);
   const launchOpts = gameRecord || {};
@@ -170,7 +221,7 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
   // What to open and what counts as playing are separate (tracker split):
   // launchTarget/launcherPath is opened, trackMode/trackExe decide tracking.
   configureTracking(sid, launchOpts);
-  if (!launcherPath && launchOpts.launchTarget) launcherPath = String(launchOpts.launchTarget);
+  if (!launcherPath && launchOpts.launchTarget) launcherPath = unquote(String(launchOpts.launchTarget));
 
   // Launch: launcherPath if provided, otherwise exePath or steam
   const pathToLaunch = launcherPath || exePath;
@@ -318,9 +369,17 @@ function launchWindowsFile(sid, gameId, pathToLaunch, exePath, installDir, steam
   if (ext === '.exe' || ext === '.com') {
     spawnTracked(pathToLaunch, launchArgs.slice(), {}, path.basename(pathToLaunch));
   } else if (ext === '.bat' || ext === '.cmd') {
-    const quote = (a) => `"${String(a).replace(/"/g, '""')}"`;
-    const line = [quote(pathToLaunch), ...launchArgs.map(quote)].join(' ');
-    spawnTracked('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { windowsHide: false, windowsVerbatimArguments: true }, 'cmd.exe');
+    // the path and arguments go in through variables: cmd expands %…% once,
+    // so a folder named "100% done" or an argument like %OS% stays as typed
+    const env = { ...process.env, GV_BAT: pathToLaunch };
+    const parts = ['"%GV_BAT%"'];
+    launchArgs.forEach((a, i) => {
+      const v = String(a);
+      if (!v) { parts.push('""'); return; }
+      env[`GV_A${i}`] = v;
+      parts.push(`"%GV_A${i}%"`);
+    });
+    spawnTracked('cmd.exe', ['/d', '/s', '/c', `"${parts.join(' ')}"`], { windowsHide: false, windowsVerbatimArguments: true, env }, 'cmd.exe');
   } else {
     shell.openPath(pathToLaunch).then((err) => {
       if (err) { fail(`Failed to launch game:\n${err}`); return; }
@@ -334,13 +393,15 @@ function buildTrayMenu() {
   const games = loadGames();
   // a hand-edited or damaged file can hold nulls or non-text names
   const recent = (Array.isArray(games) ? games : [])
-    .filter(g => g && typeof g === 'object' && (g.exePath || g.steamAppId) && g.lastPlayed)
+    .filter(g => g && typeof g === 'object' && (g.exePath || g.steamAppId || g.launchTarget || g.launcherPath) && g.lastPlayed)
     .sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0))
     .slice(0, 3);
 
   const recentItems = recent.length
     ? recent.map(g => ({
-      label: (() => { const n = String(g.name || 'Untitled'); return n.length > 28 ? n.slice(0, 28) + '…' : n; })(),
+      // whole characters (an emoji is two code units), and '&' is a menu
+      // shortcut marker on Windows unless doubled
+      label: (() => { const n = Array.from(String(g.name || 'Untitled')); return (n.length > 28 ? n.slice(0, 28).join('') + '…' : n.join('')).replace(/&/g, '&&'); })(),
       click: () => launchGame(g.id, g.exePath, g.installDir, g.steamAppId, g.launcherPath),
     }))
     : [{ label: 'No recent games', enabled: false }];
@@ -352,6 +413,9 @@ function buildTrayMenu() {
     { type: 'separator' },
     { label: 'Quick Launch', enabled: false },
     ...recentItems,
+    { type: 'separator' },
+    { label: 'Take screenshot', click: () => Capture.screenshot() },
+    { label: Capture.isRecording() ? 'Stop recording' : 'Record a clip', click: () => Capture.toggleRecording() },
     { type: 'separator' },
     { label: 'Quit', click: () => { forceQuit = true; app.quit(); } },
   ]);
@@ -417,111 +481,40 @@ function startBgPoll() {
   }, 30000);
 }
 
-function createOverlayWindow() {
-  overlayWin = new BrowserWindow({
-    width: 400,
-    height: 600,
-    x: 0, // Will be updated on show to align right
-    y: 0,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    show: false,
-    resizable: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+// Screenshot and clip shortcuts. Defaults no other capture tool uses: Steam
+// (F12), NVIDIA (Alt+F1, Alt+F9, Alt+Z), AMD (Ctrl+Shift+S/E/R) and the Xbox
+// Game Bar (Win+Alt+...). Ctrl+Alt is avoided: it is AltGr on many keyboards.
+const CAPTURE_DEFAULTS = { captureShotHotkey: 'Alt+Shift+S', captureClipHotkey: 'Alt+Shift+R' };
+// per shortcut: true, or false when another app already owns it
+let captureHotkeyOk = { shot: true, clip: true };
+// Settings: list captures other apps and photo modes made
+let findOthersOn = true;
 
-  overlayWin.setIgnoreMouseEvents(true);
-  overlayWin.loadFile(path.join(__dirname, 'src', 'overlay.html'));
-
-  overlayWin.on('hide', () => {
-    if (overlayWin && !overlayWin.isDestroyed()) {
-      overlayWin.setIgnoreMouseEvents(true);
-    }
-  });
-
-  overlayWin.on('show', () => {
-    if (overlayWin && !overlayWin.isDestroyed()) {
-      overlayWin.setIgnoreMouseEvents(false);
-    }
-  });
-
-  // Guard: don't hide immediately after showing (blur fires on show sometimes)
-  let showTime = 0;
-  overlayWin.on('blur', () => {
-    if (overlayWin && overlayWin.isVisible() && (Date.now() - showTime > 500)) {
-      overlayWin.hide();
-    }
-  });
-
-  overlayWin.showOverlay = () => {
-    // Wayland compositors ignore client positioning, so don't pretend.
-    if (!overlayWin.hasBeenPositioned && !platform.isWayland()) {
-      const { screen } = require('electron');
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.workAreaSize;
-      overlayWin.setBounds({
-        x: width - 420,
-        y: Math.floor((height - 600) / 2),
-        width: 400,
-        height: 600
-      });
-      overlayWin.hasBeenPositioned = true;
-    }
-    showTime = Date.now();
-    overlayWin.show();
-    overlayWin.focus();
-    overlayWin.setIgnoreMouseEvents(false);
-    overlayWin.webContents.send('overlay:opened');
-  };
-}
-
-function toggleOverlay() {
-  if (!overlayWin) { console.log('[Overlay] No overlayWin'); return; }
-  if (overlayWin.isVisible()) {
-    overlayWin.setIgnoreMouseEvents(true);
-    overlayWin.hide();
-  } else {
-    overlayWin.showOverlay();
-  }
-}
-
-// false when another app already owns the overlay shortcut (Settings says so)
-let overlayHotkeyOk = true;
-
-function registerOverlayShortcut(hotkey) {
+function registerCaptureShortcuts(cfg) {
   globalShortcut.unregisterAll();
-  overlayHotkeyOk = true;
-  if (!hotkey) return;
-  const logFile = path.join(path.dirname(DATA_PATH), 'overlay_debug.log');
-  // one line per start: a log that only grows is not kept past 256 KB
-  try { if (fs.statSync(logFile).size > 256 * 1024) fs.writeFileSync(logFile, ''); } catch (_) { /* no log yet */ }
-  const debugLog = (msg) => {
-    const line = `[${new Date().toISOString()}] ${msg}\n`;
-    console.log(line.trim());
-    try { fs.appendFileSync(logFile, line); } catch (_) { /* logging never breaks the hotkey */ }
+  captureHotkeyOk = { shot: true, clip: true };
+  if (platform.isWayland()) return captureHotkeyOk;
+  const bind = (key, accel, fn) => {
+    if (!accel) return;
+    try { captureHotkeyOk[key] = !!globalShortcut.register(accel, fn); } catch (e) {
+      captureHotkeyOk[key] = false;
+      console.warn('[capture] shortcut', accel, e.message);
+    }
   };
-  if (platform.isWayland()) {
-    debugLog('Wayland session: global shortcuts unavailable; bind a compositor shortcut to `gamevault --toggle-overlay`');
-    return;
-  }
+  bind('shot', cfg.captureShotHotkey || CAPTURE_DEFAULTS.captureShotHotkey, () => Capture.screenshot());
+  bind('clip', cfg.captureClipHotkey || CAPTURE_DEFAULTS.captureClipHotkey, () => Capture.toggleRecording());
+  return captureHotkeyOk;
+}
+
+// the game a capture belongs to: the one playing now (the latest started)
+function currentCaptureGame() {
   try {
-    debugLog('Registering hotkey: ' + hotkey);
-    const success = globalShortcut.register(hotkey, () => {
-      debugLog('CALLBACK FIRED for ' + hotkey);
-      toggleOverlay();
-    });
-    overlayHotkeyOk = !!success;
-    debugLog('Registration result: ' + success);
-  } catch (e) {
-    overlayHotkeyOk = false;
-    debugLog('ERROR: ' + e.message);
-  }
+    const ids = runningGameIds();
+    if (!ids.length) return null;
+    const games = loadGames();
+    const g = (Array.isArray(games) ? games : []).find((x) => x && String(x.id) === String(ids[0]));
+    return g ? { id: g.id, name: g.name || 'Untitled' } : null;
+  } catch (_) { return null; }
 }
 
 // Dev/QA only: GV_BACKGROUND=1 renders the real window off-screen, without
@@ -934,110 +927,91 @@ function createWindow() {
     platform: process.platform,
     wayland: platform.isWayland(),
     globalHotkeysSupported: !platform.isWayland(),
-    overlayHotkeyOk,
+    captureHotkeyOk,
     protonPath: process.platform === 'linux' ? platform.findProton() : '',
   }));
-  ipcMain.on('overlay:update-hotkey', (_, hotkey) => registerOverlayShortcut(hotkey));
-  ipcMain.on('overlay:hide', () => { if (overlayWin) overlayWin.hide(); });
-  ipcMain.on('overlay:toggle', () => toggleOverlay());
-
-  ipcMain.handle('capture:get-screen', async () => {
-    try {
-      const sources = await desktopCapturer.getSources({ types: ['screen'] });
-      if (!sources.length) {
-        console.warn('No screen capture source (Wayland needs xdg-desktop-portal + PipeWire)');
-        return null;
-      }
-      return sources[0].id;
-    } catch (e) {
-      console.warn('desktopCapturer failed:', e.message);
-      return null;
-    }
+  ipcMain.handle('capture:update-hotkeys', () => registerCaptureShortcuts(loadConfig()));
+  ipcMain.on('capture:screenshot', () => { Capture.screenshot(); });
+  ipcMain.on('capture:toggle-record', () => { Capture.toggleRecording(); });
+  ipcMain.handle('capture:is-recording', () => Capture.isRecording());
+  ipcMain.on('capture:open-folder', () => {
+    const d = mediaDirPath();
+    try { fs.mkdirSync(d, { recursive: true }); } catch (_) {}
+    shell.openPath(d);
+  });
+  ipcMain.on('capture:open', (_, filePath) => {
+    const target = safeMediaExisting(filePath);
+    if (target) shell.openPath(target);
   });
 
   function mediaDirPath() { return path.join(path.dirname(DATA_PATH), 'data_media'); }
-  function safeMediaJoin(filename) {
-    if (typeof filename !== 'string' || !filename.trim()) return null;
-    const base = path.basename(filename);
-    if (base !== filename) return null;
-    if (!/^[A-Za-z0-9._-]{1,120}$/.test(base)) return null;
-    if (!/\.(png|jpe?g|webp|gif|mp4|webm)$/i.test(base)) return null;
-    const dir = mediaDirPath();
-    const target = path.resolve(dir, base);
-    const rel = path.relative(dir, target);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    return target;
-  }
   function safeMediaExisting(filePath) {
     if (typeof filePath !== 'string') return null;
     const dir = mediaDirPath();
     const target = path.resolve(filePath);
+    if (!/\.(png|jpe?g|webp|gif|bmp|webm|mp4|mkv|mov)$/i.test(target)) return null;
     const rel = path.relative(dir, target);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    if (!/\.(png|jpe?g|webp|gif|mp4|webm)$/i.test(target)) return null;
-    return target;
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return target;
+    // Steam, NVIDIA, Game Bar and photo-mode shots: only ones the finder listed
+    return Finder.knownPath(target);
   }
 
-  ipcMain.handle('capture:save-media', (_, { type, buffer, filename } = {}) => {
-    try {
-      const mediaDir = mediaDirPath();
-      if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir);
-      const filePath = safeMediaJoin(filename);
-      if (!filePath) return { success: false, error: 'Invalid filename' };
-      fs.writeFileSync(filePath, Buffer.from(buffer));
-      return { success: true, path: filePath };
-    } catch (err) {
-      console.error('Failed to save media:', err);
-      return { success: false, error: err.message };
+  // Screenshots and clips only (no desktop.ini, Thumbs.db or folders), newest
+  // first, each with a proper file URL (a '#' or '%' in a name breaks a raw one)
+  const listMedia = () => {
+    const mediaDir = path.join(path.dirname(DATA_PATH), 'data_media');
+    const MEDIA = /\.(png|jpe?g|webp|gif|bmp|webm|mp4|mkv|mov)$/i;
+    const index = Capture.readIndex();
+    const out = [];
+    let others = [];
+    try { others = Finder.list(); } catch (e) { console.warn('[captures] list:', e.message); }
+    const own = fs.existsSync(mediaDir) ? fs.readdirSync(mediaDir) : [];
+    for (const f of own) {
+      if (!MEDIA.test(f)) continue;
+      const full = path.join(mediaDir, f);
+      try {
+        const st = fs.statSync(full);
+        if (!st.isFile()) continue;
+        out.push({ name: f, path: full, url: require('url').pathToFileURL(full).href, time: st.mtimeMs, size: st.size, video: /\.(webm|mp4|mkv|mov)$/i.test(f), gameId: index[f] && index[f].gameId ? String(index[f].gameId) : null, source: 'GameVault', external: false });
+      } catch (_) { /* gone meanwhile */ }
     }
-  });
-
+    out.push(...others);
+    out.sort((a, b) => b.time - a.time);
+    return out;
+  };
   ipcMain.handle('capture:get-recent', (_, limit = 3) => {
     try {
-      const mediaDir = path.join(path.dirname(DATA_PATH), 'data_media');
-      if (!fs.existsSync(mediaDir)) return [];
-      const files = fs.readdirSync(mediaDir);
-      const mapped = files.map(f => ({
-        name: f,
-        path: path.join(mediaDir, f),
-        time: fs.statSync(path.join(mediaDir, f)).mtimeMs
-      }));
-      mapped.sort((a, b) => b.time - a.time);
-      return limit ? mapped.slice(0, limit) : mapped;
+      const all = listMedia();
+      return limit ? all.slice(0, limit) : all;
     } catch (e) {
       return [];
     }
   });
 
   ipcMain.handle('capture:get-all', () => {
-    try {
-      const mediaDir = path.join(path.dirname(DATA_PATH), 'data_media');
-      if (!fs.existsSync(mediaDir)) return [];
-      const files = fs.readdirSync(mediaDir);
-      const mapped = files.map(f => ({
-        name: f,
-        path: path.join(mediaDir, f),
-        time: fs.statSync(path.join(mediaDir, f)).mtimeMs
-      }));
-      mapped.sort((a, b) => b.time - a.time);
-      return mapped;
-    } catch (e) {
-      return [];
-    }
+    try { return listMedia(); } catch (e) { return []; }
   });
 
-  ipcMain.handle('capture:delete-media', (_, filePath) => {
+  ipcMain.handle('capture:delete-media', async (_, filePath) => {
     try {
       const target = safeMediaExisting(filePath);
       if (!target) return false;
+      // to the Recycle Bin, not gone for good: a misclick can be undone
       if (fs.existsSync(target) && fs.statSync(target).isFile()) {
-        fs.unlinkSync(target);
+        await shell.trashItem(target);
+        Capture.untag(target);
+        Finder.forget(target);
         return true;
       }
     } catch (e) {
       console.warn('Failed to delete media', e);
     }
     return false;
+  });
+
+  // a picked-up shot that isn't from that game: stop showing it, keep the file
+  ipcMain.handle('capture:hide-media', (_, filePath) => {
+    try { return Finder.hide(filePath); } catch (_) { return false; }
   });
 
   ipcMain.on('capture:show-folder', (_, filePath) => {
@@ -1093,10 +1067,13 @@ function createWindow() {
 
   ipcMain.handle('games:save', (_, games) => {
     if (!Array.isArray(games)) return false;
-    return enqueueGamesWrite(async () => {
-      await cacheGameImages(games);
+    // the library is written first; covers still on the web are downloaded
+    // afterwards (a slow image host must never hold up, or lose, a save made
+    // just before quitting)
+    return enqueueGamesWrite(() => {
       saveGames(games);
       refreshTray();
+      cacheImagesAfterSave(games);
       return true;
     });
   });
@@ -1105,7 +1082,11 @@ function createWindow() {
   // The renderer never receives API keys, only has*Key flags (see data.js).
   ipcMain.handle('config:load', () => publicConfig(loadConfig()));
   // Merge-patch: resolves to the merged config.
-  ipcMain.handle('config:save', (_, patch) => publicConfig(mergeConfig(patch)));
+  ipcMain.handle('config:save', (_, patch) => {
+    const merged = mergeConfig(patch);
+    if (patch && 'captureFindOthers' in patch) { findOthersOn = merged.captureFindOthers !== false; Finder.invalidate(); }
+    return publicConfig(merged);
+  });
 
   ipcMain.handle('detect:steam', () => detectSteamGames());
   ipcMain.handle('detect:epic', () => detectEpicGames());
@@ -1318,10 +1299,11 @@ function createWindow() {
 
   // startAt: where the file was, or the game's folder; the picker opens in
   // the nearest folder of it that still exists
-  ipcMain.handle('pick:exe', async (_, startAt) => {
+  ipcMain.handle('pick:exe', async (_, startAt, kind) => {
     let defaultPath;
     try {
-      let dir = typeof startAt === 'string' && startAt ? path.resolve(startAt) : '';
+      // a link or a relative name is not a folder (it would open in the app's own)
+      let dir = typeof startAt === 'string' && startAt && path.isAbsolute(startAt) ? path.resolve(startAt) : '';
       for (let i = 0; dir && i < 6; i++) {
         if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) { defaultPath = dir; break; }
         const up = path.dirname(dir);
@@ -1332,10 +1314,12 @@ function createWindow() {
     const result = await dialog.showOpenDialog(win, {
       ...(defaultPath ? { defaultPath } : {}),
       properties: ['openFile'],
-      filters: process.platform === 'win32'
-        ? [{ name: 'Executables', extensions: ['exe'] }]
-        : [{ name: 'All files', extensions: ['*'] }],
-      title: process.platform === 'win32' ? 'Select game .exe' : 'Select game executable',
+      filters: process.platform !== 'win32'
+        ? [{ name: 'All files', extensions: ['*'] }]
+        : kind === 'target'
+          ? [{ name: 'Programs, scripts and shortcuts', extensions: ['exe', 'bat', 'cmd', 'lnk', 'url'] }, { name: 'All files', extensions: ['*'] }]
+          : [{ name: 'Executables', extensions: ['exe'] }],
+      title: kind === 'target' ? 'Choose what to open' : process.platform === 'win32' ? 'Select game .exe' : 'Select game executable',
     });
     return result.canceled ? null : result.filePaths[0];
   });
@@ -1969,249 +1953,6 @@ function createWindow() {
   });
 
   // AI Advisor handlers
-  ipcMain.handle('pick:gcpkey', async () => {
-    const result = await dialog.showOpenDialog(win, {
-      properties: ['openFile'],
-      filters: [{ name: 'JSON Key', extensions: ['json'] }],
-      title: 'Select Google Cloud service account key file',
-    });
-    return result.canceled ? null : result.filePaths[0];
-  });
-
-  ipcMain.handle('ai:detect-specs', async () => detectPCSpecs());
-
-  ipcMain.handle('ai:validate-key', async (_, { provider, key, endpoint, modelName }) => {
-    try {
-      // nothing typed: check with the key already saved, but only for the
-      // provider it was saved for (never send one provider's key to another)
-      if (!key) { const saved = loadConfig(); if (saved.aiProvider === provider) key = saved.aiKey || ''; }
-      let url = '';
-      let headers = { 'Content-Type': 'application/json' };
-      let body = null;
-      let method = 'GET';
-
-      if (provider === 'openai') {
-        url = 'https://api.openai.com/v1/models';
-        headers['Authorization'] = `Bearer ${key}`;
-      } else if (provider === 'anthropic') {
-        url = 'https://api.anthropic.com/v1/messages';
-        method = 'POST';
-        headers['x-api-key'] = key;
-        headers['anthropic-version'] = '2023-06-01';
-        body = JSON.stringify({ model: 'claude-3-haiku-20240307', max_tokens: 1, messages: [{ role: 'user', content: 'test' }] });
-      } else if (provider === 'deepseek') {
-        url = 'https://api.deepseek.com/models';
-        headers['Authorization'] = `Bearer ${key}`;
-      } else if (provider === 'google') {
-        url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
-      } else if (provider === 'custom') {
-        let base = (endpoint || '').replace(/\/+$/, '');
-        if (!base.endsWith('/chat/completions')) base += '/chat/completions';
-        url = base;
-        method = 'POST';
-        if (key) headers['Authorization'] = `Bearer ${key}`;
-        body = JSON.stringify({ model: modelName || 'gpt-3.5-turbo', max_tokens: 1, messages: [{ role: 'user', content: 'test' }] });
-      } else {
-        return { valid: false, error: 'Unknown provider' };
-      }
-
-      let parsedUrl;
-      try { parsedUrl = new URL(url); } catch (e) { return { valid: false, error: 'Invalid Endpoint URL' }; }
-      const reqPath = parsedUrl.pathname + parsedUrl.search;
-
-      if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return { valid: false, error: 'The endpoint must start with http:// or https://' };
-      const resData = await new Promise((resolve, reject) => {
-        // a local server (Ollama, LM Studio) is often plain http on its own port
-        const req = (parsedUrl.protocol === 'http:' ? http : https).request({
-          hostname: parsedUrl.hostname,
-          port: parsedUrl.port || undefined,
-          path: reqPath,
-          method,
-          headers,
-          timeout: 5000
-        }, res => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => resolve({ status: res.statusCode, data }));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
-        if (body) req.write(body);
-        req.end();
-      });
-
-      if (resData.status >= 200 && resData.status < 300) {
-        return { valid: true };
-      } else {
-        let msg = `HTTP Error ${resData.status}`;
-        try { const errObj = JSON.parse(resData.data); msg = errObj.error?.message || msg; } catch (e) { }
-        return { valid: false, error: msg };
-      }
-    } catch (e) {
-      return { valid: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('ai:load-profile', () => {
-    try { if (fs.existsSync(AI_PROFILE_PATH)) return JSON.parse(fs.readFileSync(AI_PROFILE_PATH, 'utf-8')); }
-    catch (e) { }
-    return { preferences: { likedGenres: [], dislikedGenres: [], dislikedGames: [], recommendedBefore: [] }, chatHistory: [], pcSpecs: null };
-  });
-
-  ipcMain.handle('ai:save-profile', (_, profile) => {
-    writeJsonAtomicSync(AI_PROFILE_PATH, profile);
-    if (win) win.webContents.send('ai:profile-updated', profile);
-    if (overlayWin) overlayWin.webContents.send('ai:profile-updated', profile);
-    return true;
-  });
-
-  ipcMain.handle('ai:chat', async (_, { message, history, specs, games: userGames, profile }) => {
-    const cfg = loadConfig();
-    if (!cfg.aiEnabled || (!cfg.aiKey && !(cfg.aiProvider === 'custom' && cfg.aiCustomEndpoint))) return { error: 'AI Assistant is not configured. Add an API key in Settings.' };
-    try {
-      // Build library summary
-      const libSummary = (userGames || []).filter(g => g.status !== 'Want').map(g => {
-        const hrs = g.hours ? ` (${g.hours}h)` : '';
-        return `- ${g.name} [${g.status}]${hrs}`;
-      }).join('\n') || 'Empty library';
-
-      const wishlist = (userGames || []).filter(g => g.status === 'Want').map(g => `- ${g.name}`).join('\n') || 'None';
-
-      // Build preference context
-      const prefs = profile?.preferences || {};
-      const liked = prefs.likedGenres?.length ? prefs.likedGenres.join(', ') : 'Not yet known';
-      const disliked = prefs.dislikedGenres?.length ? prefs.dislikedGenres.join(', ') : 'None specified';
-      const alreadyRecommended = prefs.recommendedBefore?.length ? prefs.recommendedBefore.join(', ') : 'None yet';
-
-      // Build specs string — include ALL GPUs
-      const gpuLines = specs?.allGpus?.length
-        ? specs.allGpus.map((g, i) => `GPU ${i + 1}: ${g.name} (${g.vram} VRAM)`).join('\n')
-        : `GPU: ${specs?.gpu || 'Unknown'}`;
-      const specsStr = specs
-        ? `CPU: ${specs.cpu}\n${gpuLines}\nRAM: ${specs.ram}\nOS: ${specs.os}`
-        : 'Unknown (not yet detected)';
-
-      const systemPrompt = `You are GameVault AI — an enthusiastic, knowledgeable gaming advisor built into a PC game library app. You're like a best friend who LOVES games and knows hardware.
-
-== USER'S PC SPECS ==
-${specsStr}
-
-== USER'S GAME LIBRARY ==
-${libSummary}
-
-== USER'S WISHLIST ==
-${wishlist}
-
-== USER PREFERENCES ==
-Liked genres/styles: ${liked}
-Disliked genres/styles: ${disliked}
-Already recommended (DO NOT suggest these again): ${alreadyRecommended}
-
-== YOUR RULES ==
-1. **BE CONCISE.** Keep replies SHORT — 2-4 sentences for casual chat. Only go longer when giving a detailed game recommendation.
-2. When recommending, include a quick FPS estimate like: "⚡ ~60 FPS (High) | ~45 FPS (Ultra)" — don't over-explain.
-3. NEVER recommend games the user already owns or already recommended before.
-4. If the user dislikes a genre, respect it completely.
-5. Be enthusiastic but not wordy. Sell the vibe, not a paragraph.
-6. If the user asks a simple question, give a simple answer. Don't pad responses.
-7. Consider play patterns: most hours = favorites, dropped = disliked styles.
-8. End with a short question only when recommending, not every message.
-9. Default to 1 focused recommendation unless asked for more.
-10. If their PC can't run something well, be honest and suggest alternatives.`;
-
-      // Build messages array (OpenAI chat format)
-      const messages = [
-        { role: 'system', content: systemPrompt },
-        ...(history || []).map(msg => {
-          let c = msg.content || msg.text;
-          if (typeof c === 'object') c = c.reply || JSON.stringify(c);
-          return {
-            role: msg.role === 'assistant' || msg.role === 'ai' ? 'assistant' : 'user',
-            content: c || '',
-          };
-        }),
-        { role: 'user', content: message },
-      ];
-      let url = '';
-      let headers = { 'Content-Type': 'application/json' };
-      let bodyData = null;
-      const openaiFormat = { model: (cfg.aiProvider === 'custom' && cfg.aiCustomModel) || 'gpt-4o-mini', messages, temperature: 0.85, max_tokens: 600 };
-
-      if (cfg.aiProvider === 'openai') {
-        url = 'https://api.openai.com/v1/chat/completions';
-        headers['Authorization'] = `Bearer ${cfg.aiKey}`;
-        bodyData = openaiFormat;
-      } else if (cfg.aiProvider === 'anthropic') {
-        url = 'https://api.anthropic.com/v1/messages';
-        headers['x-api-key'] = cfg.aiKey;
-        headers['anthropic-version'] = '2023-06-01';
-        bodyData = { model: 'claude-3-haiku-20240307', system: messages[0].content, messages: messages.slice(1), max_tokens: 600, temperature: 0.85 };
-      } else if (cfg.aiProvider === 'deepseek') {
-        url = 'https://api.deepseek.com/chat/completions';
-        headers['Authorization'] = `Bearer ${cfg.aiKey}`;
-        openaiFormat.model = 'deepseek-chat';
-        bodyData = openaiFormat;
-      } else if (cfg.aiProvider === 'google') {
-        url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cfg.aiKey}`;
-        bodyData = { systemInstruction: { parts: [{ text: messages[0].content }] }, contents: messages.slice(1).map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })), generationConfig: { temperature: 0.85, maxOutputTokens: 600 } };
-      } else if (cfg.aiProvider === 'custom') {
-        url = (cfg.aiCustomEndpoint || '').replace(/\/+$/, '');
-        if (!url.endsWith('/chat/completions')) url += '/chat/completions';
-        if (cfg.aiKey) headers['Authorization'] = `Bearer ${cfg.aiKey}`;
-        bodyData = openaiFormat;
-      }
-
-      let parsedUrl;
-      try { parsedUrl = new URL(url); } catch (e) { return { error: 'Invalid AI Endpoint URL' }; }
-
-      const body = JSON.stringify(bodyData);
-      const reqPath = parsedUrl.pathname + parsedUrl.search;
-
-      if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') return { error: 'Invalid AI Endpoint URL' };
-      const text = await new Promise((resolve, reject) => {
-        const req = (parsedUrl.protocol === 'http:' ? http : https).request({
-          hostname: parsedUrl.hostname,
-          port: parsedUrl.port || undefined,
-          path: reqPath,
-          method: 'POST',
-          headers,
-        }, res => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(data);
-              if (json.error) reject(new Error(json.error.message || JSON.stringify(json.error)));
-
-              let contentStr = '';
-              if (cfg.aiProvider === 'google') {
-                contentStr = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
-              } else if (cfg.aiProvider === 'anthropic') {
-                contentStr = json.content?.[0]?.text || '';
-              } else {
-                contentStr = json.choices?.[0]?.message?.content || '';
-              }
-
-              resolve(contentStr || '(No response from AI)');
-            } catch (e) { reject(new Error('Failed to parse AI response')); }
-          });
-        });
-        req.on('error', reject);
-        req.setTimeout(45000, () => { req.destroy(); reject(new Error('AI request timed out')); });
-        req.write(body);
-        req.end();
-      });
-
-      return { reply: text };
-    } catch (e) {
-      console.error('AI chat error:', e.message);
-      if (e.message?.includes('429') || e.message?.includes('rate')) {
-        return { error: 'Rate limited \u2014 wait a moment and try again.' };
-      }
-      return { error: `AI error: ${e.message}` };
-    }
-  });
-
   startBgPoll();
 }
 
@@ -2228,6 +1969,11 @@ function cleanOwnCachesWhenTight() {
 }
 
 app.whenReady().then(() => {
+  // Windows shows notifications (screenshot saved, clip saved) only for an app
+  // with an id; the installer gives its shortcut the same one
+  if (process.platform === 'win32') {
+    try { app.setAppUserModelId(require('./package.json').build.appId); } catch (_) {}
+  }
   cleanOwnCachesWhenTight();
   if (process.argv.includes('--gpu-info')) {
     console.log('[gpu-probe] start');
@@ -2249,15 +1995,33 @@ app.whenReady().then(() => {
   }
   if (!hasSingleInstanceLock) return;
   createWindow();
-  createOverlayWindow();
   // a tray failure must not stop the rest of start-up (hotkeys, image cache)
   try { createTray(); } catch (err) { console.warn('tray:', err && err.message); }
   const cfg = loadConfig();
-  registerOverlayShortcut(cfg.overlayHotkey);
+  Capture.setup({
+    mediaDir: () => path.join(path.dirname(DATA_PATH), 'data_media'),
+    currentGame: currentCaptureGame,
+    config: () => loadConfig(),
+    onChange: () => { if (win && !win.isDestroyed()) win.webContents.send('capture:changed'); },
+    onRecording: (on, gameName) => {
+      if (tray) tray.setToolTip(on ? 'GameVault · recording' + (gameName ? ' ' + gameName : '') : 'GameVault');
+      refreshTray();
+      if (win && !win.isDestroyed()) win.webContents.send('capture:recording', on);
+    },
+  });
+  registerCaptureShortcuts(cfg);
+  findOthersOn = cfg.captureFindOthers !== false;
+  Finder.setup({
+    userDir: () => path.dirname(DATA_PATH),
+    mediaDir: () => path.join(path.dirname(DATA_PATH), 'data_media'),
+    games: () => { const g = loadGames(); return Array.isArray(g) ? g : []; },
+    sessions: runningSessions,
+    enabled: () => findOthersOn,
+    onChange: () => { if (win && !win.isDestroyed()) win.webContents.send('capture:changed'); },
+  });
 
-  // Autostart launches hidden; a compositor binding can open the overlay.
+  // Autostart launches hidden
   if (cliArgs.hidden && win) win.hide();
-  if (cliArgs.toggleOverlay) setTimeout(() => toggleOverlay(), 500);
 
   const { session } = require('electron');
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -2300,7 +2064,8 @@ app.on('before-quit', (e) => {
     quitFlushState = 'done';
     ipcMain.removeListener('app:flushed', onFlushed);
     clearTimeout(timer);
-    Promise.race([gamesWriteTail, new Promise((r) => setTimeout(r, 3000))]).then(() => app.quit());
+    try { Finder.shutdown(); } catch (_) {}
+    Promise.race([Promise.all([gamesWriteTail, Capture.shutdown()]), new Promise((r) => setTimeout(r, 3500))]).then(() => app.quit());
   };
   const onFlushed = (event) => { if (!win || win.isDestroyed() || event.sender === win.webContents) finish(); };
   const timer = setTimeout(finish, 2500);

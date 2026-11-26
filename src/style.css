@@ -1538,6 +1538,12 @@ html[data-ui-motion='off'] * { animation-duration: 0.001ms !important; animation
   letter-spacing: -0.022em;
   font-weight: 600;
   text-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  /* a very long title stops at two lines instead of climbing under the top bar */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 :root[data-palette='paper'] .shelf-title { text-shadow: none; }
@@ -3911,6 +3917,7 @@ input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; marg
 #grid .card-play[data-kind='stop'] svg { margin-left: 0; width: 15px; height: 15px; }
 #grid .card:hover .card-play,
 #grid .card:focus-visible .card-play,
+#grid .card-play:focus-visible,
 #grid .card.is-running .card-play { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 #grid .card-play:hover { transform: translate(-50%, -50%) scale(1.07); }
 #grid .card.is-running .card-play { background: var(--bad); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4); }
@@ -5452,6 +5459,7 @@ html.is-pad .side-account:focus .side-av { box-shadow: 0 0 0 2px var(--bg-2), 0 
 #grid .card-play[data-kind='stop'] svg { width: 11px; height: 11px; }
 #grid .card:hover .card-play,
 #grid .card:focus-visible .card-play,
+#grid .card-play:focus-visible,
 #grid .card.is-running .card-play { opacity: 1; transform: none; }
 #grid .card-play:hover { transform: none; background: var(--accent); border-color: transparent; }
 #grid .card.is-running .card-play { background: rgba(10, 11, 16, 0.6); box-shadow: none; }
@@ -6997,6 +7005,8 @@ html[data-ui-nav-side='right'] .side-brand > :is(button, .win-controls) { -webki
 /* ---- the corner search button never covers content: the pages keep room
    for it at the bottom */
 html[data-ui-search='floating']:not(.is-bigpicture) .shelf { padding-bottom: 58px; }
+/* in a short window the rail reaches the corner: its Next arrow steps aside */
+html[data-ui-search='floating']:not(.is-bigpicture) .strip-nav.next { right: 70px; }
 html[data-ui-search='floating']:not(.is-bigpicture) :is(.library, .wishlist-view, .activity-view, .game-view, .settings-view) { padding-bottom: 84px; }
 
 /* ratings switched off: nothing sits above the status any more */
@@ -7053,3 +7063,121 @@ html:is([data-ui-nav='dock'], [data-ui-nav='top']) .sidebar .side-item:not(.is-a
 .card-title, .shelf-tile-label, .hero-title, .gvx-title, .wl-name-text, .wl-card-name,
 .act-game-name, .act-tip-game em, .wb-game, .pkl-game, .rt-title, .ga-title, .spot .name,
 .shelf-title, .ge-title { unicode-bidi: plaintext; }
+
+/* Big Picture keeps its own layout: the normal layout's room for a dock (or
+   any nav) never reaches it. Last in the file and as specific as the dock
+   rules, so it always wins. */
+html.is-bigpicture[data-ui-nav] .app,
+html.is-bigpicture[data-ui-nav][data-ui-dock-style] .app,
+html.is-bigpicture[data-ui-nav][data-ui-dock-auto-hide] .app { padding: 0; }
+
+/* Big Picture on a short screen (1080p at 175 % or 200 %): the hero text
+   never runs up under the header; tiles and logo give up some height first */
+html.is-bigpicture .shelf-content { max-height: calc(100% - 34px - 64px - var(--bp-safe-y, 0px)); overflow: hidden; }
+@media (max-height: 700px) {
+  html.is-bigpicture .shelf { --tile-h: clamp(120px, calc(100cqh - 400px), 250px); }
+  html.is-bigpicture .shelf-content { gap: 8px; }
+  html.is-bigpicture .shelf-logo .gvx-logo { max-height: 72px; }
+}
+
+/* Big Picture: a row moved to with the pad stays clear of the top row and
+   the button hints at the bottom */
+html.is-bigpicture :is(#library, #wishlist-view, #activity-view, #game-view, .st-panel) {
+  scroll-padding: calc(64px + var(--bp-safe-y) + 8px) 0 calc(var(--bp-safe-y) + 72px);
+}
+html.is-bigpicture .activity-view { padding-bottom: calc(var(--bp-safe-y) + 72px); }
+
+/* ============================================================================
+   Captures: screenshots and clips (Activity, the game page, the viewer)
+   ========================================================================= */
+.cap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+.cap-tile {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: transform 160ms var(--ease-spring, ease), border-color 160ms ease;
+}
+.cap-tile img, .cap-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+.cap-tile:hover { transform: translateY(-2px); border-color: var(--line-2); }
+.cap-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cap-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+}
+.cap-game {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 16px 8px 6px;
+  font-size: 11.5px;
+  text-align: left;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+}
+.cap-more { margin-top: 12px; }
+.act-captures .act-empty kbd { margin: 0 2px; }
+.gvx-caps { margin-top: 28px; }
+.gvx-caps .cap-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+
+.modal-card.cap-modal { width: min(1100px, 94vw); }
+.cap-view {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 52px;
+  min-height: 240px;
+}
+.cap-stage { display: flex; justify-content: center; max-width: 100%; }
+.cap-stage img, .cap-stage video {
+  max-width: 100%;
+  max-height: 68vh;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+.cap-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cap-nav.is-prev { left: 8px; }
+.cap-nav.is-next { right: 8px; }
+.cap-nav:disabled { opacity: 0.3; cursor: default; }
+.cap-modal .modal-foot { align-items: center; }
+.cap-when { margin-right: auto; font-size: 12.5px; color: var(--text-mute); }

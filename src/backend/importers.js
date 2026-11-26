@@ -226,12 +226,22 @@ function scanLutris() {
 
 function scanner() { return require('./scanner.js'); }
 
-const STEAM_TOOL_RE = /^(steam linux runtime|steamworks common redistributables|steamvr|proton |steam controller configs|steam play|steam audio)/i;
+const STEAM_TOOL_RE = /^(steam linux runtime|steamworks common redistributables|steamvr|proton |proton$|steam controller configs|steam play|steam audio|wallpaper engine|source sdk|spacewar$)|dedicated server$/i;
+// Steam apps that are tools, not games (always running, or never played)
+const STEAM_TOOL_IDS = new Set([
+  431960,                      // Wallpaper Engine
+  228980,                      // Steamworks Common Redistributables
+  250820,                      // SteamVR
+  480,                         // Spacewar (the Steamworks test app)
+  1070560, 1391110, 1628350,   // Steam Linux Runtime
+  858280, 930400, 961940, 996510, 1054830, 1113280, 1245040, 1420170, 1493710, 1580130, 1887720, 2180100, 2230260, 2348590, 2805730, // Proton
+  243750, 243730, 215, 218,    // Source SDK Base
+]);
 
 function scanSteam() {
   const seen = new Map();
   for (const g of (scanner().detectSteamGames() || [])) {
-    if (!g || !g.name || STEAM_TOOL_RE.test(g.name)) continue;
+    if (!g || !g.name || STEAM_TOOL_RE.test(g.name) || STEAM_TOOL_IDS.has(Number(g.steamAppId))) continue;
     const key = g.steamAppId ? `app:${g.steamAppId}` : `name:${g.name.toLowerCase()}`;
     const prev = seen.get(key);
     if (!prev || (!prev.exePath && g.exePath)) seen.set(key, g);
@@ -242,7 +252,7 @@ function scanSteam() {
     sourceId: g.steamAppId ? `steam:${g.steamAppId}` : null,
     exePath: g.exePath || '',
     installDir: g.installDir || '',
-    steamAppId: g.steamAppId || null,
+    steamAppId: Number(g.steamAppId) || null, // a number, like every other game's
     hours: Number(g.hours) || 0,
   }));
 }
