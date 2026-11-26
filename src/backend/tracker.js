@@ -31,6 +31,34 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+// main is told when a session ends (it brings back a window it hid for the game)
+let sessionEndHook = null;
+function onSessionEnd(fn) { sessionEndHook = typeof fn === 'function' ? fn : null; }
+
+// Settings → Playtime → Stop counting when I'm away: a stretch with no mouse
+// or keyboard input longer than this isn't counted. 0 = off.
+let afkMinutes = 0;
+function setAfkMinutes(n) { afkMinutes = [15, 30, 60].includes(Number(n)) ? Number(n) : 0; }
+function idleSeconds() {
+  try { return require('electron').powerMonitor.getSystemIdleTime(); } catch (_) { return 0; }
+}
+function closeAway(t, until) {
+  if (!t.awaySince) return;
+  t.awayMs = (t.awayMs || 0) + Math.max(0, until - t.awaySince);
+  t.awaySince = 0;
+}
+// once per poll for each game: open or close a stretch away from the PC
+function noteAway(t, now) {
+  if (!afkMinutes || !t.core || t.core.phase !== 'running') { closeAway(t, now); return; }
+  const idle = idleSeconds();
+  const lastInput = now - idle * 1000;
+  if (idle >= afkMinutes * 60) {
+    if (!t.awaySince) t.awaySince = Math.max(lastInput, t.core.sessionStart || 0);
+  } else {
+    closeAway(t, lastInput);
+  }
+}
+
 function isRunningPhase(t) { return !!(t && t.core && (t.core.phase === 'running' || t.core.phase === 'grace')); }
 
 function scheduleLoop(delay) {
@@ -75,11 +103,18 @@ function emit(gameId, t, events) {
     } else if (e.type === 'session-end') {
       t.running = false;
       t.pid = 0; t.pgid = 0; t.childImage = '';
+      closeAway(t, e.sessionEnd || Date.now());
+      const sessionMs = (e.sessionHours || 0) * 3600000;
+      const awayMs = Math.min(sessionMs, t.awayMs || 0);
+      t.awayMs = 0;
       send('tracking:session-end', {
-        gameId, sessionHours: e.sessionHours, sessionStart: e.sessionStart, sessionEnd: e.sessionEnd, discarded: !!e.discarded,
+        gameId, sessionHours: Math.max(0, sessionMs - awayMs) / 3600000, sessionStart: e.sessionStart, sessionEnd: e.sessionEnd, discarded: !!e.discarded,
+        awayMinutes: Math.round(awayMs / 60000),
       });
+      if (sessionEndHook) setImmediate(() => { try { sessionEndHook(String(gameId)); } catch (_) {} });
     } else if (e.type === 'gave-up') {
       send('tracking:gave-up', { gameId, reason: 'not-seen' });
+      if (sessionEndHook) setImmediate(() => { try { sessionEndHook(String(gameId)); } catch (_) {} });
     }
   }
 }
@@ -168,6 +203,7 @@ async function checkAllTrackedProcesses() {
       }
       t.pids = pids;
       emit(gameId, t, core.observe(t.core, pids.length > 0 || viaSteam, now));
+      noteAway(t, now);
     }
   } catch (e) {
     console.warn('[tracker]', e.message);
@@ -424,4 +460,4 @@ function runningSessions() {
     .map((t) => ({ gameId: String(t.gameId), installDir: t.installDir || '', sessionStart: t.core.sessionStart || 0 }));
 }
 
-module.exports = { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions };
+module.exports = { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions };

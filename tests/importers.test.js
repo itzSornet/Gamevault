@@ -89,7 +89,7 @@ test('listSources says which launchers can auto sync, and why the others cannot'
   const by = Object.fromEntries(sources.map((s) => [s.id, s]));
   assert.equal(by.steam.sync, true);
   for (const id of ['heroic', 'legendary', 'itch']) assert.equal(by[id].sync, true, id);
-  for (const id of ['pc', 'folder', 'file', 'steam-owned']) {
+  for (const id of ['pc', 'folder', 'file']) {
     assert.equal(by[id].sync, false, id);
     assert.ok(by[id].syncNote.length > 10, id);
   }

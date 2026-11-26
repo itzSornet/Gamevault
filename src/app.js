@@ -4216,7 +4216,7 @@
     // by its Steam id too (games added by hand or synced from another PC
     // have no import id)
     const ignoredKeys = [...new Set([g.sourceId, g.steamAppId ? `steam:${g.steamAppId}` : ''].filter(Boolean))];
-    for (const key of ignoredKeys) importIgnore(key, true);
+    importIgnoreMany(ignoredKeys, true, g.name);
     if (state.shelfId === id) state.shelfId = near ? String(near.id) : null;
     state._shelfKey = '';
     renderLibrary();
@@ -4225,7 +4225,7 @@
     setTimeout(() => focusGameIfLost(near), 360);
     toast(`${g.name || 'Game'} removed from your library`, 'ok', [{ label: 'Undo', run: () => {
       if (state.games.includes(g)) return;
-      for (const key of ignoredKeys) importIgnore(key, false);
+      importIgnoreMany(ignoredKeys, false);
       state.games.splice(Math.min(idx, state.games.length), 0, g);
       state._shelfKey = '';
       renderLibrary();
@@ -5080,7 +5080,7 @@
     const app = $('#app');
     // nothing open, or already fading out: never restart the timer
     if (wrap.hidden || wrap.classList.contains('is-closing')) {
-      if (app && wrap.hidden && !bp.menuOpen) app.inert = false;
+      if (app && wrap.hidden && !bp.menuOpen && !welcome.isOpen()) app.inert = false;
       return;
     }
     sfx('close');
@@ -5089,7 +5089,7 @@
     const seq = modalSeq;
     const opener = state._modalOpener;
     const openerKey = state._modalOpenerKey;
-    if (app) app.inert = false;
+    if (app && !welcome.isOpen()) app.inert = false;
     if (card) card.classList.remove('is-open');
     // while it fades the dialog lets clicks through to the app underneath
     wrap.classList.add('is-closing');
@@ -5099,7 +5099,7 @@
       wrap.hidden = true;
       wrap.classList.remove('is-closing');
       wrap.innerHTML = '';
-      if (app) app.inert = false;
+      if (app && !welcome.isOpen()) app.inert = false;
       refocus(opener, openerKey);
     }, 320);
   }
@@ -5574,7 +5574,7 @@
             kind: 'sgdb', id: hit.id, name: hit.name, meta: yearOf(hit.releaseDate) || 'SteamGridDB',
           }));
         } else if (res && res.error && res.error.code === 'NO_KEY') {
-          note = 'Add a SteamGridDB key in Settings to search artwork';
+          note = 'Artwork search isn’t available right now';
         } else if (sgdbLimitText(res)) {
           note = sgdbLimitText(res);
         }
@@ -5659,7 +5659,7 @@
       if (!res || !res.ok) {
         if (artStatus) {
           artStatus.textContent = res && res.error && res.error.code === 'NO_KEY'
-            ? 'Add a SteamGridDB key in Settings'
+            ? 'Artwork search isn’t available right now'
             : res && res.error && res.error.code === 'RATE_LIMIT'
               ? 'Artwork lookups paused for a bit (hourly limit)'
               : 'Artwork unavailable';
@@ -6144,7 +6144,6 @@
 
   const SOURCE_ICON = {
     steam: ['S', 'is-steam'],
-    'steam-owned': ['S', 'is-steam'],
     hydra: ['H', 'is-hydra'],
     lutris: ['L', 'is-lutris'],
     heroic: ['H', 'is-heroic'],
@@ -6269,11 +6268,153 @@
   }
 
   // Games you removed are remembered so auto sync does not bring them back.
-  function importIgnore(sourceId, on) {
-    if (!sourceId) return;
-    const list = (Array.isArray(state.config.importIgnored) ? state.config.importIgnored : []).filter((x) => x !== String(sourceId));
-    if (on) list.push(String(sourceId));
-    saveConfigPatch({ importIgnored: list.slice(-3000) });
+  // Their names are kept too, for Settings → Library → Removed games.
+  function importIgnore(sourceId, on, name) {
+    importIgnoreMany([sourceId], on, name);
+  }
+  // one write for all of a game's keys (two writes in a row could race and
+  // drop one, which is how an undone removal kept its Steam id ignored)
+  function importIgnoreMany(keys, on, name) {
+    const ids = (keys || []).filter(Boolean).map(String);
+    if (!ids.length) return;
+    let list = (Array.isArray(state.config.importIgnored) ? state.config.importIgnored : []).filter((x) => !ids.includes(x));
+    const names = { ...(state.config.importIgnoredNames || {}) };
+    for (const id of ids) {
+      if (on) { list.push(id); if (name) names[id] = String(name).slice(0, 200); } else delete names[id];
+    }
+    list = list.slice(-3000);
+    for (const k of Object.keys(names)) if (!list.includes(k)) delete names[k];
+    saveConfigPatch({ importIgnored: list, importIgnoredNames: names });
+  }
+
+  /** The removed games as one entry each (a game can have two keys). */
+  function removedGames() {
+    const list = Array.isArray(state.config.importIgnored) ? state.config.importIgnored : [];
+    const names = state.config.importIgnoredNames || {};
+    const byName = new Map();
+    for (const key of list) {
+      const steam = /^steam:(\d+)$/.exec(key);
+      const label = names[key] || (steam ? `Steam game ${steam[1]}` : key.replace(/^[a-z-]+:/i, ''));
+      const k = (names[key] || key).toLowerCase();
+      if (!byName.has(k)) byName.set(k, { name: label, keys: [] });
+      byName.get(k).keys.push(key);
+    }
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function removedGamesText() {
+    const n = removedGames().length;
+    return n
+      ? `${fmtNum(n)} game${n === 1 ? '' : 's'} you removed won’t come back when GameVault syncs your launchers.`
+      : 'Games you remove from your library stay out when GameVault syncs your launchers. None so far.';
+  }
+
+  function openRemovedGames() {
+    const paint = () => {
+      const items = removedGames();
+      return items.length
+        ? '<div class="rg-list">' + items.map((it, i) => `<div class="rg-row"><span class="rg-name">${esc(it.name)}</span><button type="button" class="btn btn-ghost" data-rg-allow="${i}">Allow again</button></div>`).join('') + '</div>'
+        : '<p class="rm-text">No removed games. Anything you remove from your library shows up here.</p>';
+    };
+    const card = openModal(`
+      <div class="modal-head">
+        <h2>Removed games</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body rm-body">
+        <p class="rm-text">These stay out of your library when GameVault syncs your launchers. Allow one again and the next sync, or an import, can add it back.</p>
+        <div data-rg-body>${paint()}</div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" data-close data-autofocus>Done</button>
+      </div>`, { className: 'rm-modal rg-modal' });
+    if (!card) return;
+    for (const b of card.querySelectorAll('[data-close]')) b.onclick = () => { closeModal(); if (state.settingsOpen && state.settingsSection === 'library') { const d = document.querySelector('#st-removed-desc'); if (d) d.textContent = removedGamesText(); } };
+    const body = card.querySelector('[data-rg-body]');
+    body.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-rg-allow]');
+      if (!b) return;
+      const it = removedGames()[Number(b.dataset.rgAllow)];
+      if (!it) return;
+      importIgnoreMany(it.keys, false);
+      toast(`${it.name} can come back with the next sync`, 'ok');
+      body.innerHTML = paint();
+      const next = body.querySelector('[data-rg-allow]') || card.querySelector('[data-close].btn');
+      if (next) next.focus();
+    });
+  }
+
+  // Settings → Library: how much artwork is on this PC, and clearing what no game uses
+  function wireArtCache(panel) {
+    const desc = panel.querySelector('[data-art-size]');
+    const btn = panel.querySelector('[data-art-clean]');
+    if (!desc || !btn || !api.artCacheInfo) return;
+    const show = (info) => {
+      if (!desc.isConnected) return;
+      if (!info) { desc.textContent = 'Covers and banners saved for your games.'; return; }
+      desc.textContent = `${mb(info.bytes)} in ${fmtNum(info.files)} file${info.files === 1 ? '' : 's'}.` +
+        (info.unusedFiles ? ` ${mb(info.unusedBytes)} of it belongs to no game any more: Clean up removes that.` : ' All of it is in use.');
+      btn.disabled = !info.unusedFiles;
+    };
+    api.artCacheInfo().then(show).catch(() => show(null));
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await persistGames();
+      const res = await api.artCacheClean().catch(() => null);
+      if (res && res.ok) toast(`Cleaned up ${mb(res.bytes)} of unused artwork`, 'ok');
+      else toast('Couldn’t clean up the artwork', 'error');
+      api.artCacheInfo().then(show).catch(() => show(null));
+    };
+  }
+
+  // Settings → General → Reset all settings
+  const RESET_KEYS = ['ui', 'palette', 'uiAt', 'tier', 'padEnabled', 'padGlyphs', 'view', 'sfx', 'sfxVolume', 'sfxTheme', 'sfxNav',
+    'startBigPicture', 'closeToTray', 'onGameStart', 'afkMinutes', 'bgDetect', 'updateCheck', 'perfLog',
+    'captureShotHotkey', 'captureClipHotkey', 'captureGameAudio', 'captureMic', 'captureFindOthers'];
+  function resetAllSettings() {
+    const card = openModal(`
+      <div class="modal-head">
+        <h2>Reset all settings?</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body rm-body">
+        <p class="rm-text">The look, sounds, shortcuts, controller, playtime and window settings go back to how they were on a fresh install. Your games, playtime, notes, backups, account and imports stay as they are. GameVault reloads to apply it.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close data-autofocus>Cancel</button>
+        <button class="btn btn-danger" data-reset-go>Reset settings</button>
+      </div>`, { className: 'rm-modal' });
+    if (!card) return;
+    for (const b of card.querySelectorAll('[data-close]')) b.onclick = closeModal;
+    card.querySelector('[data-reset-go]').onclick = async () => {
+      card.querySelector('[data-reset-go]').disabled = true;
+      await persistGames();
+      const ok = api.configReset ? await api.configReset(RESET_KEYS).catch(() => false) : false;
+      if (!ok) { closeModal(); toast('Couldn’t reset the settings', 'error'); return; }
+      for (const k of ['gv.palette', 'gv.tier', 'gv.view', 'gv.sort', 'gv.filter']) { try { localStorage.removeItem(k); } catch (_) {} }
+      if (api.updateCaptureHotkeys) await api.updateCaptureHotkeys().catch(() => {});
+      location.reload();
+    };
+  }
+
+  // Settings → About → Report a problem
+  async function copyProblemReport(version, osName) {
+    const gpu = api.gpuStatus ? await api.gpuStatus().catch(() => ({})) : {};
+    const fps = await new Promise((resolve) => {
+      let n = 0; const t0 = performance.now();
+      const beat = (t) => { n += 1; if (t - t0 < 700) requestAnimationFrame(beat); else resolve(Math.round((n * 1000) / (t - t0))); };
+      requestAnimationFrame(beat);
+    });
+    const lines = [
+      `GameVault ${version} · ${osName}`,
+      `Window ${innerWidth}×${innerHeight} at ${devicePixelRatio}x · ${fps} fps · GPU compositing ${(gpu && gpu.gpu_compositing) || 'unknown'}`,
+      `Quality ${state.tier} · palette ${state.palette} · layout ${(state.ui && state.ui.nav) || 'sidebar'} · Big Picture ${bp.on ? 'on' : 'off'}`,
+      `${fmtNum(state.games.length)} games · controller ${livePads().length ? 'connected' : 'none'} · signed in ${state.account && state.account.signedIn ? 'yes' : 'no'}`,
+    ];
+    const text = lines.join('\n');
+    let ok = false;
+    try { ok = api.uiClipboardWrite ? await api.uiClipboardWrite(text) : (await navigator.clipboard.writeText(text), true); } catch (_) { ok = false; }
+    toast(ok ? 'Details copied. Paste them into your bug report.' : 'Couldn’t copy the details', ok ? 'ok' : 'error');
   }
 
   async function runAutoSync({ only = null, quiet = true } = {}) {
@@ -6363,11 +6504,6 @@
         </div>
 
         <div class="imp3-row">
-          <span class="imp3-label">Connect</span>
-          <div class="imp3-account" data-account></div>
-        </div>
-
-        <div class="imp3-row">
           <span class="imp3-label">Scan</span>
           <button class="imp3-pick" data-scan-folder>Scan a folder…</button>
           <button class="imp3-pick" data-scan-pc disabled title="Needs the deep scanner">Whole PC</button>
@@ -6402,7 +6538,6 @@
     const menuEl = card.querySelector('[data-menu]');
     const listEl = card.querySelector('[data-list]');
     const reviewTitle = card.querySelector('[data-review-title]');
-    const accountEl = card.querySelector('[data-account]');
     const summaryEl = card.querySelector('[data-summary]');
     const primaryBtn = card.querySelector('[data-primary]');
     const folderBtn = card.querySelector('[data-scan-folder]');
@@ -6456,104 +6591,6 @@
     const picked = () => candidates.filter((c) => c._checked && isNew(c));
     const labelOf = (id) => (sources.find((s) => s.id === id) || {}).label || id;
 
-    let steamUser = null;
-
-    const loadOwned = (games, wishlist) => {
-      scanSeq += 1;
-      busy = false;
-      scanError = null;
-      pickedNothing = false;
-      candidates = (games || []).filter((g) => g && g.name).map((g) => ({ ...g, wishlisted: false, _checked: true }));
-      // Wishlist entries are review candidates too, unchecked by default and
-      // clearly marked; skip anything the account already owns.
-      const ownedApps = new Set(candidates.map(appIdOf).filter(Boolean));
-      const seenWish = new Set();
-      for (const w of wishlist || []) {
-        const appid = Number(w && w.appid);
-        const name = w && typeof w.name === 'string' ? w.name.trim() : '';
-        if (!appid || !name || ownedApps.has(appid) || seenWish.has(appid)) continue;
-        seenWish.add(appid);
-        candidates.push({
-          name,
-          source: 'Steam wishlist',
-          sourceId: `steam-wishlist:${appid}`,
-          steamAppId: appid,
-          exePath: '', installDir: '', hours: 0, iconPath: '',
-          wishlisted: true,
-          _checked: false,
-        });
-      }
-      activeId = 'steam-owned';
-      inReview = true;
-      optionsStep.hidden = true;
-      reviewStep.hidden = false;
-      reviewTitle.textContent = 'Steam account';
-      paintReview();
-      paintSummary();
-    };
-
-    const paintAccount = async () => {
-      const hasKey = !!state.config.hasSteamKey;
-      const acc = await (api.steamAccount ? api.steamAccount().catch(() => ({ users: [], active: null })) : Promise.resolve({ users: [], active: null }));
-      steamUser = (acc.users || [])[0] || null;
-      accountEl.innerHTML = `
-        <button class="imp3-pick" data-acc>${sourceIcon('steam')}<span>${hasKey ? 'Steam · owned games' : 'Connect Steam'}</span></button>
-        <span class="imp3-acc-hint" data-acc-hint>${hasKey ? 'Connected' : steamUser ? `SteamID ${esc(steamUser.steamId)}` : 'not detected'}</span>
-        <button class="imp3-link" data-key-toggle>${hasKey ? 'Change key' : 'Use an API key instead'}</button>
-        <div class="imp3-connect" data-connect hidden>
-          <input class="input" data-steam-key type="password" placeholder="Steam Web API key" autocomplete="off" spellcheck="false" aria-label="Steam Web API key" />
-          <button class="btn btn-ghost" data-steam-save>Save and load</button>
-          <span class="imp3-acc-hint">steamcommunity.com/dev/apikey — needs “Game details” public</span>
-        </div>`;
-      const btn = accountEl.querySelector('[data-acc]');
-      const panel = accountEl.querySelector('[data-connect]');
-      const input = accountEl.querySelector('[data-steam-key]');
-      const hint = accountEl.querySelector('[data-acc-hint]');
-      const keyToggle = accountEl.querySelector('[data-key-toggle]');
-
-      if (keyToggle) keyToggle.onclick = () => {
-        panel.hidden = !panel.hidden;
-        if (!panel.hidden) input.focus();
-      };
-
-      if (btn) btn.onclick = async () => {
-        if (hasKey) { activeId = 'steam-owned'; syncPick(); runScan('steam-owned'); return; }
-        if (!api.steamLogin) { panel.hidden = false; input.focus(); return; }
-        hint.textContent = 'Waiting for Steam…';
-        btn.disabled = true;
-        const res = await api.steamLogin().catch(() => null);
-        btn.disabled = false;
-        if (res && res.ok && res.data && res.data.owned && res.data.owned.length) {
-          const d = res.data;
-          const bits = [`${d.owned.length} owned`];
-          if (d.wishlist && d.wishlist.length) bits.push(`${d.wishlist.length} wishlist`);
-          if (d.friends && d.friends.length) bits.push(`${d.friends.length} friends`);
-          toast(`Steam signed in · ${bits.join(' · ')}`, 'ok');
-          state.steamWishlist = d.wishlist || [];
-          loadOwned(d.owned, d.wishlist);
-        } else {
-          const msg = (res && res.error && res.error.message) || 'Steam sign-in failed';
-          hint.textContent = 'Not connected';
-          toast(msg, 'error');
-          panel.hidden = false;
-          input.focus();
-        }
-      };
-
-      const save = accountEl.querySelector('[data-steam-save]');
-      if (save) save.onclick = async () => {
-        const key = input.value.trim();
-        if (!key) { toast('Paste a Steam Web API key first', 'error'); return; }
-        await saveConfigPatch({ steamKey: key, steamId: steamUser ? steamUser.steamId : (state.config.steamId || null) });
-        panel.hidden = true;
-        toast('Steam connected', 'ok');
-        activeId = 'steam-owned';
-        syncPick();
-        runScan('steam-owned');
-      };
-      if (input) input.onkeydown = (e) => { if (e.key === 'Enter') save.click(); };
-    };
-
     const syncPick = () => {
       const src = sources.find((s) => s.id === activeId);
       pickName.textContent = src ? src.label : 'Select launcher';
@@ -6568,7 +6605,7 @@
     };
 
     const paintMenu = () => {
-      const launchers = sources.filter((s) => !s.action && s.id !== 'folder' && s.id !== 'file' && s.id !== 'steam-owned');
+      const launchers = sources.filter((s) => !s.action && s.id !== 'folder' && s.id !== 'file');
       const row = (s) => `<button class="imp3-menu-row${s.id === activeId ? ' is-active' : ''}" data-src="${esc(s.id)}" ${s.found ? '' : 'disabled'} role="option" aria-selected="${s.id === activeId}">
         ${sourceIcon(s.id)}
         <span class="imp3-menu-name">${esc(s.label)}</span>
@@ -6752,7 +6789,6 @@
       sources = await (api.importSources ? api.importSources().catch(() => []) : Promise.resolve([]));
       syncPick();
       paintSummary();
-      paintAccount();
     })();
   }
 
@@ -6766,7 +6802,7 @@
       icon: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>' },
     { id: 'appearance', label: 'Appearance', desc: 'Layout, colours, size and motion.',
       icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17z" fill="currentColor" stroke="none"/>' },
-    { id: 'library', label: 'Library & import', desc: 'Artwork, your Steam account and importing games.',
+    { id: 'library', label: 'Library & import', desc: 'Artwork, importing games and keeping launchers in sync.',
       icon: '<rect x="3.5" y="4" width="7" height="16" rx="1.5"/><rect x="13.5" y="4" width="7" height="9" rx="1.5"/><path d="M13.5 17h7M13.5 20h4"/>' },
     { id: 'tracking', label: 'Playtime tracking', desc: 'How GameVault counts the time you play.',
       icon: '<circle cx="12" cy="13" r="7.5"/><path d="M12 9v4l2.5 2.5M9.5 2.5h5"/>' },
@@ -6776,9 +6812,7 @@
       icon: '<path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.6 9.1 4.75 4.75 0 0 0 7 18.5z"/>' },
     { id: 'backups', label: 'Backups', desc: 'Your game saves in the cloud, and copies of your library you can keep.',
       icon: '<path d="M4 7.5h16v11a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z"/><path d="M3 4.5h18v3H3zM10 11.5h4"/>' },
-    { id: 'performance', label: 'Performance', desc: 'Frame rate, GPU and diagnostics.',
-      icon: '<path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4-5.5"/>' },
-    { id: 'about', label: 'About', desc: 'Version, updates and credits.',
+    { id: 'about', label: 'About', desc: 'Version, updates, problem reports and credits.',
       icon: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6h.01"/>' },
   ];
 
@@ -7209,15 +7243,20 @@
   function backupsSavesHtml() {
     const on = signedIn();
     const saves = !!state.config.cloudSaves;
-    let body = stRow('Back up my game saves',
+    const local = !!state.config.localSaves;
+    let body = stRow('Back up to the cloud',
       'Each game’s save folder is packed and encrypted on this PC with a key tied to your account, then uploaded. It runs by itself after you play. Up to 50 MB per backup; the newest 3 copies of each game are kept.',
-      stSwitch('data-bk-switch', on && saves, { disabled: !on, label: 'Back up my game saves' }), { disabled: !on });
+      stSwitch('data-bk-switch', on && saves, { disabled: !on, label: 'Back up my game saves to the cloud' }), { disabled: !on });
     if (!on) {
-      body += stRow('Sign in first', 'Backups are tied to your GameVault account, so you can restore them on any PC.',
-        '<button type="button" class="btn btn-primary" data-bk="account">Sign in</button>');
-      return `<h2 class="st-card-title">Game saves</h2>${body}`;
+      body += stRow('Sign in first', 'Cloud backups are tied to your GameVault account, so you can restore them on any PC.',
+        '<button type="button" class="btn btn-ghost" data-bk="account">Sign in</button>');
     }
-    if (!saves) return `<h2 class="st-card-title">Game saves</h2>${body}`;
+    body += stRow('Keep copies on this PC',
+      on && saves
+        ? 'Cloud backups are on, so they’re used instead. Turn them off to keep copies here.'
+        : 'No account needed. After you play, GameVault keeps the newest 5 copies of each game’s saves in its own folder.',
+      `<div class="st-inline"><button type="button" class="btn btn-ghost" data-bk="local-folder">Open folder</button>${stSwitch('data-bk-local', local, { label: 'Keep copies of my saves on this PC' })}</div>`);
+    if (!savesMode()) return `<h2 class="st-card-title">Game saves</h2>${body}`;
     const ov = state._bkOverview || { games: [], problems: {} };
     const byId = new Map();
     // games set up on this PC, then games with copies from another PC
@@ -7283,10 +7322,19 @@
       toast(sw.checked ? 'Save backups are on' : 'Save backups are off. Your copies stay in the cloud.', 'ok');
       repaint();
     });
+    const loc = panel.querySelector('[data-bk-local]');
+    if (loc) loc.addEventListener('change', async () => {
+      await saveConfigPatch({ localSaves: loc.checked });
+      state._sv = null;
+      if (state.selectedId) paintSavesCard(gameById(state.selectedId));
+      toast(loc.checked ? 'GameVault keeps copies of your saves on this PC' : 'No new copies on this PC. The ones there stay.', 'ok');
+      repaint();
+    });
     for (const btn of panel.querySelectorAll('[data-bk]')) {
       btn.addEventListener('click', async () => {
         const act = btn.dataset.bk;
         const g = btn.dataset.id ? gameById(btn.dataset.id) : null;
+        if (act === 'local-folder') { if (api.localSavesOpenFolder) api.localSavesOpenFolder(); return; }
         if (act === 'account') openSettings('account');
         else if (act === 'open' && g) { closeSettings({ restoreFocus: false }); openDetail(g.id); }
         else if (act === 'now' && g) {
@@ -7425,13 +7473,25 @@
   const copiesText = (n) => `${n} ${n === 1 ? 'copy' : 'copies'}`;
   const lastDirs = (p, n = 2) => String(p || '').split(/[\\/]/).filter(Boolean).slice(-n).join(' › ');
 
+  // Save backups go to the cloud when you're signed in with them on, or stay
+  // on this PC when "Keep copies on this PC" is on (no account). null = neither.
+  function savesMode() { return cloudOn('cloudSaves') ? 'cloud' : state.config.localSaves ? 'local' : null; }
+  function svApi() {
+    return savesMode() === 'local'
+      ? { backup: api.localSavesBackup, list: api.localSavesList, restore: api.localSavesRestore, del: api.localSavesDelete, hasPrev: api.localSavesHasPrevious, openPrev: api.localSavesOpenPrevious }
+      : { backup: api.savesBackup, list: api.savesList, restore: api.savesRestore, del: api.savesDelete, hasPrev: api.savesHasPrevious, openPrev: api.savesOpenPrevious };
+  }
+
   function savesCardHtml(g) {
     const head = (state2) => `<div class="sv-head${state2 ? ' is-' + state2 : ''}"><span class="sv-ico">${SV_ICON}</span><h3 class="gvx-card-head">Save backups</h3></div>`;
-    const pitch = '<p class="sv-text">Keep this game’s saves safe in the cloud and bring them back on any PC.</p>';
-    if (!signedIn()) return head() + pitch + '<div class="sv-row"><button type="button" class="btn btn-ghost sv-btn" data-sv="settings">Sign in to turn on</button></div>';
-    if (!state.config.cloudSaves) return head() + pitch + '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="turn-on">Turn on save backups</button></div>';
+    if (!savesMode()) {
+      const pitch = '<p class="sv-text">Keep copies of this game’s saves, so a broken save or a new PC never costs you your progress.</p>';
+      return head() + pitch + (signedIn()
+        ? '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="turn-on">Back up to the cloud</button><button type="button" class="sv-link" data-sv="turn-on-local">Keep them on this PC</button></div>'
+        : '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="turn-on-local">Keep copies on this PC</button><button type="button" class="sv-link" data-sv="settings">Sign in for the cloud</button></div>');
+    }
     const ui = state._sv && state._sv.id === String(g.id) ? state._sv : (state._sv = { id: String(g.id) });
-    if (ui.finding) return head + '<p class="sv-text">Looking up where it saves…</p>';
+    if (ui.finding) return head() + '<p class="sv-text">Looking up where it saves…</p>';
     if (ui.found) {
       const list = ui.found.length
         ? ui.found.map((c, i) => `<button type="button" class="sv-pick" data-sv="use" data-i="${i}" title="${esc(c.path)}"><b>${esc(lastDirs(c.path))}</b><span>${c.files} file${c.files === 1 ? '' : 's'} · ${mb(c.bytes)} · changed ${agoLabel(c.newest)}</span></button>`).join('')
@@ -7475,13 +7535,13 @@
     if (!el || !g) return;
     el.innerHTML = savesCardHtml(g);
     const ui = state._sv;
-    if (g.saveDir && cloudOn('cloudSaves') && ui && ui.id === String(g.id) && ui.hasPrev === undefined && api.savesHasPrevious) {
+    if (g.saveDir && savesMode() && ui && ui.id === String(g.id) && ui.hasPrev === undefined && svApi().hasPrev) {
       ui.hasPrev = false;
-      api.savesHasPrevious(String(g.id)).then((v) => { ui.hasPrev = !!v; if (v && state.selectedId === String(g.id)) paintSavesCard(g); }).catch(() => {});
+      svApi().hasPrev(String(g.id)).then((v) => { ui.hasPrev = !!v; if (v && state.selectedId === String(g.id)) paintSavesCard(g); }).catch(() => {});
     }
-    if (g.saveDir && cloudOn('cloudSaves') && ui && ui.id === String(g.id) && !ui.backups && !ui.loading) {
+    if (g.saveDir && savesMode() && ui && ui.id === String(g.id) && !ui.backups && !ui.loading) {
       ui.loading = true;
-      api.savesList(String(g.id)).then((res) => {
+      svApi().list(String(g.id)).then((res) => {
         ui.loading = false;
         ui.backups = res && res.ok ? res.data : [];
         if (!(res && res.ok)) ui.error = res && res.error && res.error.message;
@@ -7500,10 +7560,10 @@
   }
 
   async function backupNow(g, { quiet = true, force = false } = {}) {
-    if (!g || !g.saveDir || !cloudOn('cloudSaves')) return;
+    if (!g || !g.saveDir || !savesMode()) return;
     const ui = state._sv && state._sv.id === String(g.id) ? state._sv : null;
     if (ui) { ui.busy = 'Backing up…'; ui.error = null; paintSavesCard(g); }
-    const res = await api.savesBackup({ gameId: String(g.id), gameName: g.name, saveDir: g.saveDir, force });
+    const res = await svApi().backup({ gameId: String(g.id), gameName: g.name, saveDir: g.saveDir, force });
     if (ui) { ui.busy = null; ui.backups = null; }
     if (res && res.ok) {
       if (!quiet) toast(res.data.skipped ? 'Saves haven’t changed since the last backup' : `Backed up ${g.name} saves`, 'ok');
@@ -7519,19 +7579,20 @@
     const act = btn.dataset.sv;
     const ui = state._sv;
     if (act === 'settings') { openSettings('account'); return; }
-    if (act === 'turn-on') {
-      await saveConfigPatch({ cloudSaves: true });
-      toast('Save backups are on', 'ok');
+    if (act === 'turn-on' || act === 'turn-on-local') {
+      await saveConfigPatch(act === 'turn-on' ? { cloudSaves: true } : { localSaves: true });
+      state._sv = { id: String(g.id) };
+      toast(act === 'turn-on' ? 'Cloud save backups are on' : 'GameVault keeps copies of your saves on this PC', 'ok');
       paintSavesCard(g);
       return;
     }
     if (act === 'toggle') { ui.open = !ui.open; ui.confirm = null; ui.confirmDel = null; paintSavesCard(g); return; }
-    if (act === 'previous') { if (api.savesOpenPrevious) api.savesOpenPrevious(String(g.id)); return; }
+    if (act === 'previous') { if (svApi().openPrev) svApi().openPrev(String(g.id)); return; }
     if (act === 'delete') {
       const id = btn.dataset.id;
       if (ui.confirmDel !== id) { ui.confirmDel = id; ui.confirm = null; paintSavesCard(g); return; }
       ui.confirmDel = null;
-      const res = await api.savesDelete(id).catch((e) => ({ ok: false, error: { message: e.message } }));
+      const res = await svApi().del(id).catch((e) => ({ ok: false, error: { message: e.message } }));
       if (res && res.ok) { toast('Backup deleted', 'ok'); ui.backups = null; }
       else toast((res && res.error && res.error.message) || 'Couldn’t delete that backup', 'error');
       paintSavesCard(g);
@@ -7562,7 +7623,7 @@
       ui.confirm = null;
       if (typeof state.live[String(g.id)] === 'number') { toast('Close the game before restoring its saves', 'error'); paintSavesCard(g); return; }
       ui.busy = 'Restoring…'; paintSavesCard(g);
-      const res = await api.savesRestore({ gameId: String(g.id), backupId: id, saveDir: g.saveDir });
+      const res = await svApi().restore({ gameId: String(g.id), backupId: id, saveDir: g.saveDir });
       ui.busy = null;
       if (res && res.ok) {
         ui.hasPrev = !!res.data.safety || ui.hasPrev;
@@ -8163,12 +8224,12 @@
       return {
         html:
           stCard('Startup',
-            stRow('Start GameVault when I log in', 'Opens quietly in the tray.', stSwitch('data-autostart', startupOn, { label: 'Start on login' })) +
-            stRow('Start in Big Picture', 'Open straight into the fullscreen, controller-friendly mode.', stSwitch('data-bp-start', state.config.startBigPicture === true, { label: 'Start in Big Picture' }))) +
+            stRow('Start GameVault when I log in', 'Opens quietly in the tray. Big Picture at startup is under Controller & Big Picture.', stSwitch('data-autostart', startupOn, { label: 'Start on login' }))) +
           stCard('Window',
             stRow('Closing the window', toTray ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.',
               stPills('data-close-mode', [['tray', 'Hide to tray'], ['quit', 'Quit']], toTray ? 'tray' : 'quit'), { descId: 'st-close-desc' }) +
-            stRow('Default layout', 'How the library opens.', stPills('data-layout', [['shelf', 'Shelf'], ['poster', 'Cards']], bp.on ? bp.saved.view : state.view))) +
+            stRow('When a game starts', 'What GameVault does when you play a game from it. It comes back when the game closes.',
+              stPills('data-game-start', [['keep', 'Stay open'], ['minimize', 'Minimize'], ['tray', 'Hide to tray']], ['minimize', 'tray'].includes(state.config.onGameStart) ? state.config.onGameStart : 'keep'))) +
           stCard('Sound',
             stRow('Sound effects', 'Small sounds when you click, move around, open things and launch games. Never plays over a game.',
               stSwitch('data-sfx-on', state.config.sfx !== false, { label: 'Sound effects' })) +
@@ -8189,7 +8250,10 @@
             stRow('Captures from other apps', 'Also shows screenshots and clips from Steam, NVIDIA, AMD, Ubisoft Connect and the Xbox Game Bar, plus photo-mode shots a game saves while you play. They stay in their own folders.',
               stSwitch('data-cap-others', state.config.captureFindOthers !== false, { label: 'Captures from other apps' })) +
             stRow('Where they go', 'Shown under Activity and on each game’s page. Works with borderless and windowed games; exclusive fullscreen can come out black.',
-              '<button type="button" class="btn btn-ghost" data-cap-folder>Open folder</button>')),
+              '<button type="button" class="btn btn-ghost" data-cap-folder>Open folder</button>')) +
+          stCard('Reset',
+            stRow('Reset all settings', 'Puts every setting back to how it was on a fresh install: the look, sounds, shortcuts, controller and the rest. Your games, playtime, backups and account stay as they are.',
+              '<button type="button" class="btn btn-ghost" data-reset-all>Reset…</button>')),
         wire(panel) {
           panel.querySelector('[data-autostart]').onchange = async (e) => {
             await api.setStartup(e.target.checked).catch(() => {});
@@ -8200,12 +8264,8 @@
             const d = panel.querySelector('#st-close-desc');
             if (d) d.textContent = v === 'tray' ? 'GameVault keeps tracking playtime from the tray.' : 'GameVault quits — games started outside it won’t be noticed.';
           });
-          wirePills(panel, '[data-layout]', (v) => {
-            // Big Picture has its own layouts: save the choice for when it closes
-            if (bp.on) { bp.saved.view = v; lsSet('gv.view', v); return; }
-            if (v !== state.view) cycleView();
-          });
-          wireBpSettings(panel);
+          wirePills(panel, '[data-game-start]', (v) => saveConfigPatch({ onGameStart: v }));
+          panel.querySelector('[data-reset-all]').onclick = () => resetAllSettings();
           wireCaptureSettings(panel);
           const sfxOn = panel.querySelector('[data-sfx-on]');
           const sfxVol = panel.querySelector('[data-sfx-vol]');
@@ -8246,6 +8306,8 @@
       return {
         html: stLookTools(ui, opts) +
           stCard('Layout',
+          (opts.drawer ? '' : stRow('Library view', 'How the library opens: a shelf with one big game, or a grid of cards. The button in the top bar switches it too.',
+            stPills('data-layout', [['shelf', 'Shelf'], ['poster', 'Cards']], bp.on ? bp.saved.view : state.view))) +
           stRow('Navigation', 'Where the Library, Wishlist, Activity and Settings buttons live. With None, use the menu button in the top bar or Ctrl 1–6.',
             stPills('data-ui-nav-group', [['sidebar', 'Sidebar'], ['dock', 'Dock'], ['top', 'Top tabs'], ['none', 'None']], ui.nav), { wide: true }) +
           `<div data-ui-only="sidebar">${stRow('Side', 'Which edge of the window it sits on.', stPills('data-ui-side-group', [['left', 'Left'], ['right', 'Right']], ui.navSide))}</div>` +
@@ -8323,78 +8385,34 @@
           }
           wireLookControls(panel);
           wireLookTools(panel);
+          wirePills(panel, '[data-layout]', (v) => {
+            // Big Picture has its own layouts: save the choice for when it closes
+            if (bp.on) { bp.saved.view = v; lsSet('gv.view', v); return; }
+            if (v !== state.view) cycleView();
+          });
         },
       };
     },
 
     async library() {
-      const sgdb = await api.sgdbKeyGet().catch(() => ({ hasKey: false }));
-      const steamState = await (api.steamAccount ? api.steamAccount().catch(() => ({ users: [] })) : Promise.resolve({ users: [] }));
-      const steamUser = (steamState.users || [])[0];
-      const sgdbDesc = sgdb.hasKey
-        ? 'Using your SteamGridDB key. Artwork fills itself when you add a game.'
-        : 'No key yet. Get one free at steamgriddb.com → Preferences → API. A shared GameVault artwork cloud that needs no key is on the way.';
-      const steamDesc = steamUser
-        ? `Detected SteamID ${esc(steamUser.steamId)}${steamUser.personaName ? ` (${esc(steamUser.personaName)})` : ''} · ${state.config.hasSteamKey ? 'key saved' : 'no key yet'}`
-        : `No Steam login found on this PC${state.config.hasSteamKey ? ' · key saved' : ''}.`;
       return {
         html:
           stCard('Artwork',
-            stRow('SteamGridDB key', sgdbDesc,
-              `<div class="st-inline"><input class="input" id="st-sgdb" type="password" placeholder="${sgdb.hasKey ? 'Key saved — paste to replace' : 'API key'}" autocomplete="off" spellcheck="false" aria-label="SteamGridDB API key" />
-               <button type="button" class="btn btn-ghost" data-sgdb-save>Save</button>
-               <button type="button" class="btn btn-ghost" data-sgdb-test>Test</button></div>`, { wide: true, descId: 'st-sgdb-desc' }) +
-            stRow('Refresh all artwork', 'Looks up covers, banners, logos and icons again for every game.', '<button type="button" class="btn btn-ghost" data-art-refresh>Refresh</button>')) +
-          stCard('Steam account',
-            stRow('Steam Web API key', `${steamDesc}<br>Lets GameVault see games you own, not just installed ones. Key: steamcommunity.com/dev/apikey — your “Game details” must be public.`,
-              `<div class="st-inline"><input class="input" id="st-steam-key" type="password" placeholder="${state.config.hasSteamKey ? 'Key saved — paste to replace' : 'Steam Web API key'}" autocomplete="off" spellcheck="false" aria-label="Steam Web API key" />
-               <button type="button" class="btn btn-ghost" data-steam-save>Save</button>
-               <button type="button" class="btn btn-ghost" data-steam-test>Test</button></div>`, { wide: true, descId: 'st-steam-desc' })) +
+            stRow('Refresh all artwork', 'Looks up covers, banners, logos and icons again for every game. Artwork comes from SteamGridDB through GameVault, with no key needed.', '<button type="button" class="btn btn-ghost" data-art-refresh>Refresh</button>') +
+            stRow('Artwork on this PC', '<span data-art-size>Measuring…</span>',
+              '<button type="button" class="btn btn-ghost" data-art-clean disabled>Clean up</button>', { descId: 'st-art-size' })) +
           stCard('Import',
             stRow('Import games', 'Steam, Epic, GOG, Xbox, Heroic, Lutris, itch and more, a folder, or your whole PC.', '<button type="button" class="btn btn-ghost" data-open-import>Open import</button>') +
-            stRow('Sync now', 'Checks the launchers below for games you installed since the last look.', '<button type="button" class="btn btn-ghost" data-sync-now>Sync now</button>')) +
+            stRow('Sync now', 'Checks the launchers below for games you installed since the last look.', '<button type="button" class="btn btn-ghost" data-sync-now>Sync now</button>') +
+            stRow('Removed games', removedGamesText(), '<button type="button" class="btn btn-ghost" data-removed-open>Show</button>', { descId: 'st-removed-desc' })) +
           stCard('Auto sync', '<div class="st-sync-list" data-autosync-list><div class="st-row"><div class="st-row-text"><span class="st-row-desc">Looking for launchers…</span></div></div></div>'),
         wire(panel) {
-          const sgdbDescEl = panel.querySelector('#st-sgdb-desc');
-          panel.querySelector('[data-sgdb-save]').onclick = async () => {
-            const input = panel.querySelector('#st-sgdb');
-            const key = input.value.trim();
-            if (!key) { toast('Paste a SteamGridDB key first', 'error'); return; }
-            const saved = await api.sgdbKeySet(key).catch(() => null);
-            if (!saved || !saved.ok) { toast('Couldn’t save the SteamGridDB key', 'error'); return; }
-            input.value = '';
-            input.placeholder = 'Key saved — paste to replace';
-            state.config.hasSgdbKey = true;
-            if (sgdbDescEl) sgdbDescEl.textContent = 'Using your SteamGridDB key. Artwork fills itself when you add a game.';
-            toast('SteamGridDB key saved', 'ok');
-          };
-          panel.querySelector('[data-sgdb-test]').onclick = async () => {
-            const res = await api.sgdbKeyTest().catch(() => null);
-            if (res && res.ok) toast(`SteamGridDB works · ${res.data.count} results`, 'ok');
-            else toast(res && res.error ? res.error.message : 'SteamGridDB unreachable', 'error');
-          };
+          wireArtCache(panel);
+          panel.querySelector('[data-removed-open]').onclick = () => openRemovedGames();
           panel.querySelector('[data-art-refresh]').onclick = async () => {
             toast('Refreshing artwork for the whole library…', 'ok');
             await enrichArt({ force: true });
             toast('Artwork refreshed', 'ok');
-          };
-          const steamDescEl = panel.querySelector('#st-steam-desc');
-          panel.querySelector('[data-steam-save]').onclick = async () => {
-            const input = panel.querySelector('#st-steam-key');
-            const key = input.value.trim();
-            if (!key) { toast('Paste a Steam Web API key first', 'error'); return; }
-            await saveConfigPatch({ steamKey: key, steamId: steamUser ? steamUser.steamId : (state.config.steamId || null) });
-            input.value = '';
-            input.placeholder = 'Key saved — paste to replace';
-            if (steamDescEl) steamDescEl.firstChild.textContent = `SteamID ${state.config.steamId || 'not set'} · key saved`;
-            toast('Steam key saved', 'ok');
-          };
-          panel.querySelector('[data-steam-test]').onclick = async () => {
-            const typed = panel.querySelector('#st-steam-key').value.trim();
-            // without a typed key, main uses the saved one (the renderer never sees it)
-            const res = await api.steamOwned({ key: typed || undefined, steamId: state.config.steamId || (steamUser && steamUser.steamId) }).catch(() => null);
-            if (res && res.ok) toast(`Steam connected · ${res.count} games`, 'ok');
-            else toast((res && res.error && res.error.message) || 'Steam unreachable', 'error');
           };
           panel.querySelector('[data-open-import]').onclick = () => { closeSettings({ restoreFocus: false }); $('#btn-import')?.click(); };
           const syncNow = panel.querySelector('[data-sync-now]');
@@ -8407,10 +8425,10 @@
           const syncList = panel.querySelector('[data-autosync-list]');
           if (syncList && api.importSources) api.importSources().catch(() => []).then((sources) => {
             if (!syncList.isConnected) return;
-            const rows = (sources || []).filter((x) => !x.action && x.id !== 'folder' && x.id !== 'file' && x.id !== 'pc' && x.id !== 'steam-owned' && (x.found || autoSyncOn(x.id)));
+            const rows = (sources || []).filter((x) => !x.action && x.id !== 'folder' && x.id !== 'file' && x.id !== 'pc' && (x.found || autoSyncOn(x.id)));
             syncList.innerHTML = rows.length
               ? rows.map((x) => stRow(x.label, x.sync ? 'New games you install there are added on their own.' : x.syncNote,
-                  stSwitch(`data-autosync="${esc(x.id)}"`, x.sync && autoSyncOn(x.id), { disabled: !x.sync, label: `Keep ${x.label} in sync` }))).join('')
+                  x.sync ? stSwitch(`data-autosync="${esc(x.id)}"`, autoSyncOn(x.id), { label: `Keep ${x.label} in sync` }) : '<span class="bk-meta">Import by hand</span>')).join('')
               : stRow('No launchers found', 'Install Steam, Epic, GOG, Heroic, Lutris or another launcher and it shows up here.', '');
             for (const box of syncList.querySelectorAll('[data-autosync]')) {
               box.onchange = async () => {
@@ -8430,6 +8448,8 @@
         html:
           stCard('Playtime',
             stRow('Notice games I start outside GameVault', 'Checks every 30 seconds for library games you launched from Steam, a shortcut or the Start menu, and starts counting.', stSwitch('data-bg-detect', bg, { label: 'Notice games started outside GameVault' })) +
+            stRow('Stop counting when I’m away', 'If there’s no mouse or keyboard input for this long, that stretch isn’t counted. Windows doesn’t see controllers as input, so leave this off if you play with a pad.',
+              stPills('data-afk', [['0', 'Off'], ['15', '15 min'], ['30', '30 min'], ['60', '1 hour']], String([15, 30, 60].includes(Number(state.config.afkMinutes)) ? Number(state.config.afkMinutes) : 0))) +
             stRow('How a session is counted', 'It starts when the game’s own program is running and ends 60 seconds after it closes, so a quick restart stays one session. Store launchers like Steam or Epic never count, and anything under 30 seconds is ignored.', '') +
             stRow('Per-game settings', 'If a game launches through a launcher or wrapper, open the game → Edit → <b>Launch &amp; tracking</b> and use <b>Detect</b> to pick the real game.', '')) +
           (info.platform === 'linux'
@@ -8437,6 +8457,10 @@
               stRow('Proton', info.protonPath ? `Using <code class="st-code">${esc(info.protonPath)}</code>` : 'No Proton build found. Install Proton through Steam, or Wine for non-Steam games.', ''))
             : ''),
         wire(panel) {
+          wirePills(panel, '[data-afk]', (v) => {
+            saveConfigPatch({ afkMinutes: Number(v) || 0 });
+            toast(Number(v) ? `Time away longer than ${v === '60' ? 'an hour' : v + ' minutes'} won’t count` : 'All the time a game is open counts', 'ok');
+          });
           panel.querySelector('[data-bg-detect]').onchange = async (e) => {
             await saveConfigPatch({ bgDetect: e.target.checked });
             toast(e.target.checked ? 'GameVault will notice games you start elsewhere' : 'Only games launched from GameVault are tracked', 'ok');
@@ -8497,9 +8521,10 @@
     async backups() {
       const st = await window.api.accountStatus().catch(() => ({ needsRestart: true }));
       state.account = st;
-      const on = cloudOn('cloudSaves');
+      const mode = savesMode();
       const [ov, lib] = await Promise.all([
-        on && api.savesOverview ? api.savesOverview().catch(() => null) : null,
+        mode === 'cloud' && api.savesOverview ? api.savesOverview().catch(() => null)
+          : mode === 'local' && api.localSavesOverview ? api.localSavesOverview().catch(() => null) : null,
         api.libraryBackupInfo ? api.libraryBackupInfo().catch(() => null) : null,
       ]);
       state._bkOverview = ov && ov.ok ? ov.data : null;
@@ -8512,77 +8537,6 @@
       };
     },
 
-    async performance() {
-      return {
-        html: stCard('Performance',
-          stRow('Frame rate', '<span id="s-perf">measuring…</span><br><span id="s-perf-gpu">GPU: checking…</span>',
-            '<div class="st-inline"><button type="button" class="btn btn-ghost" data-perf-copy>Copy report</button><button type="button" class="btn btn-ghost" data-perf-reveal>Reveal log</button></div>') +
-          stRow('Benchmark', 'Clicks through the app for 20 seconds and writes the results to perf.log. Don’t touch the window until it says done.', '<button type="button" class="btn" data-perf-bench>Run benchmark</button>') +
-          stRow('Record frame stats', '<span id="s-perf-path">When on, stats are written every second to perf.log.</span>', stSwitch('data-perf-record', state.config.perfLog === true, { label: 'Record frame stats' }))),
-        async wire(panel) {
-          const perfEl = panel.querySelector('#s-perf');
-          let gpuInfo = {};
-          if (api.gpuStatus) gpuInfo = await api.gpuStatus().catch(() => ({}));
-          const gpuEl = panel.querySelector('#s-perf-gpu');
-          if (gpuEl) gpuEl.textContent = `GPU compositing: ${(gpuInfo && gpuInfo.gpu_compositing) || 'unknown'}`;
-          let frames = 0;
-          const t0 = performance.now();
-          const beat = (now) => {
-            frames += 1;
-            if (now - t0 < 1000) { requestAnimationFrame(beat); return; }
-            const fps = Math.max(1, Math.round((frames * 1000) / (now - t0)));
-            if (perfEl && perfEl.isConnected) perfEl.textContent = `${fps} fps · ${(1000 / fps).toFixed(1)} ms per frame · ${state.tier} quality`;
-          };
-          requestAnimationFrame(beat);
-          const pathEl = panel.querySelector('#s-perf-path');
-          if (pathEl && api.perfPath) api.perfPath().then((p) => { if (pathEl.isConnected) pathEl.textContent = `Log: ${p}`; }).catch(() => {});
-          panel.querySelector('[data-perf-record]').onchange = async (e) => {
-            await saveConfigPatch({ perfLog: e.target.checked });
-            syncPerfRecorder();
-            toast(e.target.checked ? 'Recording frame stats to perf.log' : 'Frame stats recording off', 'ok');
-          };
-          panel.querySelector('[data-perf-reveal]').onclick = () => api.perfReveal && api.perfReveal();
-          panel.querySelector('[data-perf-copy]').onclick = async () => {
-            const report = {
-              readout: perfEl ? perfEl.textContent : '',
-              window: `${innerWidth}x${innerHeight}`,
-              dpr: devicePixelRatio,
-              tier: state.tier,
-              palette: state.palette,
-              gpu: (gpuInfo && gpuInfo.gpu_compositing) || 'unknown',
-              games: state.games.length,
-            };
-            const text = JSON.stringify(report);
-            try { await navigator.clipboard.writeText(text); toast('Performance report copied', 'ok'); } catch (_) { toast(text, 'ok'); }
-          };
-          panel.querySelector('[data-perf-bench]').onclick = async () => {
-            closeSettings({ restoreFocus: false });
-            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-            const mark = (m) => { if (window.__gvPerfMark) window.__gvPerfMark(m); };
-            perfForced += 1; // the benchmark always records, whatever the setting says
-            syncPerfRecorder();
-            try {
-              await wait(600);
-              for (const f of ['Active', 'Finished', 'Want', 'All']) { mark('bench:filter:' + f); setFilter(f); await wait(900); }
-              mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
-              mark('bench:sidebar'); $('#side-toggle').click(); await wait(700);
-              mark('bench:grid'); $('#btn-view').click(); await wait(800);
-              mark('bench:scroll');
-              const lib = $('#library');
-              for (let i = 0; i < 12; i++) { lib.scrollTop += 140; await wait(60); }
-              mark('bench:detail'); if (state.games[0]) openDetail(state.games[0].id); await wait(1000);
-              mark('bench:back'); if (state.selectedId) closeDetail(); await wait(1100);
-              if (api.perfLog) api.perfLog({ t: Date.now(), benchmark: 'done', tier: state.tier });
-            } finally {
-              perfForced -= 1;
-              syncPerfRecorder();
-            }
-            toast('Benchmark finished — perf.log updated', 'ok');
-          };
-        },
-      };
-    },
-
     async about() {
       const version = await api.getAppVersion().catch(() => '2.0.0-experimental');
       const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
@@ -8592,9 +8546,14 @@
         html:
           stCard('GameVault',
             stRow('Version', `${esc(version)} · ${esc(osName)}`, '') +
-            stRow('Updates', /experimental/i.test(version) ? 'This is an experimental build, so automatic updates are off.' : 'GameVault checks for updates on startup.', '') +
+            stRow('Updates', `<span data-upd-status>${esc(updateStatusText(version))}</span>`,
+              '<button type="button" class="btn btn-ghost" data-upd-check>Check now</button>', { descId: 'st-upd-desc' }) +
+            stRow('Check automatically', 'Looks for a new version each time GameVault starts. You choose when to install it.',
+              stSwitch('data-upd-auto', state.config.updateCheck !== false, { label: 'Check for updates automatically' })) +
             stRow('Your data', 'Library, settings and cached artwork live in one folder on this PC.', '<button type="button" class="btn btn-ghost" data-open-data>Open folder</button>') +
-            stRow('Welcome', 'The first-run setup: colours, layout, games and sign-in.', '<button type="button" class="btn btn-ghost" data-welcome-again>Show it again</button>')) +
+            stRow('Welcome', 'The first-run setup: colours, layout, games and sign-in.', '<button type="button" class="btn btn-ghost" data-welcome-again>Show it again</button>') +
+            stRow('Report a problem', 'Copies details about GameVault and your PC (version, screen, GPU, settings, no game names) to paste into a bug report. Nothing is sent.',
+              '<button type="button" class="btn btn-ghost" data-copy-report>Copy details</button>')) +
           stCard('Credits',
             stRow('SteamGridDB', 'Covers, banners, logos and icons come from the SteamGridDB community.', link('https://www.steamgriddb.com', 'steamgriddb.com')) +
             stRow('PCGamingWiki', 'Save-game locations (for cloud saves) come from PCGamingWiki via the Ludusavi manifest.', link('https://www.pcgamingwiki.com', 'pcgamingwiki.com')) +
@@ -8602,6 +8561,9 @@
         wire(panel) {
           for (const b of panel.querySelectorAll('[data-ext]')) b.onclick = () => api.openExternal && api.openExternal(b.dataset.ext);
           panel.querySelector('[data-welcome-again]').onclick = () => welcome.open({ again: true });
+          panel.querySelector('[data-copy-report]').onclick = () => copyProblemReport(version, osName);
+          panel.querySelector('[data-upd-auto]').onchange = (e) => saveConfigPatch({ updateCheck: e.target.checked });
+          panel.querySelector('[data-upd-check]').onclick = () => updates.check({ manual: true });
           panel.querySelector('[data-open-data]').onclick = async () => {
             const p = await api.getDataPath().catch(() => '');
             if (p) api.showInFolder(p);
@@ -8777,10 +8739,14 @@
       const body = el.querySelector('[data-wel-body]');
       body.innerHTML = BODY[id]();
       body.dataset.step = id;
+      // a new step slides in; a repaint of the same step (sign-in options
+      // arriving, the account changing) swaps in place without replaying it
       body.classList.remove('is-in', 'is-back');
-      void body.offsetWidth;
-      body.classList.add('is-in');
-      if (dir < 0) body.classList.add('is-back');
+      if (dir !== 0) {
+        void body.offsetWidth;
+        body.classList.add('is-in');
+        if (dir < 0) body.classList.add('is-back');
+      }
       el.dataset.step = id;
       el.querySelector('[data-wel-dots]').innerHTML = steps.map((s, i) => `<i class="${i === at ? 'is-on' : i < at ? 'is-past' : ''}"></i>`).join('');
       el.querySelector('.wel-back').style.visibility = at > 0 && id !== 'done' ? '' : 'hidden';
@@ -8823,6 +8789,8 @@
       if (state.settingsOpen) closeSettings();
       steps = plan();
       at = 0;
+      // fetch the sign-in options now, so the account step is complete when it shows
+      if (!state.accountProviders && api.accountProviders) api.accountProviders().then((p) => { state.accountProviders = p; }).catch(() => {});
       el.classList.toggle('is-again', again);
       el.hidden = false;
       document.documentElement.classList.add('is-welcome');
@@ -8855,13 +8823,21 @@
       if (skipped) toast('Setup skipped. Settings has everything, and About can show it again.', 'ok');
     }
 
+    // LB / RB on a controller: the same as Back and Next
+    function stepBy(d) {
+      if (!isOpen()) return;
+      if (d > 0) { if (at === steps.length - 1) finish(); else go(at + 1); }
+      else if (at > 0 && steps[at] !== 'done') go(at - 1);
+      else sfx('bump');
+    }
+
     function mark(sel, btn) {
       for (const b of el.querySelectorAll(sel)) { const on = b === btn; b.classList.toggle('is-active', on); b.setAttribute('aria-checked', String(on)); }
     }
 
     function onClick(e) {
       const pal = e.target.closest('[data-wel-pal]');
-      if (pal) { mark('[data-wel-pal]', pal); applyPalette(pal.dataset.welPal, { persist: true }); return; }
+      if (pal) { mark('[data-wel-pal]', pal); applyPalette(pal.dataset.welPal, { persist: true, fade: false }); return; }
       const acc = e.target.closest('[data-wel-acc]');
       if (acc) { mark('[data-wel-acc]', acc); setUi({ accent: acc.dataset.welAcc || null }); return; }
       const pre = e.target.closest('[data-wel-preset]');
@@ -8904,7 +8880,192 @@
       open();
     }
 
-    return { open, maybeOpen, isOpen, onAccount, el: () => el };
+    return { open, maybeOpen, isOpen, onAccount, stepBy, el: () => el };
+  })();
+
+  // ---------------------------------------------------------------------------
+  // Updates: looked for at startup (unless turned off in Settings → About) and
+  // with Check now. A new version opens a dialog with what's new; it downloads
+  // when you say so and installs on restart.
+  // ---------------------------------------------------------------------------
+  const updateState = { status: 'idle', info: null, percent: 0, error: '', checkedAt: 0, manual: false };
+
+  function updateStatusText(version) {
+    const u = updateState;
+    if (/experimental/i.test(String(version || ''))) return 'This is a test build, so it doesn’t look for updates.';
+    if (u.status === 'checking') return 'Checking for a new version…';
+    if (u.status === 'latest') return `You have the latest version${u.checkedAt ? ` · checked ${agoLabel(u.checkedAt)}` : ''}.`;
+    if (u.status === 'available') return `Version ${u.info.version} is available.`;
+    if (u.status === 'downloading') return `Downloading version ${u.info.version}… ${u.percent}%`;
+    if (u.status === 'ready') return `Version ${u.info.version} is ready. It installs when GameVault restarts.`;
+    if (u.status === 'error') return `Couldn’t check for updates: ${u.error}`;
+    return state.config.updateCheck === false ? 'Not checked: automatic checks are off.' : 'Not checked yet.';
+  }
+
+  /** Release notes (markdown, HTML or a list) as plain, safe lines. */
+  function releaseNotesHtml(raw) {
+    let text = Array.isArray(raw) ? raw.map((x) => (typeof x === 'string' ? x : (x && x.note) || '')).join('\n') : String(raw || '');
+    text = text.replace(/<\/(p|li|h\d)>/gi, '\n').replace(/<li[^>]*>/gi, '- ').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, '\'');
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\*\*full changelog/i.test(l) && !/^https?:\/\/\S+$/.test(l)).slice(0, 40);
+    if (!lines.length) return '<p class="rm-text">Fixes and improvements.</p>';
+    let html = '';
+    let inList = false;
+    for (const l of lines) {
+      const item = /^[-*•]\s+(.*)$/.exec(l);
+      const clean = (t) => esc(t.replace(/\*\*(.+?)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'));
+      if (item) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${clean(item[1])}</li>`; continue; }
+      if (inList) { html += '</ul>'; inList = false; }
+      const head = /^#{1,6}\s+(.*)$/.exec(l);
+      html += head ? `<h4>${clean(head[1])}</h4>` : `<p>${clean(l)}</p>`;
+    }
+    if (inList) html += '</ul>';
+    return html;
+  }
+
+  const updates = (() => {
+    let card = null;
+
+    function refreshRow() {
+      const el = document.querySelector('#st-panel [data-upd-status]');
+      if (el) api.getAppVersion().then((v) => { if (el.isConnected) el.textContent = updateStatusText(v); }).catch(() => {});
+    }
+
+    function paintCard() {
+      if (!card || !card.isConnected) { card = null; return; }
+      const u = updateState;
+      const prog = card.querySelector('[data-upd-progress]');
+      const foot = card.querySelector('[data-upd-foot]');
+      if (prog) {
+        prog.hidden = u.status !== 'downloading';
+        const bar = prog.querySelector('i');
+        if (bar) bar.style.width = `${u.percent}%`;
+        const pct = prog.querySelector('[data-upd-pct]');
+        if (pct) pct.textContent = `${u.percent}%`;
+      }
+      if (!foot) return;
+      const manual = u.info && u.info.manual;
+      const want = u.status === 'ready' ? 'ready' : u.status === 'downloading' ? 'downloading' : 'offer';
+      if (foot.dataset.mode === want) return;
+      foot.dataset.mode = want;
+      foot.innerHTML = want === 'ready'
+        ? '<button type="button" class="btn btn-ghost" data-upd="close">When I close GameVault</button><button type="button" class="btn btn-primary" data-upd="restart">Restart now</button>'
+        : want === 'downloading'
+          ? '<button type="button" class="btn btn-ghost" data-upd="close">Hide</button><button type="button" class="btn btn-primary" disabled>Downloading…</button>'
+          : `<button type="button" class="btn btn-ghost" data-upd="skip">Skip this version</button><button type="button" class="btn btn-ghost" data-upd="later">Later</button><button type="button" class="btn btn-primary" data-upd="go">${manual ? 'Copy the update command' : 'Update now'}</button>`;
+      const first = foot.querySelector('.btn-primary:not([disabled])') || foot.querySelector('button');
+      if (first && card.contains(document.activeElement)) first.focus();
+    }
+
+    function show() {
+      const u = updateState;
+      if (!u.info) return;
+      const cur = u.info.currentVersion ? String(u.info.currentVersion).replace(/^v/, '') : '';
+      const date = u.info.releaseDate ? fmtDate(u.info.releaseDate) : '';
+      card = openModal(`
+        <div class="modal-head">
+          <h2>GameVault ${esc(String(u.info.version).replace(/^v/, ''))} is out</h2>
+          <button class="close-x" data-close aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body rm-body upd-body">
+          <p class="rm-text">${cur ? `You have ${esc(cur)}.` : ''}${date ? ` Released ${esc(date)}.` : ''} Your library, settings and saves stay as they are.</p>
+          <div class="upd-notes">${releaseNotesHtml(u.info.releaseNotes)}</div>
+          <div class="upd-progress" data-upd-progress hidden><div class="upd-bar"><i></i></div><span data-upd-pct>0%</span></div>
+        </div>
+        <div class="modal-foot" data-upd-foot></div>`, { className: 'rm-modal upd-modal' });
+      if (!card) return;
+      card.querySelector('[data-close]').onclick = closeModal;
+      card.querySelector('[data-upd-foot]').addEventListener('click', onFoot);
+      paintCard();
+      const first = card.querySelector('[data-upd-foot] .btn-primary:not([disabled])');
+      if (first) first.focus();
+    }
+
+    async function onFoot(e) {
+      const b = e.target.closest('[data-upd]');
+      if (!b) return;
+      const u = updateState;
+      const act = b.dataset.upd;
+      if (act === 'close') { closeModal(); if (u.status === 'ready') toast('The update installs when you close GameVault', 'ok'); return; }
+      if (act === 'later') { closeModal(); if (api.snoozeUpdate) await api.snoozeUpdate(u.info.version, 24).catch(() => {}); toast('GameVault will remind you tomorrow', 'ok'); return; }
+      if (act === 'skip') { closeModal(); if (api.skipUpdate) await api.skipUpdate(u.info.version).catch(() => {}); toast(`Version ${u.info.version} skipped. Check now in Settings → About still finds it.`, 'ok'); return; }
+      if (act === 'restart') { if (api.installUpdate) api.installUpdate(); return; }
+      if (act === 'go') {
+        if (u.info.manual) {
+          const cmd = u.info.installCommand || 'sudo pacman -Syu';
+          let ok = false;
+          try { ok = api.uiClipboardWrite ? await api.uiClipboardWrite(cmd) : (await navigator.clipboard.writeText(cmd), true); } catch (_) { ok = false; }
+          toast(ok ? `Copied. Run it in a terminal: ${cmd}` : cmd, 'ok');
+          return;
+        }
+        updateState.status = 'downloading';
+        updateState.percent = 0;
+        paintCard();
+        refreshRow();
+        if (api.downloadUpdate) api.downloadUpdate();
+      }
+    }
+
+    // a dialog never pops up over a game, the welcome or another dialog: a toast says so instead
+    function offer() {
+      const busy = Object.values(state.live || {}).some((v) => typeof v === 'number') || welcome.isOpen() || !$('#modal').hidden || bp.on;
+      if (busy && !updateState.manual) {
+        toast(`GameVault ${updateState.info.version} is available`, 'ok', [{ label: 'See what’s new', run: show }]);
+        return;
+      }
+      show();
+    }
+
+    function check({ manual = false } = {}) {
+      if (!api.checkForUpdates) return;
+      updateState.manual = manual;
+      updateState.status = 'checking';
+      refreshRow();
+      api.checkForUpdates(manual).catch(() => {});
+    }
+
+    let wired = false;
+    function init() {
+      if (wired || !api.onUpdateAvailable) return;
+      wired = true;
+      api.onUpdateChecking(() => { if (updateState.status !== 'downloading') { updateState.status = 'checking'; refreshRow(); } });
+      api.onUpdateAvailable((info) => {
+        updateState.info = info || null;
+        if (!info) return;
+        if (updateState.status !== 'downloading' && updateState.status !== 'ready') updateState.status = 'available';
+        updateState.checkedAt = Date.now();
+        refreshRow();
+        offer();
+        updateState.manual = false;
+      });
+      api.onUpdateNotAvailable(() => {
+        updateState.status = 'latest';
+        updateState.checkedAt = Date.now();
+        refreshRow();
+        if (updateState.manual) toast('You have the latest version of GameVault', 'ok');
+        updateState.manual = false;
+      });
+      api.onUpdateError((d) => {
+        const msg = (d && d.message) || 'Unable to check for updates.';
+        const wasDownloading = updateState.status === 'downloading';
+        updateState.status = 'error';
+        updateState.error = /net::|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(msg) ? 'you seem to be offline' : msg.split('\n')[0].slice(0, 160);
+        refreshRow();
+        if (updateState.manual || wasDownloading) toast(wasDownloading ? `The download stopped: ${updateState.error}` : `Couldn’t check for updates: ${updateState.error}`, 'error');
+        if (wasDownloading && updateState.info) { updateState.status = 'available'; paintCard(); }
+        updateState.manual = false;
+      });
+      if (api.onUpdateProgress) api.onUpdateProgress((p) => { updateState.status = 'downloading'; updateState.percent = Math.max(0, Math.min(100, Number(p && p.percent) || 0)); paintCard(); refreshRow(); });
+      if (api.onUpdateDownloaded) api.onUpdateDownloaded(() => {
+        updateState.status = 'ready';
+        refreshRow();
+        if (card && card.isConnected) paintCard();
+        else toast('The update is ready', 'ok', [{ label: 'Restart now', run: () => api.installUpdate && api.installUpdate() }]);
+      });
+      if (state.config.updateCheck !== false) setTimeout(() => check({ manual: false }), 8000);
+    }
+
+    return { init, check, show };
   })();
 
   // Spotlight hooks: filled in by the spotlight block at the end of the file.
@@ -9638,7 +9799,7 @@
         g.sessions.push({ start: sessionStart, end: sessionEnd, duration: hours });
         g.lastPlayed = sessionEnd || Date.now();
         saveGamesSoon();
-        if (g.saveDir && cloudOn('cloudSaves')) setTimeout(() => backupNow(g, { quiet: true }), 5000);
+        if (g.saveDir && savesMode()) setTimeout(() => backupNow(g, { quiet: true }), 5000);
       }
       refreshGameUi(g);
       repaintDetailHistory(g);
@@ -9731,7 +9892,8 @@
       const menuOpen = bp.menuOpen && menu && !menu.hidden;
       if (bp.menuOpen && !menuOpen) { bp.menuOpen = false; fixed.push('menu flag'); }
       if (!menuOpen && document.documentElement.classList.contains('bp-menu-open')) { document.documentElement.classList.remove('bp-menu-open'); fixed.push('menu lock'); }
-      if (app && app.inert && !modalOpen && !menuOpen) { app.inert = false; fixed.push('inert app'); }
+      // the welcome keeps the app inert behind it on purpose
+      if (app && app.inert && !modalOpen && !menuOpen && !welcome.isOpen()) { app.inert = false; fixed.push('inert app'); }
       const scrim = $('#scrim');
       if (scrim && scrim.classList.contains('open') && !spotHooks.isOpen()) { scrim.classList.remove('open'); fixed.push('search backdrop'); }
       if (fixed.length) reportError('unstick', new Error(`cleared: ${fixed.join(', ')}`));
@@ -9891,6 +10053,7 @@
 
     initGovernor();
     step('welcome', () => welcome.maybeOpen());
+    step('updates', () => updates.init());
 
   }
 
@@ -11428,6 +11591,12 @@
       if (a === 'guide' || a === 'menu') { sfx('back'); return bpCloseMenu(); }
       if (!(a in PAD_KEYS) && a !== 'confirm' && a !== 'back') return;
     }
+    // the welcome holds the controller: move, pick, back, scroll; LB / RB step
+    // through it. Nothing reaches the library behind it.
+    if (welcome.isOpen() && $('#modal').hidden) {
+      if (a === 'prev' || a === 'next') { welcome.stepBy(a === 'next' ? 1 : -1); return padEnsureFocus(); }
+      if (!(a in PAD_KEYS) && !['confirm', 'back', 'pageUp', 'pageDown'].includes(a)) return;
+    }
     if (a in PAD_KEYS) return padMove(a);
     if (a === 'confirm') { sfx('select', null, document.activeElement); padConfirm(); return padEnsureFocus(); }
     if (a === 'back') { sfx('back'); padBack(); return padEnsureFocus(); }
@@ -11555,6 +11724,11 @@
       // at the top of a column (Settings menu or panel): up reaches the top bar
       if (!next && dir === 'up' && !fromTop) next = window.PadInput.pickNext(from, all.filter((c) => inTop(c.el)), dir);
     }
+    // in the welcome, down into the footer goes to Next (Back is B, or one step left)
+    if (next && dir === 'down' && next.el.matches('.wel-back') && !$('#welcome .wel-foot').contains(active)) {
+      const fwd = $('#welcome .wel-next');
+      if (padFocusable(fwd)) next = { el: fwd, rect: fwd.getBoundingClientRect() };
+    }
     if (next) {
       // coming into a list from outside (sidebar, settings menu, cover strip):
       // land on its selected item, not whichever happens to be nearest
@@ -11590,6 +11764,7 @@
     const el = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.body;
     // popups (sort menu, the game page menu, combo boxes) close on their own Escape
     if (padKey('Escape', el)) return;
+    if (welcome.isOpen() && $('#modal').hidden) return;
     // nothing was open: B takes you back to the library's current game
     if (atRoot) padFocusDefault();
   }
@@ -11674,6 +11849,7 @@
     if (bp.menuOpen) { add(['a'], 'Select'); add(['b'], 'Close'); }
     else if (spotHooks.isOpen()) { add(['a'], 'Open'); add(['b'], 'Close'); }
     else if (modalOpen || customize.isOpen()) { add(['a'], 'Select'); add(['b'], 'Close'); }
+    else if (welcome.isOpen()) { add(['a'], 'Select'); add(['b'], 'Back'); add(['lb', 'rb'], 'Step'); }
     else if (state.settingsOpen) { add(['a'], 'Select'); add(['lb', 'rb'], 'Section'); add(['b'], 'Back'); }
     else {
       const a = document.activeElement;

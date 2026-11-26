@@ -336,10 +336,11 @@ function normalizeLegacyFileUrl(value) {
 // publicConfig() with has*Key flags.
 // ---------------------------------------------------------------------------
 
-const SECRET_KEYS = ['sgdbKey', 'steamKey'];
-// unused since 2.0 (the AI advisor was removed: its key is deleted, not kept)
-const DEAD_KEYS = ['deepseekKey', 'cornerRadius', 'aiKey', 'aiEnabled', 'aiProvider', 'aiCustomEndpoint', 'aiCustomModel', 'overlayHotkey'];
-const DEAD_SECRETS = ['aiKey'];
+const SECRET_KEYS = ['sgdbKey'];
+// unused since 2.0 (the AI advisor and the Steam Web API key were removed:
+// their keys are deleted, not kept)
+const DEAD_KEYS = ['steamKey', 'steamId', 'deepseekKey', 'cornerRadius', 'aiKey', 'aiEnabled', 'aiProvider', 'aiCustomEndpoint', 'aiCustomModel', 'overlayHotkey'];
+const DEAD_SECRETS = ['aiKey', 'steamKey'];
 
 const CONFIG_DEFAULTS = {
   captureShotHotkey: 'Alt+Shift+S',
@@ -512,7 +513,6 @@ function mergeConfig(patch) {
 function publicConfig(cfg) {
   const out = { ...(cfg || loadConfig()) };
   out.hasSgdbKey = !!out.sgdbKey;
-  out.hasSteamKey = !!out.steamKey;
   for (const k of SECRET_KEYS) delete out[k];
   return out;
 }

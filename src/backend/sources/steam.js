@@ -61,49 +61,7 @@ function activeSteamId() {
   return users.length ? users[0].steamId : null;
 }
 
-const TOOL_IDS = new Set([228980, 1070560, 1391110, 1628350, 1493710, 2348590, 250820]);
 const TOOL_RE = /^(steam linux runtime|steamworks common redistributables|steamvr|proton |steam controller configs|steam play)/i;
-
-function parseOwned(payload) {
-  const games = (payload && payload.response && payload.response.games) || [];
-  const out = [];
-  for (const g of games) {
-    if (!g || !g.name) continue;
-    if (TOOL_IDS.has(Number(g.appid)) || TOOL_RE.test(g.name)) continue;
-    out.push({
-      name: g.name,
-      source: 'Steam account',
-      sourceId: `steam:${g.appid}`,
-      exePath: '',
-      installDir: '',
-      hours: Math.round(((Number(g.playtime_forever) || 0) / 60) * 100) / 100,
-      steamAppId: Number(g.appid) || null,
-      iconPath: '',
-      ownedOnly: true,
-    });
-  }
-  return out;
-}
-
-async function fetchOwned({ key, steamId }) {
-  if (!key || !steamId) return { ok: false, error: { code: 'NOT_CONFIGURED', message: 'Steam API key or SteamID missing' } };
-  const url = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${encodeURIComponent(key)}&steamid=${encodeURIComponent(steamId)}&include_appinfo=1&include_played_free_games=1&format=json`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) return { ok: false, error: { code: res.status === 403 ? 'AUTH' : 'HTTP', message: `Steam returned ${res.status}` } };
-    const json = await res.json();
-    if (!json.response || json.response.game_count === undefined) {
-      return { ok: false, error: { code: 'PRIVATE', message: 'Steam returned no games — profile may be private' } };
-    }
-    return { ok: true, data: parseOwned(json), count: json.response.game_count };
-  } catch (err) {
-    return { ok: false, error: { code: err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK', message: err.message } };
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 function scanInstalled() {
   try {
@@ -135,8 +93,6 @@ module.exports = {
   steamRoots,
   detect: () => steamRoots().length > 0,
   scanInstalled,
-  scanOwned: fetchOwned,
-  parseOwned,
   parseLoginUsers,
   loginUsers,
   activeSteamId,

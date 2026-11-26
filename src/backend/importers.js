@@ -66,7 +66,6 @@ const SYNC_NOTES = {
   rockstar: 'Rockstar keeps no game list GameVault can read safely.',
   riot: 'Riot keeps no game list GameVault can read safely.',
   playnite: 'Playnite import is not available yet.',
-  'steam-owned': 'Your Steam account is imported on request.',
   pc: 'A whole-PC scan needs you to pick what is a game.',
   folder: 'Folders are scanned when you ask.',
   file: 'Files are added one at a time.',
@@ -75,8 +74,6 @@ const SYNCABLE = new Set(['steam', 'epic', 'gog', 'heroic', 'legendary', 'lutris
 
 function listSources() {
   const sources = [];
-  let cfg = {};
-  try { cfg = require('./data.js').loadConfig() || {}; } catch (_) {}
   const add = (src) => {
     const sync = SYNCABLE.has(src.id);
     sources.push({ ...src, sync, syncNote: sync ? '' : (SYNC_NOTES[src.id] || 'This source can only be imported by hand.') });
@@ -131,13 +128,6 @@ function listSources() {
     const hydra = require('./sources/hydra.js');
     add({ id: 'hydra', label: 'Hydra', found: !!(hydra.detect && hydra.detect(HOME)), hint: 'Hydra library' });
   } catch (_) {}
-
-  add({
-    id: 'steam-owned',
-    label: 'Steam account',
-    found: !!cfg.steamKey,
-    hint: cfg.steamKey ? 'Owned library' : 'Add a Steam API key in Settings',
-  });
 
   add({
     id: 'pc',
@@ -264,14 +254,6 @@ async function scanSource(id, arg) {
       const hydra = require('./sources/hydra.js');
       // Only installed builds: an entry without a real executable can't be played.
       return hydra.scan({ homeDir: HOME }).filter((c) => c.exePath && has(c.exePath));
-    }
-    if (id === 'steam-owned') {
-      const steam = require('./sources/steam.js');
-      let cfg = {};
-      try { cfg = require('./data.js').loadConfig() || {}; } catch (_) {}
-      const res = await steam.scanOwned({ key: cfg.steamKey, steamId: cfg.steamId || steam.activeSteamId() });
-      if (res && res.ok) return res.data;
-      return { error: (res && res.error && res.error.message) || 'Steam account not connected' };
     }
     if (id === 'lutris') return scanLutris();
     if (id === 'heroic') return launchers.scanHeroic();

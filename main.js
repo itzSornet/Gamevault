@@ -15,8 +15,7 @@ const platform = require('./src/backend/platform.js');
 const { DATA_PATH, CONFIG_PATH, loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync } = require('./src/backend/data.js');
 const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
-const steamSource = require('./src/backend/sources/steam.js');
-const { configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions } = require('./src/backend/tracker.js');
+const { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions } = require('./src/backend/tracker.js');
 
 const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
@@ -183,6 +182,26 @@ function setLinuxAutostart(enable) {
   }
 }
 
+// Settings → General → When a game starts. GameVault steps aside while a game
+// it launched runs, and comes back once no game is running any more.
+let steppedAside = false;
+function stepAsideForGame() {
+  if (!win || win.isDestroyed() || backgroundMode) return;
+  const mode = loadConfig().onGameStart;
+  if (mode !== 'minimize' && mode !== 'tray') return;
+  steppedAside = true;
+  if (mode === 'tray' && tray) win.hide();
+  else win.minimize();
+}
+function comeBackAfterGame() {
+  if (!steppedAside || !win || win.isDestroyed()) return;
+  if (runningGameIds().length) return; // another game is still running
+  steppedAside = false;
+  if (!win.isVisible()) win.show();
+  if (win.isMinimized()) win.restore();
+  win.focus();
+}
+
 function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
   const sid = String(gameId);
   // already running, or launched a moment ago (a double click, the tray while
@@ -207,6 +226,7 @@ function launchGame(gameId, exePath, installDir, steamAppId, launcherPath) {
 
   // Runs once the launch really happened: lastPlayed + backfill, via the queue.
   const afterLaunch = () => {
+    stepAsideForGame();
     if (!gameRecord) return;
     const tp = trackedProcesses[sid];
     const patch = { lastPlayed: Date.now() };
@@ -1085,138 +1105,80 @@ function createWindow() {
   ipcMain.handle('config:save', (_, patch) => {
     const merged = mergeConfig(patch);
     if (patch && 'captureFindOthers' in patch) { findOthersOn = merged.captureFindOthers !== false; Finder.invalidate(); }
+    if (patch && 'afkMinutes' in patch) setAfkMinutes(merged.afkMinutes);
     return publicConfig(merged);
+  });
+  // Settings → General → Reset all settings: the listed preferences are removed,
+  // so their defaults apply again. Data (games, account, imports) is never listed.
+  const RESETTABLE = new Set(['ui', 'palette', 'uiAt', 'tier', 'padEnabled', 'padGlyphs', 'view', 'sfx', 'sfxVolume', 'sfxTheme', 'sfxNav',
+    'startBigPicture', 'closeToTray', 'onGameStart', 'afkMinutes', 'bgDetect', 'updateCheck', 'perfLog',
+    'captureShotHotkey', 'captureClipHotkey', 'captureGameAudio', 'captureMic', 'captureFindOthers']);
+  ipcMain.handle('config:reset', (_, keys) => {
+    try {
+      const cfg = loadConfig();
+      for (const k of Array.isArray(keys) ? keys : []) if (RESETTABLE.has(k)) delete cfg[k];
+      saveConfig(cfg);
+      setAfkMinutes(0);
+      findOthersOn = true;
+      Finder.invalidate();
+      uiZoom = 1;
+      return true;
+    } catch (e) {
+      console.warn('config reset:', e.message);
+      return false;
+    }
+  });
+
+  // Settings → Library → Artwork on this PC: its size, and removing files no
+  // game (or any setting) points to any more
+  const artDir = () => path.join(path.dirname(DATA_PATH), 'artworks_cache');
+  function artCacheScan() {
+    const dir = artDir();
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (_) { return { files: 0, bytes: 0, unused: [], unusedBytes: 0 }; }
+    // every JSON file next to the library can point at artwork (games, config, wishlist)
+    let refs = '';
+    try {
+      for (const n of fs.readdirSync(path.dirname(DATA_PATH))) {
+        if (/\.json$/i.test(n)) { try { refs += fs.readFileSync(path.join(path.dirname(DATA_PATH), n), 'utf8'); } catch (_) {} }
+      }
+    } catch (_) {}
+    const decoded = (() => { try { return decodeURIComponent(refs); } catch (_) { return refs; } })();
+    let files = 0, bytes = 0, unusedBytes = 0;
+    const unused = [];
+    const freshCutoff = Date.now() - 60 * 60 * 1000; // never touch anything from the last hour
+    for (const n of names) {
+      let st;
+      try { st = fs.statSync(path.join(dir, n)); } catch (_) { continue; }
+      if (!st.isFile()) continue;
+      files += 1;
+      bytes += st.size;
+      if (n.endsWith('.part') || st.mtimeMs > freshCutoff) continue;
+      if (!refs.includes(n) && !decoded.includes(n)) { unused.push(n); unusedBytes += st.size; }
+    }
+    return { files, bytes, unused, unusedBytes };
+  }
+  ipcMain.handle('art:cache-info', () => {
+    const r = artCacheScan();
+    return { files: r.files, bytes: r.bytes, unusedFiles: r.unused.length, unusedBytes: r.unusedBytes };
+  });
+  ipcMain.handle('art:cache-clean', () => {
+    try {
+      const r = artCacheScan();
+      let freed = 0;
+      for (const n of r.unused) {
+        try { const p = path.join(artDir(), n); const size = fs.statSync(p).size; fs.rmSync(p, { force: true }); freed += size; } catch (_) {}
+      }
+      return { ok: true, files: r.unused.length, bytes: freed };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   ipcMain.handle('detect:steam', () => detectSteamGames());
   ipcMain.handle('detect:epic', () => detectEpicGames());
   ipcMain.handle('detect:lutris', () => detectLutrisGames());
   ipcMain.handle('import:sources', () => importers.listSources());
-  ipcMain.handle('steam:account', () => {
-    const { users } = steamSource.loginUsers();
-    return { users, active: steamSource.activeSteamId() };
-  });
-  function mapSteamWebGames(games) {
-    const out = [];
-    for (const g of games || []) {
-      const name = g && g.name;
-      if (!name) continue;
-      const raw = String(g.hours_forever || g.hours || '0').replace(/,/g, '');
-      out.push({
-        name,
-        source: 'Steam account',
-        sourceId: `steam:${g.appid}`,
-        exePath: '', installDir: '',
-        hours: Math.round((Number(raw) || 0) * 100) / 100,
-        steamAppId: Number(g.appid) || null,
-        iconPath: '', ownedOnly: true,
-      });
-    }
-    return out;
-  }
-
-  async function sessionJson(authWin, url) {
-    const ses = authWin.webContents.session;
-    const cookies = await ses.cookies.get({ url });
-    const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    const res = await fetch(url, {
-      headers: { Cookie: cookie, 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) GameVault/2.0' },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    try { return JSON.parse(text); } catch (_) { return { raw: text }; }
-  }
-
-  ipcMain.handle('steam:login', async () => {
-    const steamId = steamSource.activeSteamId();
-    if (!steamId) return { ok: false, error: { code: 'NO_ID', message: 'No Steam login found on this machine' } };
-    return new Promise((resolve) => {
-      const authWin = new BrowserWindow({
-        width: 1000, height: 760, parent: win, modal: true, show: true,
-        title: 'Sign in to Steam',
-        webPreferences: { partition: 'persist:steam-login', contextIsolation: true, nodeIntegration: false },
-      });
-      let done = false;
-      let poll = null;
-      const stopPoll = () => { if (poll) { clearInterval(poll); poll = null; } };
-      const finish = (result) => {
-        if (done) return;
-        done = true;
-        stopPoll();
-        resolve(result);
-        if (!authWin.isDestroyed()) authWin.destroy();
-      };
-
-      const readGames = () => authWin.webContents.executeJavaScript(`(() => {
-        try {
-          if (typeof rgGames !== 'undefined' && Array.isArray(rgGames)) return rgGames;
-          if (Array.isArray(window.rgGames)) return window.rgGames;
-        } catch (e) {}
-        const anchors = [...document.querySelectorAll('a[href*="/app/"]')];
-        const out = new Map();
-        for (const a of anchors) {
-          const m = (a.getAttribute('href') || '').match(/\\/app\\/(\\d+)/);
-          if (!m) continue;
-          const appid = Number(m[1]);
-          if (out.has(appid)) continue;
-          let node = a;
-          for (let depth = 0; depth < 7 && node; depth++, node = node.parentElement) {
-            const text = node.innerText || '';
-            if (!/TOTAL PLAYED/i.test(text) || text.length > 500) continue;
-            const img = a.querySelector('img') || node.querySelector('img');
-            const name = (a.innerText || '').trim() || (img && img.alt ? img.alt.trim() : '');
-            if (!name) break;
-            const hm = text.match(/TOTAL PLAYED\\s*([\\d.,]+)\\s*(minutes?|hours?|hrs?)/i);
-            let hours = 0;
-            if (hm) {
-              const n = parseFloat(hm[1].replace(/,/g, ''));
-              hours = /hour|hr/i.test(hm[2]) ? n : n / 60;
-            }
-            out.set(appid, { appid, name, hours: Math.round(hours * 100) / 100 });
-            break;
-          }
-        }
-        return out.size ? [...out.values()] : null;
-      })()`).catch(() => null);
-
-      const complete = async (games) => {
-        stopPoll();
-        try {
-          const owned = mapSteamWebGames(games);
-          const wish = await sessionJson(authWin, `https://store.steampowered.com/wishlist/profiles/${steamId}/wishlistdata/?p=0`).catch(() => null);
-          const wishlist = wish && typeof wish === 'object' && !wish.raw ? Object.keys(wish).filter((k) => /^\d+$/.test(k)).map((id) => ({ appid: Number(id), name: wish[id] && wish[id].name })) : [];
-          const friendsRaw = await sessionJson(authWin, 'https://steamcommunity.com/actions/ajaxgetfriendslist').catch(() => null);
-          const friends = (friendsRaw && friendsRaw.friendslist && friendsRaw.friendslist.friends) || [];
-          console.log('[steam] login ok', { owned: owned.length, wishlist: wishlist.length, friends: friends.length });
-          finish({ ok: true, data: { owned, wishlist, friends, profile: null } });
-        } catch (e) {
-          finish({ ok: false, error: { code: 'PARSE', message: e.message } });
-        }
-      };
-
-      const startPolling = () => {
-        if (poll || done) return;
-        let tries = 0;
-        const tick = async () => {
-          if (done || authWin.isDestroyed()) { stopPoll(); return; }
-          tries += 1;
-          const games = await readGames();
-          if (tries === 1 || tries % 10 === 0) console.log('[steam] poll', tries, 'games=', Array.isArray(games) ? games.length : 0);
-          if (Array.isArray(games) && games.length) { complete(games); return; }
-          if (tries > 100) { stopPoll(); finish({ ok: false, error: { code: 'NO_GAMES', message: 'Signed in, but Steam never loaded your games page' } }); }
-        };
-        poll = setInterval(tick, 1200);
-        tick();
-      };
-
-      authWin.webContents.on('did-finish-load', startPolling);
-      authWin.webContents.on('did-navigate-in-page', startPolling);
-      authWin.on('closed', () => finish({ ok: false, error: { code: 'CANCELLED', message: 'Sign-in window closed' } }));
-      authWin.loadURL(`https://steamcommunity.com/profiles/${steamId}/games/?tab=all`);
-    });
-  });
-
   const PERF_LOG = path.join(app.getPath('userData'), 'perf.log');
   ipcMain.on('perf:log', (_, sample) => {
     try {
@@ -1232,10 +1194,6 @@ function createWindow() {
     try { return app.getGPUFeatureStatus(); } catch (e) { return {}; }
   });
 
-  ipcMain.handle('steam:owned', async (_, payload = {}) => {
-    const cfg = loadConfig() || {};
-    return steamSource.scanOwned({ key: payload.key || cfg.steamKey, steamId: payload.steamId || cfg.steamId || steamSource.activeSteamId() });
-  });
   ipcMain.handle('import:scan', (_, id) => importers.scanSource(id));
   ipcMain.handle('import:folder', async () => {
     const result = await dialog.showOpenDialog(win, {
@@ -1522,6 +1480,33 @@ function createWindow() {
     const d = cloud().safetyFolder(String(gameId || ''));
     if (d) shell.openPath(d);
     return !!d;
+  });
+
+  // The same, kept on this PC with no account (Settings → Backups)
+  let localSavesInstance = null;
+  const localSaves = () => {
+    if (!localSavesInstance) {
+      const { createLocalSaves } = require('./src/backend/local-saves.js');
+      localSavesInstance = createLocalSaves({ dir: path.join(path.dirname(DATA_PATH), 'save-copies'), device: require('os').hostname() || 'This PC' });
+    }
+    return localSavesInstance;
+  };
+  ipcMain.handle('lsaves:backup', (_, p) => accountReply(() => localSaves().backupSaves(p || {})));
+  ipcMain.handle('lsaves:list', (_, gameId) => accountReply(() => localSaves().listBackups(gameId)));
+  ipcMain.handle('lsaves:restore', (_, p) => accountReply(() => localSaves().restoreBackup(p || {})));
+  ipcMain.handle('lsaves:delete', (_, id) => accountReply(() => localSaves().deleteBackup(id)));
+  ipcMain.handle('lsaves:overview', () => accountReply(() => localSaves().overview()));
+  ipcMain.handle('lsaves:has-previous', (_, gameId) => !!localSaves().safetyFolder(String(gameId || '')));
+  ipcMain.handle('lsaves:open-previous', (_, gameId) => {
+    const d = localSaves().safetyFolder(String(gameId || ''));
+    if (d) shell.openPath(d);
+    return !!d;
+  });
+  ipcMain.handle('lsaves:open-folder', () => {
+    const d = localSaves().folder();
+    try { fs.mkdirSync(d, { recursive: true }); } catch (_) {}
+    shell.openPath(d);
+    return true;
   });
 
   // A copy of the library the user keeps (export) and puts back (restore)
@@ -2042,6 +2027,8 @@ app.whenReady().then(() => {
   createWindow();
   // a tray failure must not stop the rest of start-up (hotkeys, image cache)
   try { createTray(); } catch (err) { console.warn('tray:', err && err.message); }
+  try { setAfkMinutes(loadConfig().afkMinutes); } catch (_) {}
+  onSessionEnd(() => comeBackAfterGame());
   const cfg = loadConfig();
   Capture.setup({
     mediaDir: () => path.join(path.dirname(DATA_PATH), 'data_media'),
