@@ -162,7 +162,8 @@ function createAccount(opts = {}) {
     return {
       access_token: json.access_token,
       refresh_token: json.refresh_token,
-      expires_at: json.expires_at ? json.expires_at * 1000 : now() + (json.expires_in || 3600) * 1000,
+      // from this PC's clock: the server's own expires_at is wrong here when the clock is off
+      expires_at: json.expires_in ? now() + json.expires_in * 1000 : json.expires_at ? json.expires_at * 1000 : now() + 3600 * 1000,
       user: {
         id: u.id || null,
         email: u.email || null,

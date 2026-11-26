@@ -151,7 +151,7 @@ function createCloud(opts) {
     return { access, uid: st.user.id };
   }
 
-  async function call(method, url, { body, headers = {}, raw = false, access } = {}) {
+  async function call(method, url, { body, headers = {}, raw = false, access } = {}, retried = false) {
     let res;
     try {
       res = await doFetch(`${cloudUrl}${url}`, {
@@ -167,6 +167,13 @@ function createCloud(opts) {
       });
     } catch (e) {
       throw err('NETWORK', 'Can’t reach Gamevault Cloud. Check your connection.');
+    }
+    // the cloud turned down a token this PC still thinks is good (its clock is
+    // off, or the session ended on the server): get a fresh one and try once more
+    if (res.status === 401 && !retried) {
+      const fresh = await account.token({ forceNew: true });
+      if (!fresh) throw err('SIGNED_OUT', 'You were signed out. Sign in again to use cloud features.');
+      return call(method, url, { body, headers, raw, access: fresh }, true);
     }
     if (!res.ok) {
       const j = await res.json().catch(() => null);

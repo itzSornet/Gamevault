@@ -133,6 +133,7 @@ const T = 1_800_000_000_000;
     const u = new URL(url);
     const p = u.pathname;
     const body = init.body && !Buffer.isBuffer(init.body) ? JSON.parse(init.body) : init.body;
+    if (db.reject && init.headers && init.headers.Authorization === 'Bearer ' + db.reject) return resp(401, { message: 'JWT expired' });
     if (p === '/rest/v1/library_sync') {
       if (init.method === 'GET') return resp(200, db.library ? [db.library] : []);
       if (init.method === 'POST') { if (db.library) return resp(409, { message: 'dup' }); db.library = { data: body.data, version: 1 }; return resp(201, null); }
@@ -165,7 +166,7 @@ const T = 1_800_000_000_000;
     }
     return resp(404, { message: `no route ${init.method} ${p}` });
   };
-  const account = { token: async () => 'tok', status: () => ({ signedIn: true, user: { id: 'user-1' } }) };
+  const account = { fresh: null, async token(o = {}) { return o.forceNew ? this.fresh : 'tok'; }, status: () => ({ signedIn: true, user: { id: 'user-1' } }) };
   const cloud = createCloud({ dir, cloudUrl: 'https://x', anonKey: 'pk', account, fetch, now: () => clock });
 
   const s1 = await cloud.syncLibrary([{ id: 'a', name: 'Alpha', hours: 1, sessions: [], exePath: 'C:\\a.exe' }]);
@@ -242,6 +243,14 @@ const T = 1_800_000_000_000;
   assert.ok(safety);
   assert.strictEqual(fs.readdirSync(safety).length, 3);
   assert.strictEqual(cloud.safetyFolder('nothing-here'), null);
+
+  // the cloud turns down a token this PC thinks is good (clock off, session
+  // ended): one more try with a fresh token; no fresh token means signed out
+  db.reject = 'tok'; account.fresh = 'tok2';
+  assert.ok((await cloud.listBackups('a')).length > 0, 'retried with a fresh token');
+  account.fresh = null;
+  await assert.rejects(cloud.listBackups('a'), (e) => e.code === 'SIGNED_OUT');
+  db.reject = null;
 
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(saveDir, { recursive: true, force: true });
