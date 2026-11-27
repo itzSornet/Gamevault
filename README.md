@@ -1,139 +1,61 @@
 <div align="center">
-  <img src="src/icon.ico" alt="GameVault Logo" width="100" />
+  <img src="src/icon.png" alt="GameVault" width="96" />
   <h1>GameVault</h1>
-  <p><strong>A modern, privacy-first personal game library manager, launcher, and playtime tracker.</strong></p>
+  <p><strong>All your PC games in one library. It counts your playtime, launches anything, and works without an account.</strong></p>
 
   <p>
-    <a href="https://github.com/itzSornet/Gamevault/releases"><img src="https://img.shields.io/badge/version-1.3.1-blue.svg?style=flat-square" alt="Version 1.3.1" /></a>
-    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blueviolet.svg?style=flat-square" alt="Platform: Windows | Linux" />
-    <img src="https://img.shields.io/badge/electron-v29-47848f.svg?style=flat-square" alt="Electron" />
-    <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License: MIT" />
+    <a href="https://github.com/itzSornet/Gamevault/releases/latest"><img src="https://img.shields.io/github/v/release/itzSornet/Gamevault?style=flat-square" alt="Latest release" /></a>
+    <img src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square" alt="Platform: Windows" />
+    <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT" />
   </p>
 
-  <br />
-  <img src="src/screenshot.png" alt="GameVault Screenshot" width="850" style="border-radius: 12px; box-shadow: 0 16px 40px rgba(0,0,0,0.6);" />
-  <br /><br />
+  <img src="docs/library.jpg" alt="The GameVault library" width="860" />
 </div>
 
----
+## What it does
 
-## ✨ Features
+- **One library for every launcher.** Import from Steam, Epic Games, GOG, Xbox and Game Pass, Battle.net, the EA app, Ubisoft Connect, Rockstar, Riot, itch.io, Heroic, Legendary and Hydra, or point it at a folder or a single game file. Turn on sync and new installs show up by themselves.
+- **Playtime that counts itself.** GameVault notices when a game runs, even one you started from another launcher, and keeps every session. Time spent away from the keyboard isn't counted.
+- **A page for every game.** Your sessions by day, your habits, a short description, critic scores and system requirements. Artwork, logos and banners are filled in for you.
+- **Ratings, and your Peak games.** Rate games from 0.1 to 10. A 10 is a Peak: the game's cover gets a torn paper strap in its own colours.
+- **A wishlist with prices.** Keep the games you want and see their current price and sales.
+- **Screenshots and clips.** Press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> for a screenshot and <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> to record a clip while you play. They're tagged with the game, along with the ones you take in Steam, NVIDIA or the Xbox Game Bar.
+- **Big Picture.** A full-screen mode for the TV, made for a controller. The controller works everywhere else in the app too.
+- **Make it yours.** Sidebar, dock, top bar or no navigation at all; colour palettes, your own accent, glass, backgrounds and sizes.
+- **Save backups.** Copies of your game saves on your PC, and in the cloud if you sign in.
+- **An optional account.** Sign in to sync your library between PCs and back up saves to the cloud. Everything else works without one. See [PRIVACY.md](PRIVACY.md).
 
-- **🎮 Unified Game Library**: Organize and launch all your games from one centralized vault — Steam, Epic Games, GOG, standalone executables, and emulated titles.
-- **🚀 Secondary Launcher Support**: Play games with custom launchers or performance wrappers while accurately tracking playtime on the true game process.
-- **🔍 Multi-Platform Library Scanner**: One-click detection for installed Steam and Epic Games titles, custom directory scanning, and deep filesystem heuristics.
-- **⏱️ Automated Playtime Tracking**: Background process monitor detects game launches automatically and logs play sessions down to the minute with weekly breakdowns and 30-day activity logs.
-- **🤖 Hardware-Aware AI Advisor**: Bring your own API key (*OpenAI, Anthropic Claude, Google Gemini, DeepSeek, or custom endpoints*) for personalized recommendations and hardware performance estimation based on your CPU and GPU.
-- **🖼️ SteamGridDB Cover Art**: Automatic high-resolution vertical covers and ultra-wide hero banner art integration.
-- **🎨 Custom Theming & Dynamic Grid**: Built-in curated themes (*Default, Midnight, Cyberpunk, Crimson, Monochrome, Ocean, AMOLED, Sunset*) plus a full custom theme builder, corner radius slider, and configurable Cards-per-Row scaling (4 to 12 columns).
-- **🖱️ Modern Frosted-Glass Menus**: Dynamic ambient game glows, one-click "Open File Location", quick status switching, and sleek context menus.
-- **⚡ In-Game Overlay & Media Capture**: Access your library and game advisor in-game via global hotkey (`Shift+Alt+G`) with built-in screenshot and clip capture.
+<div align="center">
+  <img src="docs/game-page.jpg" alt="A game's page in GameVault" width="860" />
+</div>
 
----
+## Install
 
-## 🚀 Getting Started
+Download **GameVault Setup** from the [latest release](https://github.com/itzSornet/Gamevault/releases/latest) and run it. GameVault updates itself after that.
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher recommended)
-- [npm](https://www.npmjs.com/)
+Coming from GameVault 1.x? Install over it: your games, playtime, ratings and settings carry over.
 
-### Installation
+Windows 10 and 11. A Linux build will come back in a later update.
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/itzSornet/Gamevault.git
-   cd Gamevault
-   ```
+## Build from source
 
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Launch the application:**
-   ```bash
-   npm start
-   ```
-
----
-
-## 📦 Building Executables
-
-GameVault is packaged using `electron-builder`:
-
-- **Windows NSIS Installer (`.exe`):**
-   ```bash
-   npm run build
-   ```
-
-- **Portable Executable (`.exe`):**
-  ```bash
-  npm run build:portable
-  ```
-
-Build artifacts are generated directly in the `dist/` directory.
-
-### Arch Linux (pacman)
-
-One command:
+You need [Node.js](https://nodejs.org/) 22 or newer.
 
 ```bash
-curl -fsSL https://itzsornet.github.io/Gamevault/install.sh | sudo bash
+git clone https://github.com/itzSornet/Gamevault.git
+cd Gamevault
+npm install
+npm start          # run the app
+npm test           # run the tests
+npm run build      # build the Windows installer into dist/
 ```
 
-It adds the `[gamevault]` repository once, then installs and upgrades normally
-through `pacman -Syu`.
+`cloud/` holds the server side of the optional account (Supabase); see [cloud/SETUP.md](cloud/SETUP.md).
 
-<details>
-<summary>Prefer to do it manually?</summary>
+## Where your data lives
 
-```bash
-printf '[gamevault]\nServer = https://itzsornet.github.io/Gamevault/x86_64\nSigLevel = Optional TrustAll\n' | sudo tee /etc/pacman.d/gamevault.conf
-echo 'Include = /etc/pacman.d/gamevault.conf' | sudo tee -a /etc/pacman.conf
-sudo pacman -Syu
-sudo pacman -S gamevault
-```
-</details>
+Everything is stored on your PC in `%APPDATA%\GameVault`: your library (`games.json`), settings (`config.json`), cached artwork, and your screenshots and clips.
 
-### Any distro (AppImage)
+## License
 
-No root, no setup:
-
-```bash
-curl -LO https://github.com/itzSornet/Gamevault/releases/latest/download/GameVault-1.3.1.AppImage
-chmod +x GameVault-1.3.1.AppImage
-./GameVault-1.3.1.AppImage
-```
-
-Package recipe: [`packaging/pacman/PKGBUILD`](packaging/pacman/PKGBUILD).
-The pacman package installs to `/opt/gamevault` with `/usr/bin/gamevault`, a
-desktop entry and a hicolor icon. The in-app updater detects new releases on
-those installs but leaves the upgrade to `pacman`.
-
----
-
-## ⚙️ Configuration & Optional Integrations
-
-GameVault works completely offline and stores your library locally. To enable extended artwork and AI features, configure your free API keys in **Settings > Integrations**:
-
-| Provider | Purpose | Link |
-| :--- | :--- | :--- |
-| **SteamGridDB** | High-res game posters and hero banners | [steamgriddb.com/api](https://www.steamgriddb.com/profile/preferences/api) |
-| **OpenAI / Claude / Gemini / DeepSeek** | Hardware performance estimation & AI advisor | Configure in Settings |
-
-### Local Data Storage
-All library data and preferences are saved locally on your device:
-```
-%APPDATA%\gamevault\
-├── games.json
-├── config.json
-├── ai-profile.json
-├── artworks_cache/
-└── data_media/
-```
-
----
-
-## 📄 License
-
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+[MIT](LICENSE)

@@ -1,12 +1,9 @@
 {
   "name": "gamevault",
-  "version": "1.3.1",
+  "version": "2.0.0",
   "description": "Modern personal game library manager, playtime tracker, and launcher.",
   "main": "main.js",
-  "author": {
-    "name": "itzSornet",
-    "email": "itzsornet@users.noreply.github.com"
-  },
+  "author": "itzSornet",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,13 +20,10 @@
   ],
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win --x64",
-    "build:linux": "electron-builder --linux",
+    "build": "electron-builder --win --x64",
     "build:portable": "electron-builder --win portable",
-    "release": "electron-builder --publish always",
-    "release:win": "electron-builder --win --x64 --publish always",
-    "release:linux": "electron-builder --linux --publish always"
+    "test": "node --test tests/",
+    "release:win": "electron-builder --win --x64 --publish always"
   },
   "build": {
     "appId": "com.gamevault.app",
@@ -44,6 +38,13 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "LICENSE",
+      "src/**/*"
+    ],
     "win": {
       "target": [
         {
@@ -55,21 +56,17 @@
       ],
       "icon": "src/icon.ico"
     },
-    "linux": {
-      "maintainer": "itzSornet <itzsornet@users.noreply.github.com>",
-      "target": [
-        "AppImage",
-        "pacman",
-        "tar.gz"
-      ],
-      "category": "Game",
-      "icon": "src/icon.png",
-      "synopsis": "Modern personal game library manager and playtime tracker",
-      "description": "GameVault is a sleek, modern personal game library manager, playtime tracker, and launcher."
-    },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "src/icon.ico",
+      "uninstallerIcon": "src/icon.ico",
+      "installerSidebar": "installer/sidebar.bmp",
+      "uninstallerSidebar": "installer/sidebar.bmp",
+      "installerHeader": "installer/header.bmp",
+      "shortcutName": "GameVault",
+      "runAfterFinish": true,
+      "include": "installer/installer.nsh"
     }
   },
   "devDependencies": {

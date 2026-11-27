@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { exec, execSync } = require('child_process');
 const { resolveSteamInstallDir, findMainExe } = require('./scanner.js');
+const platform = require('./platform.js');
 
 let trackerWin = null;
 function setTrackerWindow(w) { trackerWin = w; win = w; }
@@ -9,45 +9,144 @@ function setTrackerWindow(w) { trackerWin = w; win = w; }
 // Process tracking
 let trackedProcesses = {};
 let win = null;
-let overlayWin = null;
-let trackingInterval = null;
+let loopTimer = null;
 let isChecking = false;
 
-// Collect all exe names from a game's install directory (for launcher & child process detection)
-function collectGameExes(dirPath) {
-  if (!dirPath || !fs.existsSync(dirPath)) return [];
-  const exes = [];
-  const SKIP_FILES = [
-    'unins', 'setup', 'crash', 'redist', 'dxsetup', 'vcredist', 'directx', 'vc_redist',
-    'unarc', 'install', 'uninstall', '_commonredist', 'easyanticheat', 'battleye', 'touchup',
-    'dotnet', 'physx', 'epicwebhelper', 'unitycrashhandler', 'crashreport', 'support',
-    'prerequisites', 'launcher_helper'
-  ];
-  const SKIP_DIRS = [
-    '__pycache__', 'node_modules', '.git', '_commonredist', 'redist', 'directx',
-    'support', 'installer', 'install', 'prerequisites', 'crashpad', 'easyanticheat',
-    'battleye', 'touchup'
-  ];
+// Session rules (pending → running → grace → ended) live in tracker-core.js;
+// this file only gathers process snapshots, runs kills and talks IPC.
+const core = require('./tracker-core.js');
 
-  function scan(dir, depth) {
-    if (depth > 4) return;
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.isFile() && e.name.toLowerCase().endsWith('.exe')) {
-          const fl = e.name.toLowerCase();
-          if (!SKIP_FILES.some(s => fl.includes(s))) exes.push(fl);
-        } else if (e.isDirectory() && depth < 4) {
-          const dl = e.name.toLowerCase();
-          if (!SKIP_DIRS.some(d => dl.includes(d))) {
-            scan(path.join(dir, e.name), depth + 1);
-          }
-        }
-      }
-    } catch (e) {}
+// Per-game launch/track settings from the game record (trackMode, trackExe).
+// Set by launchGame before tracking starts.
+const trackConfig = {};
+const TRACK_MODES = ['auto', 'exe', 'steam', 'none'];
+function configureTracking(gameId, cfg) {
+  const c = cfg || {};
+  const mode = TRACK_MODES.includes(c.trackMode) ? c.trackMode : 'auto';
+  trackConfig[String(gameId)] = { trackMode: mode, trackExe: c.trackExe ? String(c.trackExe) : '' };
+}
+function configFor(sid) { return trackConfig[sid] || { trackMode: 'auto', trackExe: '' }; }
+
+function send(channel, payload) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+// main is told when a session ends (it brings back a window it hid for the game)
+let sessionEndHook = null;
+function onSessionEnd(fn) { sessionEndHook = typeof fn === 'function' ? fn : null; }
+
+// Settings → Playtime → Stop counting when I'm away: a stretch with no mouse
+// or keyboard input longer than this isn't counted. 0 = off.
+let afkMinutes = 0;
+function setAfkMinutes(n) { afkMinutes = [15, 30, 60].includes(Number(n)) ? Number(n) : 0; }
+function idleSeconds() {
+  try { return require('electron').powerMonitor.getSystemIdleTime(); } catch (_) { return 0; }
+}
+function closeAway(t, until) {
+  if (!t.awaySince) return;
+  t.awayMs = (t.awayMs || 0) + Math.max(0, until - t.awaySince);
+  t.awaySince = 0;
+}
+// once per poll for each game: open or close a stretch away from the PC
+function noteAway(t, now) {
+  if (!afkMinutes || !t.core || t.core.phase !== 'running') { closeAway(t, now); return; }
+  const idle = idleSeconds();
+  const lastInput = now - idle * 1000;
+  if (idle >= afkMinutes * 60) {
+    if (!t.awaySince) t.awaySince = Math.max(lastInput, t.core.sessionStart || 0);
+  } else {
+    closeAway(t, lastInput);
   }
-  scan(dirPath, 0);
-  return [...new Set(exes)];
+}
+
+function scheduleLoop(delay) {
+  if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
+  if (Object.keys(trackedProcesses).length === 0) return;
+  loopTimer = setTimeout(async () => {
+    loopTimer = null;
+    await checkAllTrackedProcesses();
+    if (!loopTimer) scheduleLoop(core.pollDelay(Object.values(trackedProcesses).map((t) => t.core), Date.now()));
+  }, delay);
+  if (loopTimer.unref) loopTimer.unref();
+}
+
+function stopLoop() {
+  if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
+}
+
+// Executable names found in a game's install directory. Bounded so a big
+// tree (node_modules, backups, a 30k-file game) can never block the main
+// thread — see platform.listLaunchableNamesSync.
+function collectGameExes(dirPath, opts) {
+  if (!dirPath || !fs.existsSync(dirPath)) return [];
+  return platform.listLaunchableNamesSync(dirPath, opts);
+}
+
+// Steam's own idea of what is running (HKCU\Software\Valve\Steam\RunningAppID).
+// Only asked while a Steam game is launching or running.
+async function steamRunningAppId() {
+  if (process.platform !== 'win32') return 0;
+  const res = await platform.runHelper('reg.exe', ['query', 'HKCU\\Software\\Valve\\Steam', '/v', 'RunningAppID'], { timeout: 3000 });
+  return res.ok ? platform.parseRunningAppId(res.stdout) : null;
+}
+
+// Translate core events into the IPC the renderer already understands.
+function emit(gameId, t, events) {
+  for (const e of events) {
+    if (e.type === 'started') {
+      t.running = true;
+      send('tracking:started', { gameId, sessionStart: e.sessionStart, resumed: !!e.resumed });
+    } else if (e.type === 'tick') {
+      send('tracking:tick', { gameId, sessionMins: e.sessionMs / 60000 });
+    } else if (e.type === 'session-end') {
+      t.running = false;
+      t.pid = 0; t.pgid = 0; t.childImage = '';
+      closeAway(t, e.sessionEnd || Date.now());
+      const sessionMs = (e.sessionHours || 0) * 3600000;
+      const awayMs = Math.min(sessionMs, t.awayMs || 0);
+      t.awayMs = 0;
+      send('tracking:session-end', {
+        gameId, sessionHours: Math.max(0, sessionMs - awayMs) / 3600000, sessionStart: e.sessionStart, sessionEnd: e.sessionEnd, discarded: !!e.discarded,
+        awayMinutes: Math.round(awayMs / 60000),
+      });
+      if (sessionEndHook) setImmediate(() => { try { sessionEndHook(String(gameId)); } catch (_) {} });
+    } else if (e.type === 'gave-up') {
+      send('tracking:gave-up', { gameId, reason: 'not-seen' });
+      if (sessionEndHook) setImmediate(() => { try { sessionEndHook(String(gameId)); } catch (_) {} });
+    }
+  }
+}
+
+// Names that count as "the game" for this tracked entry, per its track mode.
+function trackNamesFor(t) {
+  const cfg = configFor(t.gameId);
+  if (cfg.trackMode === 'none' || cfg.trackMode === 'steam') return [];
+  if (cfg.trackMode === 'exe') {
+    const n = trackableExeName(cfg.trackExe) || trackableExeName(t.exePath);
+    return n ? [n] : [];
+  }
+  // auto: never let a launcher or helper count as playing, and never another
+  // library game's own exe (several portable games often share one folder,
+  // and the folder walk would otherwise make them track each other).
+  const others = otherGamesExes(t.gameId);
+  const own = t.exeName || '';
+  return (t.allExeNames || []).filter((n) => !platform.isLauncherProcessName(n) && (n === own || !others.has(n)));
+}
+
+function otherGamesExes(sid) {
+  const out = new Set();
+  for (const [id, other] of Object.entries(trackedProcesses)) {
+    if (id === sid) continue;
+    if (other.exeName) out.add(other.exeName);
+    const te = trackableExeName(configFor(id).trackExe);
+    if (te) out.add(te);
+  }
+  return out;
+}
+
+function wantsSteam(t) {
+  const mode = configFor(t.gameId).trackMode;
+  return !!t.steamAppId && (mode === 'auto' || mode === 'steam');
 }
 
 // Single centralized check that inspects running processes once for all games
@@ -56,67 +155,95 @@ async function checkAllTrackedProcesses() {
   const gameIds = Object.keys(trackedProcesses);
   if (gameIds.length === 0) return;
 
-  const pollCmd = process.platform === 'win32' ? 'tasklist /NH /FO CSV' : 'ps -eo comm=,args=';
   isChecking = true;
   try {
-    const stdout = await new Promise(resolve => {
-      exec(pollCmd, { encoding: 'utf-8', timeout: 5000 }, (err, out) => {
-        resolve(err ? '' : (out || '').toLowerCase());
+    let snapshot = null;
+    let procList = null;
+    let runningAppId = 0;
+    const now = Date.now();
+
+    if (process.platform === 'win32') {
+      // Exact image names from the CSV, never a substring of the whole output.
+      snapshot = await platform.listWindowsProcesses();
+      if (!snapshot) return;
+      const askSteam = gameIds.some((id) => {
+        const t = trackedProcesses[id];
+        return t && wantsSteam(t) && core.isActive(t.core);
       });
-    });
+      if (askSteam) runningAppId = await steamRunningAppId();
+    } else {
+      procList = platform.readLinuxProcesses();
+    }
 
-    if (stdout) {
-      for (const gameId of gameIds) {
-        const t = trackedProcesses[gameId];
-        if (!t || !t.allExeNames || t.allExeNames.length === 0) continue;
+    for (const gameId of gameIds) {
+      const t = trackedProcesses[gameId];
+      if (!t) continue;
+      // the launcher we spawned has exited: its PID may be given to another
+      // program later, so Stop must not kill by it any more
+      if (snapshot && snapshot.byPid && t.pid && !snapshot.byPid.has(t.pid)) t.pid = 0;
+      if (configFor(gameId).trackMode === 'none') continue;
+      const names = trackNamesFor(t);
 
-        // Check if ANY executable belonging to this game is present in tasklist
-        const running = t.allExeNames.some(name => stdout.includes(name));
+      let viaSteam = false;
+      if (wantsSteam(t)) {
+        if (runningAppId === null) viaSteam = !!t.steamSeen; // registry read failed: keep the last answer
+        else if (runningAppId) viaSteam = String(t.steamAppId) === String(runningAppId);
+      }
+      t.steamSeen = viaSteam;
 
-        if (running && !t.running) {
-          t.running = true;
-          t.sessionStart = Date.now();
-          win && win.webContents.send('tracking:started', { gameId, sessionStart: t.sessionStart });
-        } else if (!running && t.running) {
-          const sessionEnd = Date.now();
-          const sessionHours = (sessionEnd - t.sessionStart) / 3600000;
-          t.running = false;
-          win && win.webContents.send('tracking:session-end', { gameId, sessionHours, sessionStart: t.sessionStart, sessionEnd });
-        }
-
-        if (running) {
-          const sessionMins = (Date.now() - t.sessionStart) / 60000;
-          win && win.webContents.send('tracking:tick', { gameId, sessionMins });
+      let pids = [];
+      if (names.length) {
+        if (process.platform === 'win32') {
+          pids = platform.pidsForNames(snapshot, names).filter((pid) => pid !== process.pid);
+        } else {
+          pids = (procList || []).filter((p) => platform.matchesGameProcess(p, names)).map((p) => p.pid);
         }
       }
+      t.pids = pids;
+      emit(gameId, t, core.observe(t.core, pids.length > 0 || viaSteam, now));
+      noteAway(t, now);
     }
-  } catch (e) {}
-  isChecking = false;
-}
-
-function ensureTrackingLoop() {
-  if (!trackingInterval) {
-    trackingInterval = setInterval(checkAllTrackedProcesses, 3000);
+  } catch (e) {
+    console.warn('[tracker]', e.message);
+  } finally {
+    isChecking = false;
   }
 }
 
-function registerTrackedGame(gameId, exePath, installDir, steamAppId) {
+// Name of the executable a tracked path stands for, or '' for things that are
+// not files (steam://..., shell:AppsFolder\..., a .lnk/.url shortcut).
+function trackableExeName(p) {
+  if (!p || !platform.isFilesystemPath(p)) return '';
+  const base = path.basename(p).toLowerCase();
+  if (/\.(lnk|url)$/.test(base)) return '';
+  if (platform.isProtectedProcessName(base)) return '';
+  return base;
+}
+
+function registerTrackedGame(gameId, exePath, installDir, steamAppId, pid) {
   const sid = String(gameId);
+  const fileExe = exePath && platform.isFilesystemPath(exePath) ? exePath : '';
   let resolvedInstallDir = installDir || '';
   if (!resolvedInstallDir && steamAppId) {
     resolvedInstallDir = resolveSteamInstallDir(steamAppId);
   }
-  if (!resolvedInstallDir && exePath) {
-    resolvedInstallDir = path.dirname(exePath);
+  if (!resolvedInstallDir && fileExe) {
+    resolvedInstallDir = path.dirname(fileExe);
+  }
+  // A relative dirname ('.') would make us walk the app's cwd — never do that.
+  if (resolvedInstallDir && !path.isAbsolute(resolvedInstallDir)) {
+    resolvedInstallDir = '';
   }
 
-  let resolvedExePath = exePath || '';
+  let resolvedExePath = trackableExeName(fileExe) ? fileExe : '';
   if (!resolvedExePath && resolvedInstallDir) {
     resolvedExePath = findMainExe(resolvedInstallDir);
   }
 
-  const allExeNames = resolvedInstallDir ? collectGameExes(resolvedInstallDir) : [];
-  const primaryExe = resolvedExePath ? path.basename(resolvedExePath).toLowerCase() : '';
+  // Registration stays cheap: only the primary executable name. Anything more
+  // is discovered in the background once the game is actually launched.
+  const allExeNames = [];
+  const primaryExe = trackableExeName(resolvedExePath);
   if (primaryExe && !allExeNames.includes(primaryExe)) {
     allExeNames.push(primaryExe);
   }
@@ -127,6 +254,12 @@ function registerTrackedGame(gameId, exePath, installDir, steamAppId) {
     if (resolvedInstallDir) trackedProcesses[sid].installDir = resolvedInstallDir;
     if (resolvedExePath) trackedProcesses[sid].exePath = resolvedExePath;
     if (steamAppId) trackedProcesses[sid].steamAppId = steamAppId;
+    // A freshly launched child becomes the process-group leader on Linux
+    // (spawn is detached), which is what lets us stop its whole tree.
+    if (pid) {
+      trackedProcesses[sid].pid = pid;
+      trackedProcesses[sid].pgid = pid;
+    }
     return trackedProcesses[sid];
   }
 
@@ -138,57 +271,80 @@ function registerTrackedGame(gameId, exePath, installDir, steamAppId) {
     exeName: primaryExe,
     allExeNames,
     running: false,
-    sessionStart: null,
+    core: core.createState(),
+    pids: [],
+    pid: pid || 0,
+    pgid: pid || 0,
+    childImage: '',
   };
 
   return trackedProcesses[sid];
 }
 
-function startTracking(gameId, exePath, installDir, steamAppId) {
-  const sid = String(gameId);
-  registerTrackedGame(sid, exePath, installDir, steamAppId);
-  ensureTrackingLoop();
-  // Immediate check so we don't wait up to 3s
-  setTimeout(checkAllTrackedProcesses, 300);
+function enrichTrackedGame(sid) {
+  const t = trackedProcesses[sid];
+  if (!t || !t.installDir || configFor(sid).trackMode !== 'auto') return;
+  // Depth 4: CS2 keeps cs2.exe at game\bin\win64. The walk is breadth-first
+  // and bounded by the same entry budget.
+  platform.listLaunchableNamesAsync(t.installDir, { maxDepth: 4, limit: 2000 })
+    .then((names) => {
+      const cur = trackedProcesses[sid];
+      if (!cur || !names || !names.length) return;
+      // Runtimes bundled next to the game (python.exe, javaw.exe...) would
+      // match unrelated processes; only the primary exe may be one of those.
+      const extra = names.filter((n) => !platform.isGenericProcessName(n) && !platform.isProtectedProcessName(n) && !platform.isLauncherProcessName(n));
+      cur.allExeNames = [...new Set([...cur.allExeNames, ...extra])];
+    })
+    .catch(() => {});
 }
 
-// Pre-registers games from library and returns IDs of any games already running
-async function initLibraryTracking(gamesList) {
-  if (!Array.isArray(gamesList)) return [];
-  for (const g of gamesList) {
-    if (g.exePath || g.steamAppId || g.installDir) {
-      registerTrackedGame(String(g.id), g.exePath, g.installDir, g.steamAppId);
-    }
+// opts: { childImage } — image name of the spawned child (game.exe, cmd.exe)
+// so Stop can kill that exact PID as long as it is still that program.
+function startTracking(gameId, exePath, installDir, steamAppId, pid, opts) {
+  const sid = String(gameId);
+  const t = registerTrackedGame(sid, exePath, installDir, steamAppId, pid);
+  if (pid && opts && opts.childImage) t.childImage = String(opts.childImage).toLowerCase();
+  if (configFor(sid).trackMode === 'none') {
+    // launched on purpose without playtime tracking
+    send('tracking:gave-up', { gameId: sid, reason: 'untracked' });
+    return t;
   }
-  ensureTrackingLoop();
-  await checkAllTrackedProcesses();
-  return Object.values(trackedProcesses).filter(t => t.running).map(t => t.gameId);
+  core.launch(t.core, Date.now(), { viaSteam: wantsSteam(t) && !trackNamesFor(t).length });
+  enrichTrackedGame(sid);
+  // Immediate check so we don't wait for the next (possibly slow) tick.
+  scheduleLoop(300);
+  return t;
 }
 
 function stopTracking(gameId) {
   const sid = String(gameId);
   const t = trackedProcesses[sid];
   if (!t) return;
-  if (t.running) {
-    const sessionEnd = Date.now();
-    const sessionHours = (sessionEnd - t.sessionStart) / 3600000;
-    win && win.webContents.send('tracking:session-end', { gameId: sid, sessionHours, sessionStart: t.sessionStart, sessionEnd });
-  }
+  emit(sid, t, core.stop(t.core, Date.now()));
   delete trackedProcesses[sid];
-  if (Object.keys(trackedProcesses).length === 0 && trackingInterval) {
-    clearInterval(trackingInterval);
-    trackingInterval = null;
-  }
+  if (Object.keys(trackedProcesses).length === 0) stopLoop();
 }
 
 function stopAllTracking() {
-  if (trackingInterval) {
-    clearInterval(trackingInterval);
-    trackingInterval = null;
-  }
+  stopLoop();
   Object.keys(trackedProcesses).forEach(id => {
     stopTracking(id);
   });
+}
+
+// PIDs to stop on Windows: processes whose exact image name belongs to this
+// game, plus the child we spawned if that PID still runs the same program
+// (a PID is reused once its process exits).
+function windowsKillPids(snapshot, t, names) {
+  const pids = new Set(platform.pidsForNames(snapshot, names));
+  if (t && t.pid && snapshot && snapshot.byPid) {
+    const image = snapshot.byPid.get(t.pid);
+    const expected = t.childImage || t.exeName;
+    if (image && expected && image === expected && !platform.isProtectedProcessName(image)) pids.add(t.pid);
+  }
+  pids.delete(process.pid);
+  pids.delete(process.ppid);
+  return [...pids];
 }
 
 // Kill game process tree forcefully
@@ -200,142 +356,87 @@ async function killGameProcesses(gameId, exePath, installDir, steamAppId, launch
   if (exesToKill.length === 0) {
     let dir = installDir || '';
     if (!dir && steamAppId) dir = resolveSteamInstallDir(steamAppId);
-    if (!dir && exePath) dir = path.dirname(exePath);
-    if (dir) exesToKill = collectGameExes(dir);
-    if (exePath) {
-      const bn = path.basename(exePath).toLowerCase();
-      if (!exesToKill.includes(bn)) exesToKill.push(bn);
+    if (!dir && exePath && platform.isFilesystemPath(exePath)) dir = path.dirname(exePath);
+    if (dir) exesToKill = collectGameExes(dir).filter((n) => !platform.isGenericProcessName(n) && !platform.isProtectedProcessName(n));
+    const bn = trackableExeName(exePath);
+    if (bn && !exesToKill.includes(bn)) exesToKill.push(bn);
+  }
+
+  const lbn = trackableExeName(launcherPath);
+  if (lbn && !exesToKill.includes(lbn)) exesToKill.push(lbn);
+  // the process chosen as "the game" is always part of what Stop closes
+  const tbn = trackableExeName(configFor(sid).trackExe);
+  if (tbn && !exesToKill.includes(tbn)) exesToKill.push(tbn);
+
+  // Never kill system processes, whatever ended up in the list.
+  const cleanExes = [...new Set(exesToKill.map(e => path.basename(e).trim().toLowerCase()).filter(Boolean))]
+    .filter((n) => !platform.isProtectedProcessName(n));
+
+  if (process.platform === 'win32') {
+    const snapshot = await platform.listWindowsProcesses();
+    const pids = snapshot ? windowsKillPids(snapshot, t, cleanExes) : [];
+    for (const pid of pids) {
+      await platform.runHelper('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 5000 });
     }
-  }
-
-  if (launcherPath) {
-    const lbn = path.basename(launcherPath).toLowerCase();
-    if (!exesToKill.includes(lbn)) exesToKill.push(lbn);
-  }
-
-  const cleanExes = [...new Set(exesToKill.map(e => path.basename(e).trim()).filter(Boolean))];
-
-  for (const exeName of cleanExes) {
-    try {
-      await new Promise(resolve => {
-        const killCmd = process.platform === 'win32'
-          ? `taskkill /F /IM "${exeName}" /T`
-          : `pkill -9 -f "${exeName}" 2>/dev/null || killall -9 "${exeName}" 2>/dev/null || true`;
-        exec(killCmd, { timeout: 5000 }, () => resolve());
-      });
-    } catch (e) {}
+    // Seen only through Steam and nothing here to close: the game is still
+    // running, so its session goes on (ending it would lose the rest)
+    if (!pids.length && t && t.steamSeen && (t.core.phase === 'running' || t.core.phase === 'grace')) {
+      return { ok: false, reason: 'not-found' };
+    }
+  } else {
+    await killLinuxGameTree(t, cleanExes);
   }
 
   stopTracking(sid);
   return true;
 }
 
-function detectLinuxSpecs() {
-  let cpu = 'Unknown';
-  try {
-    const cpuInfo = fs.readFileSync('/proc/cpuinfo', 'utf-8');
-    const m = cpuInfo.match(/model name\s*:\s*(.+)/i);
-    if (m) cpu = m[1].trim();
-  } catch (e) {}
+// Stop a game on Linux: SIGTERM the process group we spawned, then anything
+// whose executable basename matches, then SIGKILL whatever survived.
+async function killLinuxGameTree(t, exeNames) {
+  const ownPid = process.pid;
 
-  let ram = 'Unknown';
-  try {
-    const memInfo = fs.readFileSync('/proc/meminfo', 'utf-8');
-    const m = memInfo.match(/MemTotal:\s*(\d+)/i);
-    if (m) ram = Math.round(parseInt(m[1], 10) / (1024 * 1024)) + ' GB';
-  } catch (e) {}
-
-  let os = 'Linux';
-  try {
-    const osRel = fs.readFileSync('/etc/os-release', 'utf-8');
-    const m = osRel.match(/PRETTY_NAME="?([^"\n]+)"?/i);
-    if (m) os = m[1].trim();
-  } catch (e) {}
-
-  let gpus = [];
-  try {
-    const pci = execSync("lspci | grep -i -E 'vga|3d|display'", { encoding: 'utf-8', timeout: 3000 });
-    const lines = pci.split('\n').map(l => l.trim()).filter(Boolean);
-    gpus = lines.map(line => {
-      const colonIdx = line.indexOf(': ');
-      const name = colonIdx !== -1 ? line.slice(colonIdx + 2).trim() : line;
-      return { name, vram: 'Unknown' };
-    });
-  } catch (e) {}
-
-  const iGpuKeywords = ['intel', 'uhd', 'iris', 'integrated'];
-  const discrete = gpus.find(g => !iGpuKeywords.some(k => g.name.toLowerCase().includes(k)));
-  const primary = discrete || gpus[0] || { name: 'Unknown', vram: 'Unknown' };
-
-  return {
-    cpu,
-    gpu: primary.name,
-    vram: primary.vram,
-    ram,
-    os,
-    allGpus: gpus,
+  const signalAll = (sig) => {
+    if (t && t.pgid) {
+      try { process.kill(-t.pgid, sig); } catch (e) { /* group already gone */ }
+    }
+    for (const p of platform.readLinuxProcesses()) {
+      if (p.pid === ownPid) continue;
+      if (!platform.matchesGameProcess(p, exeNames)) continue;
+      try { process.kill(p.pid, sig); } catch (e) {}
+    }
   };
-}
 
-// Hardware detection
-let cachedSpecs = null;
-async function detectPCSpecs() {
-  if (cachedSpecs) return cachedSpecs;
-  if (process.platform !== 'win32') {
-    try {
-      cachedSpecs = detectLinuxSpecs();
-      return cachedSpecs;
-    } catch (e) {
-      console.error('Linux specs detection error:', e.message);
-      return { cpu: 'Unknown', gpu: 'Unknown', vram: 'Unknown', ram: 'Unknown', os: 'Linux', allGpus: [] };
+  signalAll('SIGTERM');
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  const survivors = platform.readLinuxProcesses().filter(
+    p => p.pid !== ownPid && platform.matchesGameProcess(p, exeNames)
+  );
+  if (survivors.length) {
+    for (const p of survivors) {
+      try { process.kill(p.pid, 'SIGKILL'); } catch (e) {}
+    }
+    if (t && t.pgid) {
+      try { process.kill(-t.pgid, 'SIGKILL'); } catch (e) {}
     }
   }
-  try {
-    // Single async PowerShell call to get ALL specs at once (no UI freeze)
-    const psScript = '$cpu = (Get-CimInstance Win32_Processor | Select -First 1).Name; $ram = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory; $os = (Get-CimInstance Win32_OperatingSystem).Caption; $gpus = Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM; @{ cpu=$cpu; ram=$ram; os=$os; gpus=@($gpus) } | ConvertTo-Json -Depth 3';
-
-    const raw = await new Promise((resolve, reject) => {
-      exec(`powershell -NoProfile -Command "${psScript}"`, { encoding: 'utf-8', timeout: 12000 }, (err, stdout) => {
-        if (err) reject(err); else resolve(stdout.trim());
-      });
-    });
-
-    const data = JSON.parse(raw);
-
-    // Parse GPUs
-    const gpuArr = Array.isArray(data.gpus) ? data.gpus : [data.gpus];
-    const gpus = gpuArr.filter(Boolean).map(g => {
-      const adapterBytes = parseInt(g.AdapterRAM);
-      const vram = (adapterBytes && adapterBytes > 0)
-        ? (adapterBytes / (1024 ** 3)).toFixed(1) + ' GB'
-        : 'Unknown';
-      return {
-        name: g.Name || 'Unknown',
-        vram,
-      };
-    });
-
-    // Pick discrete GPU over integrated
-    const iGpuKeywords = ['intel', 'uhd', 'iris', 'integrated'];
-    const discrete = gpus.find(g => !iGpuKeywords.some(k => g.name.toLowerCase().includes(k)));
-    const primary = discrete || gpus[0] || { name: 'Unknown', vram: 'Unknown' };
-
-    const ramGB = data.ram ? Math.round(parseInt(data.ram) / (1024 ** 3)) + ' GB' : 'Unknown';
-
-    cachedSpecs = {
-      cpu: data.cpu || 'Unknown',
-      gpu: primary.name,
-      vram: primary.vram,
-      ram: ramGB,
-      os: data.os || 'Windows',
-      allGpus: gpus,
-    };
-    return cachedSpecs;
-  } catch (e) {
-    console.error('Specs detection error:', e.message);
-    return { cpu: 'Unknown', gpu: 'Unknown', vram: 'Unknown', ram: 'Unknown', os: 'Windows', allGpus: [] };
-  }
 }
 
+// games being played right now, the one started last first
+function runningGameIds() {
+  return Object.values(trackedProcesses)
+    .filter((t) => t && t.core && (t.core.phase === 'running' || t.core.phase === 'grace'))
+    .sort((a, b) => (b.core.sessionStart || 0) - (a.core.sessionStart || 0))
+    .map((t) => String(t.gameId));
+}
 
-module.exports = { setTrackerWindow, startTracking, stopTracking, stopAllTracking, detectPCSpecs, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses };
+// the same, with each game's folder and when its session began
+function runningSessions() {
+  return Object.values(trackedProcesses)
+    .filter((t) => t && t.core && (t.core.phase === 'running' || t.core.phase === 'grace'))
+    .sort((a, b) => (b.core.sessionStart || 0) - (a.core.sessionStart || 0))
+    .map((t) => ({ gameId: String(t.gameId), installDir: t.installDir || '', sessionStart: t.core.sessionStart || 0 }));
+}
+
+module.exports = { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, killGameProcesses, runningGameIds, runningSessions };

@@ -1,102 +1,525 @@
-const { app } = require('electron');
+const { app, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const https = require('https');
-const http = require('http');
+const { pathToFileURL } = require('url');
 
 const DATA_PATH = path.join(app.getPath('userData'), 'games.json');
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const AI_PROFILE_PATH = path.join(app.getPath('userData'), 'ai-profile.json');
+const SECRETS_PATH = path.join(app.getPath('userData'), 'secrets.bin');
 
-// Storage and persistence
+// ---------------------------------------------------------------------------
+// Durable JSON files
+// ---------------------------------------------------------------------------
+//
+// Writes go to a temp file, are fsync'd, then renamed over the target, so a
+// crash or power cut leaves either the old or the new file, never half of one.
+// On Windows the rename is retried for ~1 s: antivirus scanners and OneDrive
+// briefly hold new files open and the rename fails with EPERM/EBUSY/EACCES.
+
+const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_RETRY_MS = 1000;
+
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
+}
+
+function renameWithRetrySync(from, to) {
+  const deadline = Date.now() + RENAME_RETRY_MS;
+  let delay = 15;
+  for (;;) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (process.platform !== 'win32' || !RETRY_CODES.has(err.code) || Date.now() >= deadline) throw err;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 200);
+    }
+  }
+}
+
+function writeFileAtomicSync(file, text) {
+  const tmp = `${file}.tmp`;
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, text, null, 'utf8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    renameWithRetrySync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw err;
+  }
+}
+
+function writeJsonAtomicSync(file, value) {
+  writeFileAtomicSync(file, JSON.stringify(value, null, 2));
+}
+
+// { state: 'missing' | 'ok' | 'corrupt' | 'unreadable', value?, error? }
+// Reads are retried briefly on Windows for the same lock reasons as renames.
+function readJsonFile(file) {
+  const deadline = Date.now() + RENAME_RETRY_MS;
+  let text;
+  for (;;) {
+    try {
+      text = fs.readFileSync(file, 'utf-8');
+      break;
+    } catch (err) {
+      if (err.code === 'ENOENT') return { state: 'missing' };
+      if (process.platform === 'win32' && RETRY_CODES.has(err.code) && Date.now() < deadline) { sleepSync(50); continue; }
+      return { state: 'unreadable', error: err };
+    }
+  }
+  try {
+    return { state: 'ok', value: JSON.parse(text.replace(/^\uFEFF/, '')) };
+  } catch (err) {
+    return { state: 'corrupt', error: err };
+  }
+}
+
+function timestamp() { return new Date().toISOString().replace(/[:.]/g, '-'); }
+
+// Keep a copy of a file we could not parse, once per distinct file version,
+// so repeated loads (tray, background poll) do not pile up copies.
+const quarantined = new Map(); // file -> "mtime:size"
+function quarantineCorrupt(file) {
+  try {
+    const st = fs.statSync(file);
+    const sig = `${st.mtimeMs}:${st.size}`;
+    if (quarantined.get(file) === sig) return null;
+    const dest = `${file}.corrupt-${timestamp()}`;
+    fs.copyFileSync(file, dest);
+    quarantined.set(file, sig);
+    return dest;
+  } catch (err) {
+    console.warn('[data] could not preserve unreadable file', file, err.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Games
+// ---------------------------------------------------------------------------
+
+const BAK_PATH = `${DATA_PATH}.bak`;
+// True once games.json is known to hold a valid library (we parsed it or wrote
+// it). Only a known-good file is ever rotated into games.json.bak.
+let dataFileVerified = false;
+// What went wrong at the last load, for the app to tell the user:
+// { restored: true } = loaded games.json.bak; kept = the damaged copy
+let loadIssue = null;
+// The last load found no library it could read: before the first save over
+// games.json, keep a copy of whatever is there
+let protectOnSave = false;
+
+// read once by the app at start (the tray and launches load the file too)
+function lastLoadIssue() { const v = loadIssue; loadIssue = null; return v; }
+
 function loadGames() {
-  try { if (fs.existsSync(DATA_PATH)) return JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8')); }
-  catch (e) {}
+  keepUpgradeCopy();
+  const res = readJsonFile(DATA_PATH);
+  if (res.state === 'missing') { protectOnSave = false; return []; }
+  if (res.state === 'ok' && Array.isArray(res.value)) {
+    dataFileVerified = true;
+    protectOnSave = false;
+    return res.value;
+  }
+
+  // Never answer [] for a library we simply failed to read: the next save
+  // would wipe it. Preserve the bad file and fall back to the last good one.
+  dataFileVerified = false;
+  const why = res.error ? res.error.message : 'not a list of games';
+  let kept = null;
+  if (res.state !== 'unreadable') {
+    kept = quarantineCorrupt(DATA_PATH);
+    if (kept) console.warn(`[data] games.json is unreadable (${why}); kept a copy at ${kept}`);
+  } else {
+    console.warn(`[data] games.json could not be read (${why})`);
+  }
+  loadIssue = { restored: false, kept, why };
+
+  const bak = readJsonFile(BAK_PATH);
+  if (bak.state === 'ok' && Array.isArray(bak.value)) {
+    console.warn('[data] restored the library from games.json.bak');
+    loadIssue.restored = true;
+    if (res.state !== 'unreadable') {
+      try {
+        writeJsonAtomicSync(DATA_PATH, bak.value);
+        dataFileVerified = true;
+      } catch (err) {
+        console.warn('[data] could not restore games.json:', err.message);
+      }
+    }
+    return bak.value;
+  }
+  protectOnSave = true;
   return [];
 }
+
+function rotateBackup() {
+  if (!fs.existsSync(DATA_PATH)) return;
+  if (!dataFileVerified) {
+    const cur = readJsonFile(DATA_PATH);
+    if (cur.state !== 'ok' || !Array.isArray(cur.value)) return; // never rotate a bad file over a good .bak
+  }
+  const tmp = `${BAK_PATH}.tmp`;
+  fs.copyFileSync(DATA_PATH, tmp);
+  renameWithRetrySync(tmp, BAK_PATH);
+}
+
 function saveGames(games) {
-  const tmpPath = DATA_PATH + '.tmp';
-  fs.writeFileSync(tmpPath, JSON.stringify(games, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, DATA_PATH);
+  if (!Array.isArray(games)) throw new TypeError('saveGames expects an array');
+  if (protectOnSave) {
+    // the library couldn't be read at start: the first save never replaces
+    // the only copy of it
+    const kept = quarantineCorrupt(DATA_PATH);
+    if (kept) console.warn(`[data] kept the unreadable library at ${kept} before saving`);
+    protectOnSave = false;
+  }
+  try {
+    rotateBackup();
+  } catch (err) {
+    console.warn('[data] could not rotate games.json.bak:', err.message);
+  }
+  writeJsonAtomicSync(DATA_PATH, games);
+  dataFileVerified = true;
+}
+
+// ---------------------------------------------------------------------------
+// Image cache
+// ---------------------------------------------------------------------------
+
+const IMAGE_TIMEOUT_MS = 10000;
+const IMAGE_MAX_REDIRECTS = 3;
+const IMAGE_FAIL_COOLDOWN_MS = 10 * 60 * 1000;
+const IMAGE_CONCURRENCY = 6;
+const failedImages = new Map(); // url -> failedAt
+const inflightImages = new Map(); // filePath -> Promise<url>
+
+function isRemoteUrl(url) {
+  return typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'));
+}
+
+function downloadBuffer(url, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    const proto = url.startsWith('https') ? require('https') : require('http');
+    let settled = false;
+    const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
+    let req;
+    const timer = setTimeout(() => {
+      if (req) req.destroy(new Error('Timed out'));
+      done(reject, new Error('Timed out'));
+    }, IMAGE_TIMEOUT_MS);
+    try {
+      req = proto.get(url, { headers: { 'User-Agent': 'GameVault/1.0' }, timeout: IMAGE_TIMEOUT_MS }, (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+          res.resume();
+          let next;
+          try { next = new URL(res.headers.location, url).href; } catch (e) { done(reject, e); return; }
+          if (!isRemoteUrl(next)) { done(reject, new Error('Bad redirect')); return; }
+          clearTimeout(timer);
+          settled = true;
+          downloadBuffer(next, redirectsLeft - 1).then(resolve, reject);
+          return;
+        }
+        if (status !== 200) { res.resume(); done(reject, new Error(`Status: ${status}`)); return; }
+        const data = [];
+        res.on('data', (chunk) => data.push(chunk));
+        res.on('aborted', () => done(reject, new Error('Download aborted')));
+        res.on('error', (e) => done(reject, e));
+        res.on('end', () => {
+          if (res.complete === false) { done(reject, new Error('Download incomplete')); return; }
+          done(resolve, Buffer.concat(data));
+        });
+      });
+      req.on('timeout', () => req.destroy(new Error('Timed out')));
+      req.on('error', (e) => done(reject, e));
+    } catch (e) {
+      done(reject, e);
+    }
+  });
 }
 
 async function cacheImage(url, prefix) {
-  if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) return url;
-  
+  if (!isRemoteUrl(url)) return url;
+
   const cacheDir = path.join(path.dirname(DATA_PATH), 'artworks_cache');
   if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-  
+
   let ext = '.jpg';
-  try { ext = path.extname(new URL(url).pathname) || '.jpg'; } catch(e){}
-  const filename = `${prefix}_${crypto.createHash('md5').update(url).digest('hex')}${ext}`;
+  try { ext = path.extname(new URL(url).pathname) || '.jpg'; } catch (e) {}
+  if (!/^\.[a-z0-9]{1,5}$/i.test(ext)) ext = '.jpg';
+  const safePrefix = String(prefix || 'art').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+  const filename = `${safePrefix}_${crypto.createHash('md5').update(url).digest('hex')}${ext}`;
   const filePath = path.join(cacheDir, filename);
-  
-  if (fs.existsSync(filePath)) return `file://${filePath.replace(/\\/g, '/')}`;
-  
-  try {
-    const buffer = await new Promise((resolve, reject) => {
-      const proto = url.startsWith('https') ? require('https') : require('http');
-      proto.get(url, { headers: { 'User-Agent': 'GameVault/1.0' } }, res => {
-        if (res.statusCode !== 200) return reject(new Error(`Status: ${res.statusCode}`));
-        const data = [];
-        res.on('data', chunk => data.push(chunk));
-        res.on('end', () => resolve(Buffer.concat(data)));
-      }).on('error', reject);
-    });
-    fs.writeFileSync(filePath, buffer);
-    return `file://${filePath.replace(/\\/g, '/')}`;
-  } catch (e) {
-    console.warn('Failed to cache image:', url, e.message);
-    return url;
-  }
+
+  if (fs.existsSync(filePath)) return pathToFileURL(filePath).href;
+
+  const failedAt = failedImages.get(url);
+  if (failedAt && Date.now() - failedAt < IMAGE_FAIL_COOLDOWN_MS) return url;
+
+  if (inflightImages.has(filePath)) return inflightImages.get(filePath);
+  const job = (async () => {
+    try {
+      const buffer = await downloadBuffer(url, IMAGE_MAX_REDIRECTS);
+      const tmp = `${filePath}.part`;
+      fs.writeFileSync(tmp, buffer);
+      renameWithRetrySync(tmp, filePath);
+      failedImages.delete(url);
+      return pathToFileURL(filePath).href;
+    } catch (e) {
+      failedImages.set(url, Date.now());
+      console.warn('Failed to cache image:', url, e.message);
+      return url;
+    } finally {
+      inflightImages.delete(filePath);
+    }
+  })();
+  inflightImages.set(filePath, job);
+  return job;
 }
 
 async function cacheGameImages(games) {
-  for (const g of games) {
-    if (g.coverUrl && (g.coverUrl.startsWith('http://') || g.coverUrl.startsWith('https://'))) {
-      g.coverUrl = await cacheImage(g.coverUrl, `cover_${g.id}`);
+  const jobs = [];
+  for (const g of games || []) {
+    if (!g) continue;
+    if (isRemoteUrl(g.coverUrl)) jobs.push([g, 'coverUrl', `cover_${g.id}`]);
+    if (isRemoteUrl(g.heroUrl)) jobs.push([g, 'heroUrl', `hero_${g.id}`]);
+  }
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length) {
+      const [g, field, prefix] = jobs[next++];
+      const original = g[field];
+      const local = await cacheImage(original, prefix);
+      if (g[field] === original) g[field] = local;
     }
-    if (g.heroUrl && (g.heroUrl.startsWith('http://') || g.heroUrl.startsWith('https://'))) {
-      g.heroUrl = await cacheImage(g.heroUrl, `hero_${g.id}`);
+  };
+  await Promise.all(Array.from({ length: Math.min(IMAGE_CONCURRENCY, jobs.length) }, worker));
+}
+
+// Older builds stored `file://` + the raw path (C:/Users/A B/x#1.jpg), which is
+// not a valid URL. Returns the proper file URL, or null when nothing changes.
+function normalizeLegacyFileUrl(value) {
+  if (typeof value !== 'string' || !value.startsWith('file://')) return null;
+  let raw = value.slice('file://'.length);
+  if (/%[0-9a-f]{2}/i.test(raw)) return null; // already encoded
+  if (process.platform === 'win32' && /^\/[A-Za-z]:[\\/]/.test(raw)) raw = raw.slice(1);
+  if (process.platform === 'win32') raw = raw.replace(/\//g, '\\');
+  if (!path.isAbsolute(raw)) return null;
+  let href;
+  try {
+    if (!fs.existsSync(raw)) return null;
+    href = pathToFileURL(raw).href;
+  } catch (_) { return null; }
+  return href !== value ? href : null;
+}
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Config + secrets
+//
+// API keys never live in config.json and never reach the renderer: they are
+// kept in secrets.bin, encrypted with the OS keychain via Electron's
+// safeStorage (DPAPI on Windows, libsecret/kwallet on Linux). Main-process
+// code still sees them on loadConfig() as before; the renderer only gets
+// publicConfig() with has*Key flags.
+// ---------------------------------------------------------------------------
+
+const SECRET_KEYS = ['sgdbKey'];
+// unused since 2.0 (the AI advisor and the Steam Web API key were removed:
+// their keys are deleted, not kept)
+const DEAD_KEYS = ['steamKey', 'steamId', 'deepseekKey', 'cornerRadius', 'aiKey', 'aiEnabled', 'aiProvider', 'aiCustomEndpoint', 'aiCustomModel', 'overlayHotkey'];
+const DEAD_SECRETS = ['aiKey', 'steamKey'];
+
+const CONFIG_DEFAULTS = {
+  captureShotHotkey: 'Alt+Shift+S',
+  captureClipHotkey: 'Alt+Shift+R',
+  captureGameAudio: true,
+  captureMic: false,
+  captureFindOthers: true,
+};
+
+let secretsCache = null;
+
+function canEncrypt() {
+  try { return app.isReady() && safeStorage.isEncryptionAvailable(); } catch (_) { return false; }
+}
+
+function readSecrets() {
+  if (secretsCache) return { ...secretsCache };
+  let out = {};
+  try {
+    if (fs.existsSync(SECRETS_PATH)) {
+      const raw = fs.readFileSync(SECRETS_PATH, 'utf8').trim();
+      let text = '';
+      if (raw.startsWith('v1:')) {
+        if (!canEncrypt()) return {}; // keychain not ready yet: don't cache an empty read
+        text = safeStorage.decryptString(Buffer.from(raw.slice(3), 'base64'));
+      } else if (raw.startsWith('p1:')) {
+        text = Buffer.from(raw.slice(3), 'base64').toString('utf8');
+      }
+      const parsed = text ? JSON.parse(text) : {};
+      if (parsed && typeof parsed === 'object') out = parsed;
     }
+  } catch (e) {
+    console.warn('[data] secrets unreadable:', e.message);
+  }
+  secretsCache = out;
+  return { ...out };
+}
+
+function writeSecrets(values) {
+  const clean = {};
+  for (const k of SECRET_KEYS) {
+    const v = values && values[k];
+    if (v) clean[k] = String(v);
+  }
+  const text = JSON.stringify(clean);
+  // No keychain (e.g. Linux without a secret service): fall back to an
+  // obfuscated file rather than losing the key; warn once.
+  const encoded = canEncrypt()
+    ? 'v1:' + safeStorage.encryptString(text).toString('base64')
+    : (console.warn('[data] OS keychain unavailable; secrets stored without encryption'), 'p1:' + Buffer.from(text, 'utf8').toString('base64'));
+  writeFileAtomicSync(SECRETS_PATH, encoded);
+  secretsCache = clean;
+}
+
+// config.json minus secrets and dead keys. Plaintext keys from older versions
+// are moved into secrets.bin the first time this runs after the app is ready.
+function readStoredConfig() {
+  const res = readJsonFile(CONFIG_PATH);
+  if (res.state === 'ok' && res.value && typeof res.value === 'object' && !Array.isArray(res.value)) {
+    const stored = { ...res.value };
+    const leaked = SECRET_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(stored, k));
+    const dead = DEAD_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(stored, k));
+    if ((leaked.length || dead.length) && canEncrypt()) {
+      const secrets = readSecrets();
+      for (const k of leaked) if (stored[k] && !secrets[k]) secrets[k] = stored[k];
+      writeSecrets(secrets);
+      for (const k of [...leaked, ...dead]) delete stored[k];
+      writeJsonAtomicSync(CONFIG_PATH, stored);
+    }
+    return stored;
+  }
+  if (res.state === 'corrupt' || res.state === 'ok') {
+    const kept = quarantineCorrupt(CONFIG_PATH);
+    if (kept) console.warn(`[data] config.json is unreadable; kept a copy at ${kept}`);
+  }
+  return {};
+}
+
+// The removed AI advisor's saved key and chat history: gone for good, once.
+let deadDataSwept = false;
+function sweepDeadData() {
+  // before the app is ready the keychain can't be read: try again later
+  if (deadDataSwept || !app.isReady()) return;
+  deadDataSwept = true;
+  try {
+    const secrets = readSecrets();
+    if (DEAD_SECRETS.some((k) => k in secrets)) {
+      for (const k of DEAD_SECRETS) delete secrets[k];
+      writeSecrets(secrets);
+    }
+  } catch (_) { /* secrets unavailable: nothing to sweep */ }
+  try { fs.rmSync(AI_PROFILE_PATH, { force: true }); } catch (_) {}
+  // the removed overlay's debug log
+  try { fs.rmSync(path.join(path.dirname(DATA_PATH), 'overlay_debug.log'), { force: true }); } catch (_) {}
+}
+
+// The first time 2.0 opens a library from 1.x (games.json there, and none of
+// 2.0's own settings yet), copy the files as they were into before-2.0/
+// before anything converts them. Never overwritten.
+let upgradeCopyChecked = false;
+function keepUpgradeCopy() {
+  if (upgradeCopyChecked) return;
+  upgradeCopyChecked = true;
+  const dir = path.join(path.dirname(DATA_PATH), 'before-2.0');
+  try {
+    if (fs.existsSync(dir) || !fs.existsSync(DATA_PATH)) return;
+    const cfg = readJsonFile(CONFIG_PATH);
+    const c = cfg.state === 'ok' && cfg.value && typeof cfg.value === 'object' ? cfg.value : {};
+    if (c.statusModel || c.ui || c.uiAt) return; // already a 2.0 library
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of ['games.json', 'config.json', 'ai-profile.json']) {
+      const src = path.join(path.dirname(DATA_PATH), f);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dir, f));
+    }
+  } catch (err) {
+    console.warn('[data] could not keep a copy of the 1.x library:', err.message);
   }
 }
 
+// Full config for main-process code, secrets included.
 function loadConfig() {
-  const defaults = { 
-    sgdbKey: '', 
-    deepseekKey: '', 
-    overlayHotkey: 'Shift+Alt+G',
-    aiEnabled: false,
-    aiProvider: null,
-    aiKey: '',
-    aiCustomEndpoint: '',
-    aiCustomModel: '',
-    cornerRadius: 14
-  };
-  try { 
-    if (fs.existsSync(CONFIG_PATH)) {
-      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-      return { ...defaults, ...cfg };
-    }
-  } catch (e) {}
-  return defaults;
+  keepUpgradeCopy();
+  sweepDeadData();
+  const stored = readStoredConfig();
+  const secrets = readSecrets();
+  const out = { ...CONFIG_DEFAULTS, ...stored };
+  for (const k of SECRET_KEYS) out[k] = secrets[k] || stored[k] || '';
+  for (const k of DEAD_KEYS) delete out[k];
+  return out;
 }
+
+// Writes config.json (no secrets) and secrets.bin. A secret key present in
+// cfg (even '') replaces the stored one; absent keys are kept.
 function saveConfig(cfg) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf-8');
+  const plain = { ...(cfg || {}) };
+  const secrets = readSecrets();
+  let secretsChanged = false;
+  for (const k of SECRET_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(plain, k)) {
+      const v = plain[k] ? String(plain[k]).trim() : '';
+      if ((secrets[k] || '') !== v) { secrets[k] = v; secretsChanged = true; }
+      delete plain[k];
+    }
+  }
+  for (const k of DEAD_KEYS) delete plain[k];
+  for (const k of Object.keys(plain)) if (k.startsWith('has') && k.endsWith('Key')) delete plain[k];
+  if (secretsChanged) writeSecrets(secrets);
+  writeJsonAtomicSync(CONFIG_PATH, plain);
 }
 
-function aiLoadProfile() {
-  try { if (fs.existsSync(AI_PROFILE_PATH)) return JSON.parse(fs.readFileSync(AI_PROFILE_PATH, 'utf-8')); }
-  catch (e) {}
-  return { preferences: { likedGenres: [], dislikedGenres: [], dislikedGames: [], recommendedBefore: [] }, chatHistory: [], pcSpecs: null };
+// Merge-patch: keys the caller did not send (or sent as undefined) keep the
+// value on disk, so a stale renderer snapshot cannot wipe keys main wrote
+// meanwhile (startupEnabled, snooze state...). Returns the full result.
+function mergeConfig(patch) {
+  // config.json exists but can't be read right now (locked by a sync tool or
+  // an antivirus): writing now would replace every setting with the defaults
+  if (readJsonFile(CONFIG_PATH).state === 'unreadable') throw new Error('The settings file is in use by another program');
+  const merged = loadConfig();
+  if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      merged[key] = value;
+    }
+  }
+  saveConfig(merged);
+  return merged;
 }
 
-function aiSaveProfile(profile, win, overlayWin) {
-  fs.writeFileSync(AI_PROFILE_PATH, JSON.stringify(profile, null, 2), 'utf-8');
-  if (win) win.webContents.send('ai:profile-updated', profile);
-  if (overlayWin) overlayWin.webContents.send('ai:profile-updated', profile);
+// What the renderer may see: no secrets, only whether each one is set.
+function publicConfig(cfg) {
+  const out = { ...(cfg || loadConfig()) };
+  out.hasSgdbKey = !!out.sgdbKey;
+  for (const k of SECRET_KEYS) delete out[k];
+  return out;
 }
 
-module.exports = { DATA_PATH, CONFIG_PATH, AI_PROFILE_PATH, loadGames, saveGames, cacheImage, cacheGameImages, loadConfig, saveConfig, aiLoadProfile, aiSaveProfile };
+module.exports = {
+  DATA_PATH, CONFIG_PATH,
+  loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl,
+  loadConfig, saveConfig, mergeConfig, publicConfig, SECRET_KEYS,
+  writeFileAtomicSync, writeJsonAtomicSync, readJsonFile,
+};
