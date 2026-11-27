@@ -63,13 +63,16 @@ function parseSavePaths(wikitext) {
   return out;
 }
 
-function tokenMap({ installDir, home, documents, steamDir }) {
+function tokenMap({ installDir, home, documents, steamDir, ubisoftDir }) {
   const env = process.env;
   const appdata = env.APPDATA || path.join(home, 'AppData', 'Roaming');
   const local = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
   return {
     game: installDir || null,
     steam: steamDir || 'C:\\Program Files (x86)\\Steam',
+    // Ubisoft Connect's own folder (games bought on Steam often save there too)
+    uplay: ubisoftDir || 'C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher',
+    ubisoftconnect: ubisoftDir || 'C:\\Program Files (x86)\\Ubisoft\\Ubisoft Game Launcher',
     uid: '*',
     steamid: '*',
     username: os.userInfo().username,
@@ -161,7 +164,7 @@ async function findSaveFolders(game, opts = {}) {
   const j = await wiki({ action: 'parse', page, prop: 'wikitext', redirects: '1' }, doFetch);
   const text = j && j.parse && j.parse.wikitext;
   const raws = typeof text === 'string' ? parseSavePaths(text) : [];
-  const tokens = tokenMap({ installDir: game.installDir, home: opts.home || os.homedir(), documents: opts.documents, steamDir: opts.steamDir });
+  const tokens = tokenMap({ installDir: game.installDir, home: opts.home || os.homedir(), documents: opts.documents, steamDir: opts.steamDir, ubisoftDir: opts.ubisoftDir });
   const seen = new Set();
   const candidates = [];
   for (const raw of raws) {

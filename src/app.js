@@ -6259,12 +6259,31 @@
   let autoSyncBusy = false;
   let autoSyncAt = 0;
 
-  function autoSyncOn(id) { return !!(state.config.autoSync && state.config.autoSync[id]); }
+  // On for every launcher that can do it, unless you turned it off (stored as false).
+  function autoSyncOn(id) { return !(state.config.autoSync && state.config.autoSync[id] === false); }
 
   async function setAutoSync(id, on) {
     const next = { ...(state.config.autoSync || {}) };
-    if (on) next[id] = true; else delete next[id];
+    next[id] = !!on;
     await saveConfigPatch({ autoSync: next });
+  }
+
+  // What auto sync has already seen in each launcher. Only games that show up
+  // after that are added, so a game you left unticked in Import, or one that was
+  // there before auto sync first looked at a launcher you already imported from,
+  // is not added behind your back.
+  const syncKey = (c) => (c && c.sourceId ? String(c.sourceId) : `name:${importNameKey(c) || ''}`);
+  function autoSyncSeen(id) {
+    const all = state.config.autoSyncSeen;
+    return all && Array.isArray(all[id]) ? all[id] : null;
+  }
+  function noteAutoSyncSeen(id, found, { merge = false } = {}) {
+    const before = autoSyncSeen(id);
+    const keys = new Set(merge ? before || [] : []);
+    for (const c of found || []) if (c && c.name) keys.add(syncKey(c));
+    // unchanged: don't rewrite the settings file every half hour
+    if (before && before.length === keys.size && before.every((k) => keys.has(k))) return Promise.resolve();
+    return saveConfigPatch({ autoSyncSeen: { ...(state.config.autoSyncSeen || {}), [id]: [...keys] } });
   }
 
   // Games you removed are remembered so auto sync does not bring them back.
@@ -6419,8 +6438,6 @@
 
   async function runAutoSync({ only = null, quiet = true } = {}) {
     if (autoSyncBusy || !api.importScan || !api.importSources) return 0;
-    const ids = Object.keys(state.config.autoSync || {}).filter((id) => state.config.autoSync[id] && (!only || id === only));
-    if (!ids.length) return 0;
     // never while a game is running, and not under an open import dialog
     if (Object.values(state.live).some((v) => typeof v === 'number')) {
       if (!quiet) toast('Auto sync waits until your game is closed', 'ok', null, { quiet: true });
@@ -6433,12 +6450,22 @@
     try {
       const sources = await api.importSources().catch(() => []);
       const ignored = new Set(Array.isArray(state.config.importIgnored) ? state.config.importIgnored : []);
+      const ids = (sources || []).filter((x) => x.sync && x.found && autoSyncOn(x.id) && (!only || x.id === only)).map((x) => x.id);
       for (const id of ids) {
-        const src = (sources || []).find((x) => x.id === id);
-        if (!src || !src.sync || !src.found) continue;
+        const src = sources.find((x) => x.id === id);
         const found = await api.importScan(id).catch(() => null);
         if (!Array.isArray(found)) continue;
         let ix = importIndex();
+        let seen = autoSyncSeen(id);
+        // first look at a launcher you already imported from: what's there now
+        // is what you chose, so only later installs are added
+        // (a game you added by hand doesn't count, only ones imported from it)
+        const fromHere = (c) => {
+          const h = c && c.name && importFind(ix, c);
+          return !!h && ((c.sourceId && String(h.sourceId || '') === String(c.sourceId)) || h.source === src.label);
+        };
+        if (!seen && found.some(fromHere)) seen = found.map(syncKey);
+        const known = new Set(seen || []);
         for (const c of found) {
           if (!c || !c.name || c.wishlisted) continue;
           if (c.sourceId && ignored.has(String(c.sourceId))) continue;
@@ -6450,11 +6477,15 @@
             if (gvIsWishlisted(have)) { wishToLibraryFrom(have, c); added.push(have); ix = importIndex(); }
             continue;
           }
+          if (known.has(syncKey(c))) continue;
           const g = gameFromCandidate(c, src.label);
           state.games.unshift(g);
           added.push(g);
           ix = importIndex();
         }
+        // what's installed now is seen; an uninstalled game drops off the list,
+        // so installing it again adds it again
+        await noteAutoSyncSeen(id, found);
       }
     } catch (e) {
       reportError('autosync', e);
@@ -6773,6 +6804,9 @@
         // importing it by hand means you want it: auto sync may add it again later
         if (c.sourceId && Array.isArray(state.config.importIgnored) && state.config.importIgnored.includes(String(c.sourceId))) importIgnore(c.sourceId, false);
       }
+      // games left unticked here stay out: auto sync only adds later installs
+      const src = sources.find((x) => x.id === activeId);
+      if (src && src.sync) noteAutoSyncSeen(activeId, candidates, { merge: true }).catch(() => {});
       saveGamesSoon();
       closeModal();
       state._shelfKey = '';
@@ -8417,7 +8451,6 @@
           panel.querySelector('[data-open-import]').onclick = () => { closeSettings({ restoreFocus: false }); $('#btn-import')?.click(); };
           const syncNow = panel.querySelector('[data-sync-now]');
           if (syncNow) syncNow.onclick = async () => {
-            if (!Object.values(state.config.autoSync || {}).some(Boolean)) { toast('Turn on a launcher below first', 'error'); return; }
             syncNow.disabled = true;
             await runAutoSync({ quiet: false });
             syncNow.disabled = false;

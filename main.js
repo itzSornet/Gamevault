@@ -1461,9 +1461,31 @@ function createWindow() {
     return cloud().syncLibrary(games, { look });
   }));
   ipcMain.handle('cloud:last-sync', () => cloud().lastSync());
-  ipcMain.handle('saves:find', (_, g) => accountReply(() => findSaveFolders({
-    name: g && g.name, steamAppId: g && g.steamAppId, installDir: g && g.installDir,
-  }, { documents: app.getPath('documents') })));
+  // PCGamingWiki writes save paths with placeholders ({{p|steam}}, {{p|uplay}},
+  // {{p|game}}): fill them with this PC's real folders.
+  let launcherDirs = null;
+  function saveLauncherDirs() {
+    if (launcherDirs) return launcherDirs;
+    let steamDir = null;
+    try {
+      const roots = require('./src/backend/sources/steam.js').steamRoots();
+      steamDir = roots.find((r) => fs.existsSync(path.join(r, 'userdata'))) || roots[0] || null;
+    } catch (_) {}
+    let ubisoftDir = null;
+    if (process.platform === 'win32') {
+      const reg = platform.runHelperSync('reg.exe', ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\Ubisoft\\Launcher', '/v', 'InstallDir'], { timeout: 2000 }) || '';
+      const m = reg.match(/InstallDir\s+REG_SZ\s+(.+)/i);
+      if (m && fs.existsSync(m[1].trim())) ubisoftDir = path.normalize(m[1].trim());
+    }
+    launcherDirs = { steamDir, ubisoftDir };
+    return launcherDirs;
+  }
+  ipcMain.handle('saves:find', (_, g) => accountReply(() => {
+    let installDir = g && g.installDir;
+    // a Steam game added by hand may have no folder: ask Steam where it is
+    if ((!installDir || !fs.existsSync(installDir)) && g && g.steamAppId) installDir = resolveSteamInstallDir(g.steamAppId) || installDir;
+    return findSaveFolders({ name: g && g.name, steamAppId: g && g.steamAppId, installDir }, { documents: app.getPath('documents'), ...saveLauncherDirs() });
+  }));
   ipcMain.handle('saves:pick', async (_, current) => {
     const r = await dialog.showOpenDialog(win, { title: 'Choose the game’s save folder', defaultPath: current || app.getPath('documents'), properties: ['openDirectory'] });
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
