@@ -1034,9 +1034,11 @@
   // ask SteamGridDB), and each game shows up as soon as its art is in.
   async function enrichArt({ force = false, only = null } = {}) {
     if (!api.sgdbAutofill) return;
-    // iconTried: libraries from before icons were filled get them once too
+    // iconTried: libraries from before icons were filled get them once too.
+    // No cover and not marked artNone: a game that came by library sync (its
+    // art files stayed on the other PC, its 'looked up' marks came along).
     const queue = (only || state.games).filter((g) => g.name
-      && (force || g.artVersion !== 3 || (!g.heroUrl && !g.heroTried) || (!g.iconUrl && !g.iconTried)));
+      && (force || g.artVersion !== 3 || (!g.heroUrl && !g.heroTried) || (!g.iconUrl && !g.iconTried) || (!g.coverUrl && !g.artNone)));
     if (!queue.length) return;
     queue.sort((a, b) => (b.steamAppId ? 1 : 0) - (a.steamAppId ? 1 : 0));
 
@@ -1070,7 +1072,7 @@
           }).catch(() => null);
           if (!res || !res.ok) {
             const code = res && res.error && res.error.code;
-            if (code === 'NOT_FOUND') { g.artVersion = 3; g.heroTried = true; g.iconTried = true; saveGamesSoon(); continue; }
+            if (code === 'NOT_FOUND') { g.artVersion = 3; g.heroTried = true; g.iconTried = true; g.artNone = true; saveGamesSoon(); continue; }
             // hourly limit: stop asking (Steam games still get Steam's own
             // art); the rest are left unmarked and filled on a later launch
             if (code === 'RATE_LIMIT') { limited = true; continue; }
@@ -1083,7 +1085,8 @@
           const data = res.data || {};
           const a = data.assets || {};
           if (data.match && data.match.id && !g.sgdbId) g.sgdbId = data.match.id;
-          if (slots.includes('cover') && a.cover && a.cover.url) { g.coverUrl = a.cover.url; delete g._cover; changed = true; }
+          if (slots.includes('cover') && a.cover && a.cover.url) { g.coverUrl = a.cover.url; delete g._cover; delete g.artNone; changed = true; }
+          else if (slots.includes('cover') && !g.coverUrl) g.artNone = true; // nothing to show: don't ask again
           if (slots.includes('hero') && a.hero && a.hero.url) { g.heroUrl = a.hero.url; delete g._hero; g._noHero = false; changed = true; }
           if (slots.includes('logo') && a.logo && a.logo.url) { g.logoUrl = a.logo.url; delete g._logo; changed = true; }
           if (slots.includes('icon') && a.icon && a.icon.url) { g.iconUrl = a.icon.url; delete g._icon; changed = true; }
@@ -3059,8 +3062,14 @@
   const shelfDom = { built: false, front: 0 };
 
   function ensureShelfDom() {
-    if (shelfDom.built) return;
     const stage = $('#shelf-stage');
+    // built, and its buttons really are the ones on screen: nothing to do.
+    // Anything else (the stage emptied or swapped under it) builds it again,
+    // so the banner can't be left without its title and buttons.
+    if (shelfDom.built && shelfDom.playBtn && stage.contains(shelfDom.playBtn) && stage.querySelector('.shelf-content')) return;
+    shelfDom.front = 0;
+    state._stageVisual = '';
+    state._heroShown = '';
     stage.innerHTML = `
       <div class="shelf-art layer" data-layer="0"></div>
       <div class="shelf-art layer" data-layer="1"></div>
@@ -7291,7 +7300,7 @@
   function backupsSavesHtml() {
     const on = signedIn();
     const saves = !!state.config.cloudSaves;
-    const local = !!state.config.localSaves;
+    const local = localSavesOn();
     let body = stRow('Back up to the cloud',
       'Each game’s save folder is packed and encrypted on this PC with a key tied to your account, then uploaded. It runs by itself after you play. Up to 50 MB per backup; the newest 3 copies of each game are kept.',
       stSwitch('data-bk-switch', on && saves, { disabled: !on, label: 'Back up my game saves to the cloud' }), { disabled: !on });
@@ -7438,7 +7447,7 @@
         if (state.settingsOpen && state.settingsSection === 'backups') renderSettings();
       };
       await show(games);
-      for (const g of games) if (!g.coverUrl) refreshArt(g);
+      enrichArt({ only: games }).catch(() => {});
       toast(`Library restored: ${fmtNum(games.length)} game${games.length === 1 ? '' : 's'}`, 'ok', [{ label: 'Undo', run: async () => {
         await show(before);
         toast('Your library is back the way it was', 'ok');
@@ -7501,7 +7510,16 @@
         state._shelfKey = '';
         renderLibrary();
         if (state.selectedId) renderDetail();
-        for (const g of next) if (!old.has(String(g.id))) refreshArt(g);
+        // games new to this PC: thumbnails for the art that came with them,
+        // and a lookup for the art that stayed on the other PC
+        const fresh = next.filter((g) => !old.has(String(g.id)));
+        if (fresh.length) {
+          Promise.all(fresh.map((g) => thumbsFor(g))).then(() => {
+            state._shelfKey = '';
+            if (!state.selectedId && !state.settingsOpen) renderLibrary();
+          });
+          enrichArt({ only: fresh }).catch(() => {});
+        }
         const bits = [];
         if (added) bits.push(`${added} added`);
         if (updated) bits.push(`${updated} updated`);
@@ -7522,8 +7540,10 @@
   const lastDirs = (p, n = 2) => String(p || '').split(/[\\/]/).filter(Boolean).slice(-n).join(' › ');
 
   // Save backups go to the cloud when you're signed in with them on, or stay
-  // on this PC when "Keep copies on this PC" is on (no account). null = neither.
-  function savesMode() { return cloudOn('cloudSaves') ? 'cloud' : state.config.localSaves ? 'local' : null; }
+  // on this PC when "Keep copies on this PC" is on (the default: only
+  // switching it off stops it). null = neither.
+  function localSavesOn() { return state.config.localSaves !== false; }
+  function savesMode() { return cloudOn('cloudSaves') ? 'cloud' : localSavesOn() ? 'local' : null; }
   function svApi() {
     return savesMode() === 'local'
       ? { backup: api.localSavesBackup, list: api.localSavesList, restore: api.localSavesRestore, del: api.localSavesDelete, hasPrev: api.localSavesHasPrevious, openPrev: api.localSavesOpenPrevious }
@@ -7546,9 +7566,11 @@
         : '<p class="sv-text">No save folder found on this PC. Play once so the game makes one, or choose it yourself.</p>';
       return head() + '<p class="sv-text">Pick the folder this game saves to:</p>' + list + '<div class="sv-row"><button type="button" class="sv-link" data-sv="pick">Choose folder…</button><button type="button" class="sv-link" data-sv="cancel">Cancel</button></div>';
     }
+    // copies on this PC and signed in: the cloud is one (asked) step away
+    const toCloud = savesMode() === 'local' && signedIn() ? '<button type="button" class="sv-link sv-prev" data-sv="turn-on">Back up to the cloud instead…</button>' : '';
     if (!g.saveDir) {
       return head() + '<p class="sv-text">Backups are on. Where does this game keep its saves?</p>' +
-        '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>';
+        '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>' + toCloud;
     }
     const backups = ui.backups;
     const latest = backups && backups[0];
@@ -7575,7 +7597,8 @@
       '</div>' +
       list +
       `<div class="sv-foot"><span class="sv-folder" title="${esc(g.saveDir)}">${esc(lastDirs(g.saveDir, 3))}</span><button type="button" class="sv-link" data-sv="pick">Change</button></div>` +
-      (ui.hasPrev ? '<button type="button" class="sv-link sv-prev" data-sv="previous">Open the saves a restore replaced</button>' : '');
+      (ui.hasPrev ? '<button type="button" class="sv-link sv-prev" data-sv="previous">Open the saves a restore replaced</button>' : '') +
+      toCloud;
   }
 
   function paintSavesCard(g) {
@@ -7623,14 +7646,42 @@
     if (state.selectedId === String(g.id)) paintSavesCard(g);
   }
 
+  // Cloud backups are one switch for every game, so the card asks before
+  // flipping it rather than turning it on from one game's page.
+  function askCloudSaves(g) {
+    const card = openModal(`
+      <div class="modal-head">
+        <h2>Back up your saves to the cloud?</h2>
+        <button class="close-x" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body rm-body">
+        <p class="rm-text">This turns on cloud backups for every game you set up, not just this one. Saves are encrypted on this PC before they’re uploaded, up to 50 MB per backup, and the newest 3 copies of each game are kept.</p>
+        <p class="rm-text">While it’s on, cloud backups are used instead of copies on this PC. You can turn it off any time in Settings → Backups.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" data-close data-autofocus>Not now</button>
+        <button class="btn btn-primary" data-yes>Back up to the cloud</button>
+      </div>`, { className: 'rm-modal' });
+    if (!card) return;
+    for (const b of card.querySelectorAll('[data-close]')) b.onclick = closeModal;
+    card.querySelector('[data-yes]').onclick = async () => {
+      closeModal();
+      await saveConfigPatch({ cloudSaves: true });
+      state._sv = { id: String(g.id) };
+      toast('Cloud save backups are on', 'ok');
+      if (state.selectedId === String(g.id)) paintSavesCard(g);
+    };
+  }
+
   async function savesAction(g, btn) {
     const act = btn.dataset.sv;
     const ui = state._sv;
     if (act === 'settings') { openSettings('account'); return; }
-    if (act === 'turn-on' || act === 'turn-on-local') {
-      await saveConfigPatch(act === 'turn-on' ? { cloudSaves: true } : { localSaves: true });
+    if (act === 'turn-on') { askCloudSaves(g); return; }
+    if (act === 'turn-on-local') {
+      await saveConfigPatch({ localSaves: true });
       state._sv = { id: String(g.id) };
-      toast(act === 'turn-on' ? 'Cloud save backups are on' : 'GameVault keeps copies of your saves on this PC', 'ok');
+      toast('GameVault keeps copies of your saves on this PC', 'ok');
       paintSavesCard(g);
       return;
     }
@@ -8858,7 +8909,13 @@
       if (app) app.inert = false;
       const done = () => { el.hidden = true; };
       if (prefersReducedMotion()) done(); else setTimeout(done, 260);
+      // a full repaint, like coming back from a game page: what was drawn
+      // behind the welcome (imports, sign-in, sync) is drawn again
+      state._shelfKey = '';
+      state._stageVisual = '';
+      state._heroShown = '';
       renderLibrary();
+      fadeIn(currentPane());
       refreshCounts();
       requestAnimationFrame(() => {
         if (pad.on) padEnsureFocus(true);
@@ -8942,6 +8999,7 @@
     if (u.status === 'checking') return 'Checking for a new version…';
     if (u.status === 'latest') return `You have the latest version${u.checkedAt ? ` · checked ${agoLabel(u.checkedAt)}` : ''}.`;
     if (u.status === 'available') return `Version ${u.info.version} is available.`;
+    if (u.status === 'held') return `Version ${u.held} is available. Check now to see it.`;
     if (u.status === 'downloading') return `Downloading version ${u.info.version}… ${u.percent}%`;
     if (u.status === 'ready') return `Version ${u.info.version} is ready. It installs when GameVault restarts.`;
     if (u.status === 'error') return `Couldn’t check for updates: ${u.error}`;
@@ -9084,8 +9142,10 @@
         offer();
         updateState.manual = false;
       });
-      api.onUpdateNotAvailable(() => {
-        updateState.status = 'latest';
+      api.onUpdateNotAvailable((d) => {
+        // held: a newer version that was skipped or snoozed (automatic check)
+        updateState.held = d && d.held ? String(d.held) : null;
+        updateState.status = updateState.held ? 'held' : 'latest';
         updateState.checkedAt = Date.now();
         refreshRow();
         if (updateState.manual) toast('You have the latest version of GameVault', 'ok');
