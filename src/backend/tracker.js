@@ -17,7 +17,7 @@ let isChecking = false;
 const core = require('./tracker-core.js');
 
 // Per-game launch/track settings from the game record (trackMode, trackExe).
-// Set by launchGame / initLibraryTracking before tracking starts.
+// Set by launchGame before tracking starts.
 const trackConfig = {};
 const TRACK_MODES = ['auto', 'exe', 'steam', 'none'];
 function configureTracking(gameId, cfg) {
@@ -58,8 +58,6 @@ function noteAway(t, now) {
     closeAway(t, lastInput);
   }
 }
-
-function isRunningPhase(t) { return !!(t && t.core && (t.core.phase === 'running' || t.core.phase === 'grace')); }
 
 function scheduleLoop(delay) {
   if (loopTimer) { clearTimeout(loopTimer); loopTimer = null; }
@@ -212,10 +210,6 @@ async function checkAllTrackedProcesses() {
   }
 }
 
-function ensureTrackingLoop() {
-  if (!loopTimer && !isChecking) scheduleLoop(core.pollDelay(Object.values(trackedProcesses).map((t) => t.core), Date.now()));
-}
-
 // Name of the executable a tracked path stands for, or '' for things that are
 // not files (steam://..., shell:AppsFolder\..., a .lnk/.url shortcut).
 function trackableExeName(p) {
@@ -320,21 +314,6 @@ function startTracking(gameId, exePath, installDir, steamAppId, pid, opts) {
   // Immediate check so we don't wait for the next (possibly slow) tick.
   scheduleLoop(300);
   return t;
-}
-
-// Pre-registers games from library and returns IDs of any games already running
-async function initLibraryTracking(gamesList) {
-  if (!Array.isArray(gamesList)) return [];
-  for (const g of gamesList) {
-    if (!g) continue;
-    configureTracking(String(g.id), g);
-    if (g.exePath || g.steamAppId || g.installDir || g.trackExe) {
-      registerTrackedGame(String(g.id), g.exePath, g.installDir, g.steamAppId);
-    }
-  }
-  await checkAllTrackedProcesses();
-  ensureTrackingLoop();
-  return Object.values(trackedProcesses).filter((t) => isRunningPhase(t)).map((t) => t.gameId);
 }
 
 function stopTracking(gameId) {
@@ -460,4 +439,4 @@ function runningSessions() {
     .map((t) => ({ gameId: String(t.gameId), installDir: t.installDir || '', sessionStart: t.core.sessionStart || 0 }));
 }
 
-module.exports = { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions };
+module.exports = { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, killGameProcesses, runningGameIds, runningSessions };

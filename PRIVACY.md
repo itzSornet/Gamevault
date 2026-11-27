@@ -1,8 +1,12 @@
 # GameVault privacy policy
 
-_Last updated: 10 November 2026_
+_Last updated: 27 November 2026_
 
-GameVault is a game launcher and library for your PC. Everything works without an account. This page covers what happens when you sign in to the optional GameVault account (Gamevault Cloud).
+GameVault is a game launcher and library for your PC. Everything works without an account, and your library stays on your PC. This page covers what GameVault sends to its server, and what happens when you sign in to the optional GameVault account (GameVault Cloud).
+
+## Without an account
+
+To fill in artwork, wishlist prices and the lines on your Peak games, GameVault asks its server about a game by its name or store ID (and your country, for prices). These lookups carry no account and aren't tied to you. Your playtime, sessions, notes and file paths never leave your PC unless you sign in and turn on library sync.
 
 ## What we store when you sign in
 
@@ -24,8 +28,8 @@ Data is stored with [Supabase](https://supabase.com) (servers in the EU, Frankfu
 ## Your choices
 
 - Turn either cloud feature off at any time in **Settings → Account & cloud**.
-- Delete individual save backups from a game's page.
-- To delete your account and everything stored with it, open an issue at [github.com/itzSornet/Gamevault/issues](https://github.com/itzSornet/Gamevault/issues) or email the address on the GameVault Google sign-in screen, and it will be removed.
+- Delete individual save backups in **Settings → Backups**.
+- Delete your account and everything stored with it in **Settings → Account & cloud → Delete account**. If that fails, open an issue at [github.com/itzSornet/Gamevault/issues](https://github.com/itzSornet/Gamevault/issues) and it will be removed by hand.
 
 ## Changes
 

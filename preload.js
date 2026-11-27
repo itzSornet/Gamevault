@@ -74,10 +74,6 @@ contextBridge.exposeInMainWorld('api', {
   saveConfig: (c) => ipcRenderer.invoke('config:save', c),
 
   // Auto-detect
-  detectSteam:  () => ipcRenderer.invoke('detect:steam'),
-  detectEpic:   () => ipcRenderer.invoke('detect:epic'),
-  detectLutris: () => ipcRenderer.invoke('detect:lutris'),
-  detectFolder: () => ipcRenderer.invoke('detect:folder'),
   importSources: () => ipcRenderer.invoke('import:sources'),
   importScan: (id) => ipcRenderer.invoke('import:scan', id),
   importFolder: () => ipcRenderer.invoke('import:folder'),
@@ -85,13 +81,9 @@ contextBridge.exposeInMainWorld('api', {
   gpuStatus: () => ipcRenderer.invoke('app:gpu'),
   windowSnapshot: () => ipcRenderer.invoke('win:snapshot'),
   perfLog: (sample) => ipcRenderer.send('perf:log', sample),
-  perfPath: () => ipcRenderer.invoke('perf:path'),
-  perfReveal: () => ipcRenderer.send('perf:reveal'),
 
   // Exe tracking
-  trackingStart: (gameId, exePath, installDir, steamAppId) => ipcRenderer.send('tracking:start', { gameId, exePath, installDir, steamAppId }),
   trackingStop:  (gameId)                                  => ipcRenderer.send('tracking:stop',  { gameId }),
-  trackingActive: ()                                       => ipcRenderer.invoke('tracking:active'),
   onTrackingTick:       (cb) => ipcRenderer.on('tracking:tick',        (_, d) => cb(d)),
   onTrackingSessionEnd: (cb) => ipcRenderer.on('tracking:session-end', (_, d) => cb(d)),
   onTrackingStarted:    (cb) => ipcRenderer.on('tracking:started',     (_, d) => cb(d)),
@@ -101,7 +93,6 @@ contextBridge.exposeInMainWorld('api', {
   runningProcesses: (opts) => ipcRenderer.invoke('tracking:running-processes', opts || {}),
 
   // Pick image file for custom cover
-  pickImage: () => ipcRenderer.invoke('pick:image'),
   uiClipboardWrite: (text) => ipcRenderer.invoke('ui:clipboard-write', text),
   uiClipboardText: () => ipcRenderer.invoke('ui:clipboard-text'),
   uiZoom: (k) => ipcRenderer.invoke('ui:zoom', k),
@@ -131,37 +122,25 @@ contextBridge.exposeInMainWorld('api', {
   sgdbAutofill: (payload) => ipcRenderer.invoke('sgdb:autofill', payload),
   logError: (entry) => ipcRenderer.send('log:renderer-error', entry),
   sgdbCache: (payload) => ipcRenderer.invoke('sgdb:cache', payload),
-  sgdbKeyGet: () => ipcRenderer.invoke('sgdb:key:get'),
-  sgdbKeySet: (key) => ipcRenderer.invoke('sgdb:key:set', key),
-  sgdbKeyTest: () => ipcRenderer.invoke('sgdb:key:test'),
 
   // Disk scan
-  detectDisk: () => ipcRenderer.invoke('detect:disk'),
-  smartScan: () => ipcRenderer.invoke('detect:smart'),
-  onDetectProgress: (cb) => ipcRenderer.on('detect:progress', (_, msg) => cb(msg)),
 
   // Startup with Windows
   getStartup: () => ipcRenderer.invoke('startup:get'),
   setStartup: (v) => ipcRenderer.invoke('startup:set', v),
 
   // Scan running processes
-  scanRunning: (games) => ipcRenderer.invoke('games:scan-running', games),
 
   // External links
   openExternal: (url) => ipcRenderer.send('open-external', url),
 
-  // Overlay
+  // Capture hotkeys
   updateCaptureHotkeys: () => ipcRenderer.invoke('capture:update-hotkeys'),
 
   // Media Capture
-  takeScreenshot: () => ipcRenderer.send('capture:screenshot'),
-  toggleRecording: () => ipcRenderer.send('capture:toggle-record'),
-  isRecording: () => ipcRenderer.invoke('capture:is-recording'),
   onCaptureChanged: (cb) => ipcRenderer.on('capture:changed', () => cb()),
-  onRecordingChanged: (cb) => ipcRenderer.on('capture:recording', (_, on) => cb(!!on)),
   openCapturesFolder: () => ipcRenderer.send('capture:open-folder'),
   openMedia: (path) => ipcRenderer.send('capture:open', path),
-  getRecentMedia: (limit) => ipcRenderer.invoke('capture:get-recent', limit),
   getAllMedia: () => ipcRenderer.invoke('capture:get-all'),
   deleteMedia: (path) => ipcRenderer.invoke('capture:delete-media', path),
   showMediaInFolder: (path) => ipcRenderer.send('capture:show-folder', path),

@@ -12,10 +12,10 @@ const http = require('http');
 const crypto = require('crypto');
 const platform = require('./src/backend/platform.js');
 
-const { DATA_PATH, CONFIG_PATH, loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig, writeJsonAtomicSync } = require('./src/backend/data.js');
-const { detectSteamGames, detectEpicGames, detectLutrisGames, scanFolder, smartScan, scanAllDisks, resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
+const { DATA_PATH, loadGames, saveGames, lastLoadIssue, cacheImage, cacheGameImages, normalizeLegacyFileUrl, loadConfig, saveConfig, mergeConfig, publicConfig } = require('./src/backend/data.js');
+const { resolveSteamInstallDir, findMainExe } = require('./src/backend/scanner.js');
 const importers = require('./src/backend/importers.js');
-const { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, collectGameExes, initLibraryTracking, killGameProcesses, runningGameIds, runningSessions } = require('./src/backend/tracker.js');
+const { onSessionEnd, setAfkMinutes, configureTracking, setTrackerWindow, startTracking, stopTracking, stopAllTracking, trackedProcesses, killGameProcesses, runningGameIds, runningSessions } = require('./src/backend/tracker.js');
 
 const { initUpdater } = require('./src/backend/updater.js');
 const { createSgdb } = require('./src/backend/sgdb.js');
@@ -110,21 +110,9 @@ function sendLaunchError(gameId, error, extra) {
 // CLI flags (used by autostart and compositor keybinds on Wayland)
 const cliArgs = platform.parseCliArgs(process.argv);
 
-// Headless capture mode used while building the UI:
-//   electron . --shot /tmp/shot.png [--wait 1500]
-const shotIdx = process.argv.indexOf('--shot');
-const shotPath = shotIdx !== -1 ? process.argv[shotIdx + 1] : '';
-const waitIdx = process.argv.indexOf('--wait');
-const shotWait = waitIdx !== -1 ? Number(process.argv[waitIdx + 1]) || 1500 : 1500;
-const stateIdx = process.argv.indexOf('--shot-state');
-const shotState = stateIdx !== -1 ? process.argv[stateIdx + 1] : '';
-const delayIdx = process.argv.indexOf('--shot-delay');
-const shotDelay = delayIdx !== -1 ? Number(process.argv[delayIdx + 1]) || 900 : 900;
-
 // A second launch must never create a second library window.
 // It hands its flags to the running instance instead.
-const shotMode = process.argv.includes('--shot');
-const hasSingleInstanceLock = shotMode ? true : app.requestSingleInstanceLock();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 // Wayland has no X11-style screen grab; Electron needs the PipeWire path.
@@ -592,7 +580,7 @@ function bringToFront() {
 }
 
 function createWindow() {
-  const startBigPicture = !shotPath && BigPicture.startsIn({ flag: cliArgs.bigPicture, config: loadConfig() });
+  const startBigPicture = BigPicture.startsIn({ flag: cliArgs.bigPicture, config: loadConfig() });
   win = new BrowserWindow({
     ...(startBigPicture && !backgroundMode ? { fullscreen: true } : {}),
     ...(backgroundMode ? { x: -12000, y: -12000, focusable: false, skipTaskbar: true } : {}),
@@ -603,7 +591,7 @@ function createWindow() {
     // Frameless: the renderer draws its own minimize / maximize / close buttons
     // (see .win-controls in index.html) and the top bar is the drag handle.
     frame: false,
-    show: !shotPath && !backgroundMode,
+    show: !backgroundMode,
     backgroundColor: '#07080c',
     icon: path.join(__dirname, 'src', platform.iconFile()),
     webPreferences: {
@@ -624,9 +612,8 @@ function createWindow() {
   initUpdater(win, () => { forceQuit = true; });
 
   const query = {};
-  if (process.argv.includes('--shot')) query.shot = '1';
   if (startBigPicture) query.bp = '1';   // the renderer opens straight into Big Picture
-  win.loadFile(path.join(__dirname, 'src', 'index.html'), { hash: shotState || '', query: Object.keys(query).length ? query : undefined });
+  win.loadFile(path.join(__dirname, 'src', 'index.html'), { query: Object.keys(query).length ? query : undefined });
   // Chromium remembers page zoom per origin: a reload must not stay zoomed
   // unless Big Picture is (still) on
   win.webContents.on('did-finish-load', () => {
@@ -638,137 +625,6 @@ function createWindow() {
   win.webContents.on('console-message', (_e, level, message) => {
     if (level >= 2) console.log('[renderer]', message);
   });
-
-  if (shotPath) {
-    win.webContents.once('did-finish-load', () => {
-      if (process.argv.includes('--gpu-log')) {
-        setTimeout(async () => {
-          try {
-            console.log('[gpu-live]', JSON.stringify(app.getGPUFeatureStatus()));
-            const i = await app.getGPUInfo('complete');
-            console.log('[gpu-live-info]', JSON.stringify(i).slice(0, 500));
-          } catch (e) { console.log('[gpu-live] err', e.message); }
-        }, 1500);
-      }
-    });
-    // Never leave a headless instance behind if the page fails to load.
-    const shotTimer = setTimeout(() => {
-      console.error('[shot] timed out waiting for the page');
-      app.exit(1);
-    }, shotWait + 20000);
-
-    win.webContents.once('did-finish-load', () => {
-      setTimeout(async () => {
-        try {
-          await win.webContents.executeJavaScript("document.documentElement.classList.add('shot-mode'); document.body.classList.add('shot-mode');");
-          if (shotState) {
-            const info = await win.webContents.executeJavaScript(`(() => {
-              let err = '';
-              try {
-                window.__gvForceAnim = true;
-                if (typeof window.__gvDevOpen === 'function') window.__gvDevOpen(${JSON.stringify(shotState)});
-                else err = 'no dev hook';
-              } catch (e) { err = String(e); }
-              const strip = document.getElementById('shelf-strip');
-              const t0 = strip && strip.querySelector('.shelf-tile');
-              const gv = document.getElementById('game-view');
-              return {
-                err,
-                cards: document.querySelectorAll('.card').length,
-                gameViewVisible: gv ? !gv.hidden : false,
-                gameViewHeight: gv ? Math.round(gv.getBoundingClientRect().height) : 0,
-                stripRect: strip ? (r => [Math.round(r.x), Math.round(r.width)])(strip.getBoundingClientRect()) : null,
-                stripPad: strip ? getComputedStyle(strip).paddingLeft : null,
-                stripScroll: strip ? strip.scrollLeft : null,
-                tileRect: t0 ? (r => [Math.round(r.x), Math.round(r.width)])(t0.getBoundingClientRect()) : null,
-                tileTop: t0 ? Math.round(t0.getBoundingClientRect().top) : null,
-                tileH: t0 ? Math.round(t0.getBoundingClientRect().height) : null,
-                stripTop: strip ? Math.round(strip.getBoundingClientRect().top) : null,
-                stripH: strip ? Math.round(strip.getBoundingClientRect().height) : null,
-                stageTitle: (document.querySelector('[data-title]') || {}).textContent || null,
-                firstTile: (document.querySelector('.shelf-tile-label') || {}).textContent || null,
-                detailTitle: (document.querySelector('.gv-title') || {}).textContent || null,
-                saveProbe: window.__saveProbe || null,
-                addProbe: window.__addProbe || null,
-                flow: window.__flow || null,
-                detailArt: (() => {
-                  const el = document.querySelector('.gv-art');
-                  if (!el || !el.style.backgroundImage) return null;
-                  return el.style.backgroundImage.slice(-42);
-                })(),
-                vis: (() => {
-                  const g = (id) => { const el = document.getElementById(id); return el ? !el.hidden : null; };
-                  return { shelf: g('shelf'), library: g('library'), detail: g('game-view'), modal: g('modal'), filterbar: g('filterbar'), topbar: g('topbar') };
-                })(),
-                artPanel: (() => {
-                  const p = document.getElementById('art-panel');
-                  if (!p) return null;
-                  return {
-                    hidden: p.hidden,
-                    items: p.querySelectorAll('.sg-thumb').length,
-                    text: (p.querySelector('.art-match') || {}).textContent || '',
-                    empty: (p.querySelector('.art-empty') || {}).textContent || '',
-                    button: (document.querySelector('[data-art-expand]') || {}).textContent || '',
-                    tab: (p.querySelector('.art-tab.is-active') || {}).textContent || '',
-                    modalHidden: (document.getElementById('modal') || {}).hidden,
-                    firstNotes: (window.__gvNotesProbe ? 'probe' : ''),
-                    thumbs: p.querySelectorAll('.art-grid .sg-thumb').length,
-                    cols: (() => { const g = p.querySelector('.art-grid'); return g ? getComputedStyle(g).gridTemplateColumns : ''; })(),
-                    firstThumb: (() => {
-                      const t = p.querySelector('.sg-thumb');
-                      if (!t) return null;
-                      const r = t.getBoundingClientRect();
-                      const cs = getComputedStyle(t);
-                      return [Math.round(r.width), Math.round(r.height), cs.aspectRatio, cs.height, cs.alignSelf];
-                    })(),
-                  };
-                })(),
-                tileCount: document.querySelectorAll('.shelf-tile').length,
-                sortOpened: window.__sortOpened,
-                sortErr: window.__sortErr || null,
-                handlerSrc: window.__handlerSrc,
-                ariaAfter: window.__ariaAfter,
-                openCalls: window.__openCalls || 0,
-                closeCalls: window.__closeCalls || 0,
-                sortHasHandler: window.__hasHandler,
-              };
-            })()`);
-            console.log('[shot] state:', JSON.stringify(info));
-            await new Promise((r) => setTimeout(r, shotDelay));
-          }
-
-          try {
-            const scrollAfter = await win.webContents.executeJavaScript("document.getElementById('shelf-strip') ? document.getElementById('shelf-strip').scrollLeft : -1");
-            console.log('[shot] railScroll=' + scrollAfter);
-            const bg = await win.webContents.executeJavaScript(`(() => {
-              const a = document.querySelector('.shelf-art.is-on');
-              const st = window.__gvState;
-              const g = st && st.games.find((x) => String(x.id) === String(st.shelfId));
-              const gvEl = document.getElementById('game-view');
-              return {
-                fold: gvEl ? [gvEl.scrollHeight, gvEl.clientHeight, gvEl.scrollWidth, gvEl.clientWidth] : null,
-                stage: a ? a.style.backgroundImage : null,
-                heroUrl: g ? g.heroUrl : null,
-                heroThumb: g ? g._hero : null,
-                baseHero: window.__baseHero || null,
-                targetHero: window.__targetHero || null,
-                thumbs: document.querySelectorAll('#art-results .sg-thumb').length || 0,
-              };
-            })()`);
-            console.log('[shot] artProbe=' + JSON.stringify(bg));
-          } catch (_) {}
-
-          const image = await win.webContents.capturePage();
-          clearTimeout(shotTimer);
-          fs.writeFileSync(shotPath, image.toPNG());
-          console.log('[shot] wrote ' + shotPath);
-        } catch (e) {
-          console.error('[shot] failed:', e.message);
-        }
-        app.exit(0);
-      }, shotWait);
-    });
-  }
 
   // Close to tray instead of quitting
   win.on('close', (e) => {
@@ -951,9 +807,6 @@ function createWindow() {
     protonPath: process.platform === 'linux' ? platform.findProton() : '',
   }));
   ipcMain.handle('capture:update-hotkeys', () => registerCaptureShortcuts(loadConfig()));
-  ipcMain.on('capture:screenshot', () => { Capture.screenshot(); });
-  ipcMain.on('capture:toggle-record', () => { Capture.toggleRecording(); });
-  ipcMain.handle('capture:is-recording', () => Capture.isRecording());
   ipcMain.on('capture:open-folder', () => {
     const d = mediaDirPath();
     try { fs.mkdirSync(d, { recursive: true }); } catch (_) {}
@@ -999,14 +852,6 @@ function createWindow() {
     out.sort((a, b) => b.time - a.time);
     return out;
   };
-  ipcMain.handle('capture:get-recent', (_, limit = 3) => {
-    try {
-      const all = listMedia();
-      return limit ? all.slice(0, limit) : all;
-    } catch (e) {
-      return [];
-    }
-  });
 
   ipcMain.handle('capture:get-all', () => {
     try { return listMedia(); } catch (e) { return []; }
@@ -1175,9 +1020,6 @@ function createWindow() {
     }
   });
 
-  ipcMain.handle('detect:steam', () => detectSteamGames());
-  ipcMain.handle('detect:epic', () => detectEpicGames());
-  ipcMain.handle('detect:lutris', () => detectLutrisGames());
   ipcMain.handle('import:sources', () => importers.listSources());
   const PERF_LOG = path.join(app.getPath('userData'), 'perf.log');
   ipcMain.on('perf:log', (_, sample) => {
@@ -1187,8 +1029,6 @@ function createWindow() {
       if (st.size > 3 * 1024 * 1024) fs.renameSync(PERF_LOG, PERF_LOG + '.old');
     } catch (_) {}
   });
-  ipcMain.handle('perf:path', () => PERF_LOG);
-  ipcMain.on('perf:reveal', () => { try { shell.showItemInFolder(PERF_LOG); } catch (_) {} });
 
   ipcMain.handle('app:gpu', () => {
     try { return app.getGPUFeatureStatus(); } catch (e) { return {}; }
@@ -1216,16 +1056,6 @@ function createWindow() {
     return result.filePaths.map((f) => importers.ingestFile(f)).filter(Boolean);
   });
 
-  ipcMain.handle('detect:folder', async () => {
-    const result = await dialog.showOpenDialog(win, {
-      properties: ['openDirectory'],
-      title: 'Select games folder to scan',
-    });
-    if (result.canceled || !result.filePaths[0]) return [];
-    return scanFolder(result.filePaths[0]);
-  });
-
-  ipcMain.on('tracking:start', (_, { gameId, exePath, installDir, steamAppId }) => startTracking(String(gameId), exePath, installDir, steamAppId));
   ipcMain.on('tracking:stop', (_, { gameId }) => stopTracking(String(gameId)));
 
   // "Detect" in the edit dialog: names of running programs a user could pick
@@ -1253,7 +1083,6 @@ function createWindow() {
       return [];
     }
   });
-  ipcMain.handle('tracking:active', () => Object.keys(trackedProcesses));
 
   // startAt: where the file was, or the game's folder; the picker opens in
   // the nearest folder of it that still exists
@@ -1341,21 +1170,6 @@ function createWindow() {
   });
   ipcMain.handle('ui:bg-clear', async () => { await clearBackgrounds(null); return true; });
 
-  ipcMain.handle('pick:image', async () => {
-    const result = await dialog.showOpenDialog(win, {
-      properties: ['openFile'],
-      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'] }],
-      title: 'Select cover image',
-    });
-    if (result.canceled || !result.filePaths[0]) return null;
-    // Convert to base64 data URL so it works without file:// CSP issues
-    const imgPath = result.filePaths[0];
-    const ext = path.extname(imgPath).slice(1).toLowerCase();
-    const mime = ext === 'jpg' ? 'jpeg' : ext;
-    const data = fs.readFileSync(imgPath).toString('base64');
-    return `data:image/${mime};base64,${data}`;
-  });
-
   ipcMain.on('game:launch', (_, { exePath, steamAppId, gameId, installDir, launcherPath }) => {
     launchGame(gameId, exePath, installDir, steamAppId, launcherPath);
   });
@@ -1364,9 +1178,6 @@ function createWindow() {
   ipcMain.handle('game:kill', async (_, { gameId, exePath, installDir, steamAppId, launcherPath }) => {
     return await killGameProcesses(gameId, exePath, installDir, steamAppId, launcherPath);
   });
-
-  ipcMain.handle('detect:disk', () => scanAllDisks());
-  ipcMain.handle('detect:smart', () => smartScan(win));
 
   function sgdbOrThrow() {
     const cfg = loadConfig();
@@ -1944,27 +1755,6 @@ function createWindow() {
     return cacheImage(url, kind || 'art');
   }));
 
-  ipcMain.handle('sgdb:key:get', () => {
-    const cfg = loadConfig();
-    return { hasKey: !!cfg.sgdbKey };
-  });
-
-  ipcMain.handle('sgdb:key:set', (_e, key) => {
-    try {
-      const cfg = loadConfig();
-      cfg.sgdbKey = String(key || '').trim();
-      saveConfig(cfg);
-      return { ok: true, hasKey: !!cfg.sgdbKey };
-    } catch (err) {
-      return { ok: false, error: err && err.message };
-    }
-  });
-
-  ipcMain.handle('sgdb:key:test', sgdbWrap(async () => {
-    const games = await sgdbOrThrow().searchGames('hades');
-    return { count: games.length };
-  }));
-
   ipcMain.handle('startup:get', () => {
     if (process.platform === 'linux') {
       return fs.existsSync(autostartFilePath());
@@ -1987,15 +1777,6 @@ function createWindow() {
     return true;
   });
 
-  ipcMain.handle('games:scan-running', async (_, gamesList) => {
-    try {
-      return await initLibraryTracking(gamesList);
-    } catch (e) {
-      console.warn('Scan running failed', e);
-      return [];
-    }
-  });
-
   ipcMain.on('open-external', (_, url) => {
     if (typeof url !== 'string' || url.length > 8192) return;
     let parsed;
@@ -2004,7 +1785,6 @@ function createWindow() {
     shell.openExternal(parsed.href).catch(() => {});
   });
 
-  // AI Advisor handlers
   startBgPoll();
 }
 
@@ -2027,24 +1807,6 @@ app.whenReady().then(() => {
     try { app.setAppUserModelId(require('./package.json').build.appId); } catch (_) {}
   }
   cleanOwnCachesWhenTight();
-  if (process.argv.includes('--gpu-info')) {
-    console.log('[gpu-probe] start');
-    // Query AFTER a window exists: before that the GPU process has not started.
-    const probe = new BrowserWindow({ show: false, width: 1200, height: 760, webPreferences: { contextIsolation: true } });
-    probe.loadFile(path.join(__dirname, 'src', 'index.html'));
-    probe.webContents.once('did-finish-load', () => {
-      console.log('[gpu-probe] loaded');
-      setTimeout(async () => {
-        try {
-          console.log('[gpu-live]', JSON.stringify(app.getGPUFeatureStatus()));
-          const info = await app.getGPUInfo('complete');
-          console.log('[gpu-live-info]', JSON.stringify(info).slice(0, 600));
-        } catch (e) { console.log('[gpu-live] error', e.message); }
-        app.exit(0);
-      }, 3000);
-    });
-    return;
-  }
   if (!hasSingleInstanceLock) return;
   createWindow();
   // a tray failure must not stop the rest of start-up (hotkeys, image cache)
