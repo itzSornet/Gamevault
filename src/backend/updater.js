@@ -17,6 +17,9 @@ const UPDATES_DISABLED = /experimental/i.test(app.getVersion());
 let mainWindow = null;
 let updateAvailableInfo = null;
 let isDownloading = false;
+// Check now in Settings always shows a newer version, even one that was
+// skipped or snoozed; only the automatic check holds those back.
+let manualCheck = false;
 
 function initUpdater(win, onBeforeQuit) {
   mainWindow = win;
@@ -40,14 +43,15 @@ function initUpdater(win, onBeforeQuit) {
   autoUpdater.on('update-available', (info) => {
     updateAvailableInfo = info;
     const config = loadConfig();
-
-    // Check if this version is skipped
-    if (config.skippedVersion && config.skippedVersion === info.version) {
-      return;
-    }
-
-    // Check if update reminder is snoozed
-    if (config.snoozeUntil && Date.now() < config.snoozeUntil && config.snoozedVersion === info.version) {
+    const manual = manualCheck;
+    manualCheck = false;
+    const skipped = config.skippedVersion && config.skippedVersion === info.version;
+    const snoozed = config.snoozeUntil && Date.now() < config.snoozeUntil && config.snoozedVersion === info.version;
+    if (!manual && (skipped || snoozed)) {
+      // still answer, so Settings doesn't sit on "Checking…"
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('updater:not-available', { version: app.getVersion(), latestVersion: info.version, held: info.version });
+      }
       return;
     }
 
@@ -64,6 +68,7 @@ function initUpdater(win, onBeforeQuit) {
 
   autoUpdater.on('update-not-available', (info) => {
     updateAvailableInfo = null;
+    manualCheck = false;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater:not-available', {
         version: app.getVersion(),
@@ -94,6 +99,7 @@ function initUpdater(win, onBeforeQuit) {
 
   autoUpdater.on('error', (err) => {
     isDownloading = false;
+    manualCheck = false;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater:error', {
         message: (err && err.message) ? err.message : 'Unable to check for updates.'
@@ -119,6 +125,7 @@ function initUpdater(win, onBeforeQuit) {
         // and for installs that cannot self-update (package manager).
         return await checkGitHubReleasesDev(isManual);
       }
+      manualCheck = !!isManual;
       return await autoUpdater.checkForUpdates();
     } catch (e) {
       if (mainWindow && !mainWindow.isDestroyed()) {
