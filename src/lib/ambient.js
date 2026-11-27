@@ -9,7 +9,9 @@
  * Cheap by design: it renders at ~1/4 of the window size (the browser scales it
  * up, and everything over it is blurred anyway), steps at ~20 fps, and stops
  * entirely when the window is hidden, on the Lite tier, under software
- * rendering, or with reduced motion (one still frame instead).
+ * rendering, or with reduced motion (one still frame instead). It also holds
+ * still while another window has focus and after 2 minutes without input:
+ * repainting the glass over it costs ~15% of a core, for nobody watching.
  * While it runs, #ambient gets .has-fluid and the CSS bands step aside.
  */
 (function () {
@@ -19,6 +21,7 @@
   const SCALE = 0.25;           // canvas pixels per CSS pixel
   const MAX_W = 520;            // cap for very large windows
   const SPEED = 0.03;           // noise-time units per second (wallpaper ≈ 0.1)
+  const IDLE_MS = 2 * 60 * 1000; // no mouse, keys or controller this long: hold still
 
   const VS = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
 
@@ -195,17 +198,39 @@ void main(){
     host.classList.add('has-fluid');
     // Settings → Appearance → Motion: Reduced or Off holds one still frame too
     const appStill = root.dataset.uiMotion === 'reduced' || root.dataset.uiMotion === 'off';
-    const still = (reduced && reduced.matches) || appStill || document.hidden;
+    const away = !document.hasFocus() || Date.now() - lastInput >= IDLE_MS;
+    const still = (reduced && reduced.matches) || appStill || document.hidden || away;
     if (root.dataset.busy === '1') stop();            // a layout animation is running: hold the last frame
-    else if (still) { stop(); draw(); } else start();
+    else if (still) { stop(); draw(); } else { start(); armIdle(); }
   }
+
+  // Nobody using the window: one timer checks back when the 2 minutes could be up.
+  let lastInput = Date.now();
+  let idleTimer = 0;
+  function armIdle() {
+    if (idleTimer) return;
+    idleTimer = setTimeout(() => {
+      idleTimer = 0;
+      if (Date.now() - lastInput >= IDLE_MS) sync(); else if (running) armIdle();
+    }, Math.max(1000, lastInput + IDLE_MS - Date.now()));
+  }
+  // any input: note the time, and pick the motion back up if it was idling
+  function wake() {
+    const wasIdle = Date.now() - lastInput >= IDLE_MS;
+    lastInput = Date.now();
+    if (wasIdle && gl) sync();
+  }
+  for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel']) window.addEventListener(type, wake, { capture: true, passive: true });
+  window.addEventListener('focus', sync);
+  window.addEventListener('blur', sync);
 
   new MutationObserver((list) => {
     if (list.some((m) => m.attributeName === 'data-palette')) applyColors();
     sync();
   }).observe(root, { attributes: true, attributeFilter: ['data-palette', 'data-tier', 'data-software', 'data-busy', 'data-ui-background', 'data-ui-motion'] });
   // a custom accent or tint changes the colours without touching data-palette
-  window.GvAmbient = { refresh: applyColors };
+  // the controller reads the Gamepad API, which fires no page events: it calls wake()
+  window.GvAmbient = { refresh: applyColors, wake };
   document.addEventListener('visibilitychange', sync);
   if (reduced && reduced.addEventListener) reduced.addEventListener('change', sync);
   window.addEventListener('resize', resize);

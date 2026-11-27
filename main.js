@@ -1,7 +1,7 @@
 // GameVault v1.3.1 - Main Process
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, safeStorage } = require('electron');
-app.name = 'GameVault Experimental';
-if (app.setName) app.setName('GameVault Experimental');
+app.name = 'GameVault';
+if (app.setName) app.setName('GameVault');
 // Cap Chromium's disk caches: headless capture runs used to inflate them to GBs.
 app.commandLine.appendSwitch('disk-cache-size', String(150 * 1024 * 1024));
 
@@ -2090,6 +2090,34 @@ app.whenReady().then(() => {
   });
   // Keep SteamGridDB picker images in Chromium's cache for 3 days.
   installSgdbImageCaching(session.defaultSession);
+});
+
+// Windows only ever show GameVault's own pages. A link or file dropped on the
+// window, or a stray redirect, would otherwise load a page that gets the
+// app's API through the preload script. Web links open in the browser.
+const APP_PAGES_DIR = path.join(__dirname, 'src') + path.sep;
+function isAppPage(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'file:') return false;
+    const p = require('url').fileURLToPath(u);
+    return process.platform === 'win32'
+      ? p.toLowerCase().startsWith(APP_PAGES_DIR.toLowerCase())
+      : p.startsWith(APP_PAGES_DIR);
+  } catch (_) { return false; }
+}
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-navigate', (e, url) => {
+    if (!isAppPage(url)) e.preventDefault();
+  });
+  contents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(u.href).catch(() => {});
+    } catch (_) {}
+    return { action: 'deny' };
+  });
+  contents.on('will-attach-webview', (e) => e.preventDefault());
 });
 
 app.on('window-all-closed', () => {

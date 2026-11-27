@@ -71,8 +71,23 @@
   // Dates and numbers: English words, in the order and separators of the
   // user's regional format (lib/locale.js)
   const LOC = (window.GVLocale && GVLocale.pick(window.api && window.api.locale)) || 'en-US';
-  const fmtNum = (n, digits = 0) => (Number(n) || 0).toLocaleString(LOC, { maximumFractionDigits: digits });
-  const fmtDay = (ts, opts) => new Date(ts).toLocaleDateString(LOC, opts);
+  // Formatters are built once per option set: making one per call was the
+  // top cost of redrawing a big library (every card's hours and dates).
+  const numFmts = new Map();
+  const fmtNum = (n, digits = 0) => {
+    let f = numFmts.get(digits);
+    if (!f) numFmts.set(digits, (f = new Intl.NumberFormat(LOC, { maximumFractionDigits: digits })));
+    return f.format(Number(n) || 0);
+  };
+  const dayFmts = new Map();
+  const fmtDay = (ts, opts) => {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return d.toLocaleDateString(LOC, opts); // "Invalid Date", as before
+    const key = opts ? JSON.stringify(opts) : '';
+    let f = dayFmts.get(key);
+    if (!f) dayFmts.set(key, (f = new Intl.DateTimeFormat(LOC, opts)));
+    return f.format(d);
+  };
   const fmtDayRange = (a, b) => {
     try { return new Intl.DateTimeFormat(LOC, { month: 'short', day: 'numeric' }).formatRange(new Date(a), new Date(b)); } catch (_) { return `${fmtDay(a, { month: 'short', day: 'numeric' })} – ${fmtDay(b, { month: 'short', day: 'numeric' })}`; }
   };
@@ -247,12 +262,21 @@
   // keys that change and adopt the merged config main sends back. Patches go
   // out one at a time so a stale reply can never overwrite a newer one.
   let configChain = Promise.resolve();
+  let unsavedConfig = {}; // changes whose save failed, sent with the next one
   function saveConfigPatch(patch) {
     if (!patch || typeof patch !== 'object') return Promise.resolve(state.config);
     Object.assign(state.config, patch);
     const run = configChain.then(async () => {
-      const merged = await api.saveConfig(patch);
-      if (merged && typeof merged === 'object' && !Array.isArray(merged)) state.config = merged;
+      // a change that failed to save before (settings file locked) goes along
+      const send = { ...unsavedConfig, ...patch };
+      try {
+        const merged = await api.saveConfig(send);
+        unsavedConfig = {};
+        if (merged && typeof merged === 'object' && !Array.isArray(merged)) state.config = merged;
+      } catch (e) {
+        unsavedConfig = send;
+        throw e;
+      }
       return state.config;
     }).catch((e) => { console.warn('config save failed', e); return state.config; });
     configChain = run;
@@ -1628,9 +1652,9 @@
         <button class="close-x" data-close aria-label="Close">✕</button>
       </div>
       <div class="modal-body cap-view">
-        <button type="button" class="cap-nav is-prev" data-cap-prev aria-label="Previous">‹</button>
+        <button type="button" class="cap-nav is-prev" data-cap-prev aria-label="Previous"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.5 6-6 6 6 6"/></svg></button>
         <div class="cap-stage" data-cap-stage></div>
-        <button type="button" class="cap-nav is-next" data-cap-next aria-label="Next">›</button>
+        <button type="button" class="cap-nav is-next" data-cap-next aria-label="Next"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></button>
       </div>
       <div class="modal-foot">
         <span class="cap-when" data-cap-when></span>
@@ -4249,6 +4273,25 @@
     if (el) el.focus({ preventScroll: true });
   }
 
+  // The game page's ⋯ menu sits in the header, which clips (the artwork must
+  // stay inside it). In a short window the menu runs past the header's bottom
+  // and got cut off: then it's pinned to the window under its button instead.
+  function placeDetailMenu(menu, btn) {
+    const reset = () => { menu.style.position = ''; menu.style.top = ''; menu.style.right = ''; menu.style.zIndex = ''; };
+    reset();
+    const hero = menu.closest('.gvx-hero');
+    if (!hero) return;
+    if (menu.getBoundingClientRect().bottom <= hero.getBoundingClientRect().bottom - 4) return;
+    const b = btn.getBoundingClientRect();
+    const top = Math.round(b.bottom + 6);
+    menu.style.position = 'fixed';
+    menu.style.top = `${top}px`;
+    menu.style.right = `${Math.round(window.innerWidth - b.right)}px`;
+    menu.style.zIndex = '60';
+    // a transformed parent would make "fixed" relative to it: then keep it as it was
+    if (Math.abs(menu.getBoundingClientRect().top - top) > 2) reset();
+  }
+
   function wireDetail(g, wish) {
     const view = $('#game-view');
 
@@ -4263,6 +4306,7 @@
         const open = menu.hidden;
         menu.hidden = !open;
         menuBtn.setAttribute('aria-expanded', String(open));
+        if (open) placeDetailMenu(menu, menuBtn);
         if (open) menu.querySelector('button:not([disabled])')?.focus();
       };
       menu.addEventListener('click', (e) => {
@@ -4277,6 +4321,10 @@
         else if (item.hasAttribute('data-remove-game')) askRemoveGame(g);
       });
       view.onpointerdown = (e) => { if (!e.target.closest('.gvx-more-wrap')) closeMenu(); };
+      // a menu pinned to the window would float away from its button on scroll
+      if (view.__gvMenuScroll) view.removeEventListener('scroll', view.__gvMenuScroll, true);
+      view.__gvMenuScroll = () => { if (!menu.hidden) closeMenu(); };
+      view.addEventListener('scroll', view.__gvMenuScroll, true);
       menu.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         e.preventDefault();
@@ -6527,7 +6575,7 @@
             <button class="imp3-pick" data-pick aria-haspopup="listbox" aria-expanded="false">
               <span class="imp3-pick-ico" data-pick-ico></span>
               <span class="imp3-pick-name" data-pick-name>Select launcher</span>
-              <span class="imp3-caret">⌄</span>
+              <span class="imp3-caret"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
             </button>
             <div class="imp3-menu" data-menu hidden role="listbox" aria-label="Launchers"></div>
           </span>
@@ -8571,7 +8619,7 @@
     },
 
     async about() {
-      const version = await api.getAppVersion().catch(() => '2.0.0-experimental');
+      const version = await api.getAppVersion().catch(() => '2.0.0');
       const info = await (api.getPlatformInfo ? api.getPlatformInfo().catch(() => ({})) : Promise.resolve({}));
       const osName = info.platform === 'win32' ? 'Windows' : info.platform === 'linux' ? `Linux${info.wayland ? ' (Wayland)' : ''}` : (info.platform || 'unknown');
       const link = (url, label) => `<button type="button" class="st-link" data-ext="${esc(url)}">${esc(label)}</button>`;
@@ -11470,6 +11518,7 @@
         // first frame back: whatever is already held is not a new press
         if (pad.away) pad.away = false;
         else {
+          if (out.actions.length || out.scroll.y || out.scroll.x) window.GvAmbient?.wake?.(); // the background idles without input
           if (out.actions.length) {
             setPadMode(true);
             for (const a of out.actions) {

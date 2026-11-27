@@ -5,6 +5,8 @@
   let tracks = [];
   let audioCtx = null;
   let writes = Promise.resolve();
+  let starting = false;   // between cap:start and the recorder running
+  let stopWanted = false; // a stop that came in while starting
 
   // H.264 is encoded by the graphics card on most PCs: far less CPU while a
   // game runs than VP8/VP9 in software
@@ -18,6 +20,8 @@
   }
 
   window.cap.onStart(async ({ sourceId, width, height, audio, mic }) => {
+    starting = true;
+    stopWanted = false;
     try {
       const desktop = { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId };
       const screen = await navigator.mediaDevices.getUserMedia({
@@ -45,6 +49,8 @@
         out.addTrack(mix.stream.getAudioTracks()[0]);
       }
 
+      // stopped while the screen was being opened: don't start at all
+      if (stopWanted) { cleanup(); window.cap.done({ ok: false, error: 'Nothing was recorded' }); return; }
       const mimeType = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '';
       recorder = new MediaRecorder(out, { mimeType, videoBitsPerSecond: 16_000_000, audioBitsPerSecond: 160_000 });
       writes = Promise.resolve();
@@ -67,11 +73,14 @@
     } catch (e) {
       cleanup();
       window.cap.done({ ok: false, error: e && e.message ? e.message : 'Could not start recording' });
+    } finally {
+      starting = false;
     }
   });
 
   window.cap.onStop(() => {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
+    else if (starting) stopWanted = true; // onStart answers once the screen is open
     else { cleanup(); window.cap.done({ ok: false, error: 'Nothing was recorded' }); }
   });
 })();

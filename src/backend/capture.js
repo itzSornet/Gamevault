@@ -129,8 +129,13 @@ function setRecording(on) {
   opts.onRecording(on, rec && rec.game ? rec.game.name : '');
 }
 
+// pressing the shortcut again while a clip is still starting does nothing:
+// otherwise a quick double press started two, or one that could never stop
+let starting = false;
 async function toggleRecording() {
+  if (starting) return;
   if (rec) { stopRecording(); return; }
+  starting = true;
   try {
     const src = await screenSource(false);
     if (!src) throw new Error('No screen to record');
@@ -151,6 +156,8 @@ async function toggleRecording() {
     if (rec) { try { fs.rmSync(rec.part, { force: true }); } catch (_) {} }
     rec = null;
     notify('Recording failed', e.message);
+  } finally {
+    starting = false;
   }
 }
 

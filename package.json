@@ -1,7 +1,7 @@
 {
-  "name": "gamevault-experimental",
-  "version": "2.0.0-experimental.1",
-  "description": "GameVault 2.0 — experimental UI overhaul",
+  "name": "gamevault",
+  "version": "2.0.0",
+  "description": "Modern personal game library manager, playtime tracker, and launcher.",
   "main": "main.js",
   "author": "itzSornet",
   "license": "MIT",
@@ -22,15 +22,29 @@
     "start": "electron .",
     "build": "electron-builder --win --x64",
     "build:portable": "electron-builder --win portable",
-    "test": "node --test tests/"
+    "test": "node --test tests/",
+    "release:win": "electron-builder --win --x64 --publish always"
   },
   "build": {
-    "appId": "com.gamevault.experimental",
-    "productName": "GameVault Experimental",
-    "publish": null,
+    "appId": "com.gamevault.app",
+    "productName": "GameVault",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "itzSornet",
+        "repo": "Gamevault"
+      }
+    ],
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "LICENSE",
+      "src/**/*"
+    ],
     "win": {
       "target": [
         {
@@ -44,7 +58,15 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "src/icon.ico",
+      "uninstallerIcon": "src/icon.ico",
+      "installerSidebar": "installer/sidebar.bmp",
+      "uninstallerSidebar": "installer/sidebar.bmp",
+      "installerHeader": "installer/header.bmp",
+      "shortcutName": "GameVault",
+      "runAfterFinish": true,
+      "include": "installer/installer.nsh"
     }
   },
   "devDependencies": {

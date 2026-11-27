@@ -10,8 +10,8 @@ const { loadConfig, saveConfig } = require('./data.js');
 const CAN_SELF_UPDATE = process.platform !== 'linux' || !!process.env.APPIMAGE;
 const MANUAL_UPDATE = app.isPackaged && !CAN_SELF_UPDATE;
 const MANUAL_UPDATE_COMMAND = 'sudo pacman -Syu';
-// Experimental (2.0) builds are dev-only: they never look at the public 1.x
-// releases and have no update feed (package.json build.publish is null).
+// Test builds (a version with "experimental" in it) never look at the public
+// releases. Release builds update from GitHub (package.json build.publish).
 const UPDATES_DISABLED = /experimental/i.test(app.getVersion());
 
 let mainWindow = null;

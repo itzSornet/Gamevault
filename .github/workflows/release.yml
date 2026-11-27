@@ -1,0 +1,38 @@
+# GameVault release: pushing a tag like v2.0.0 builds the Windows installer and
+# uploads it, with latest.yml (the update feed), to a draft GitHub release.
+# Nothing reaches users until the draft is published by hand.
+# Linux builds are paused for 2.0 (packaging/ on main has the pacman recipe).
+name: Build & Release GameVault
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Tests
+        run: npm test
+
+      - name: Build and Publish (Windows)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release:win
