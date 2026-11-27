@@ -1897,7 +1897,7 @@ app.on('before-quit', (e) => {
   if (quitFlushState === 'done') return;
   if (quitFlushState === 'flushing') { e.preventDefault(); return; }
 
-  const canFlush = !shotMode && win && !win.isDestroyed() && !win.webContents.isDestroyed();
+  const canFlush = win && !win.isDestroyed() && !win.webContents.isDestroyed();
   stopAllTracking();
   if (!canFlush) { quitFlushState = 'done'; return; }
 
