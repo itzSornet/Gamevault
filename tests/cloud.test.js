@@ -242,6 +242,27 @@ const T = 1_800_000_000_000;
   const safety = cloud.safetyFolder('a');
   assert.ok(safety);
   assert.strictEqual(fs.readdirSync(safety).length, 3);
+
+  // a backup made under one Steam ID, restored on a PC that saves under
+  // another: asked where (nothing written), then into the new ID's folder,
+  // without downloading it again
+  {
+    const idDir = path.join(dir, 'pc1', 'Saved', 'Steam', '76561199642931604');
+    fs.mkdirSync(idDir, { recursive: true });
+    fs.writeFileSync(path.join(idDir, 'slot.sav'), 'chapter 7');
+    clock += 1000;
+    const made = await cloud.backupSaves({ gameId: 'pbz', gameName: 'PBZ', saveDir: idDir });
+    fs.rmSync(path.join(dir, 'pc1'), { recursive: true, force: true }); // a different PC
+    const ask = await cloud.restoreBackup({ gameId: 'pbz', backupId: made.backup.id, saveDir: null });
+    assert.strictEqual(ask.pending, 'folder');
+    assert.strictEqual(ask.source, idDir);
+    const parent = path.join(dir, 'pc2', 'Saved', 'Steam');
+    fs.mkdirSync(path.join(parent, '76561199761766476'), { recursive: true });
+    db.objects.clear(); // a second download would fail now
+    const done = await cloud.restoreBackup({ gameId: 'pbz', backupId: made.backup.id, saveDir: parent });
+    assert.strictEqual(done.target, path.join(parent, '76561199761766476'));
+    assert.strictEqual(fs.readFileSync(path.join(done.target, 'slot.sav'), 'utf8'), 'chapter 7');
+  }
   assert.strictEqual(cloud.safetyFolder('nothing-here'), null);
 
   // the cloud turns down a token this PC thinks is good (clock off, session

@@ -105,10 +105,12 @@ function emit(gameId, t, events) {
       const sessionMs = (e.sessionHours || 0) * 3600000;
       const awayMs = Math.min(sessionMs, t.awayMs || 0);
       t.awayMs = 0;
-      send('tracking:session-end', {
+      const ended = {
         gameId, sessionHours: Math.max(0, sessionMs - awayMs) / 3600000, sessionStart: e.sessionStart, sessionEnd: e.sessionEnd, discarded: !!e.discarded,
         awayMinutes: Math.round(awayMs / 60000),
-      });
+      };
+      if (endedSessions) endedSessions.push(ended);
+      send('tracking:session-end', ended);
       if (sessionEndHook) setImmediate(() => { try { sessionEndHook(String(gameId)); } catch (_) {} });
     } else if (e.type === 'gave-up') {
       send('tracking:gave-up', { gameId, reason: 'not-seen' });
@@ -325,11 +327,21 @@ function stopTracking(gameId) {
   if (Object.keys(trackedProcesses).length === 0) stopLoop();
 }
 
+// Ends every running session. Returns what was sent as tracking:session-end,
+// for a caller that has to save it itself (Windows is shutting down and the
+// window may not get to).
+let endedSessions = null;
 function stopAllTracking() {
   stopLoop();
-  Object.keys(trackedProcesses).forEach(id => {
-    stopTracking(id);
-  });
+  endedSessions = [];
+  try {
+    Object.keys(trackedProcesses).forEach(id => {
+      stopTracking(id);
+    });
+    return endedSessions;
+  } finally {
+    endedSessions = null;
+  }
 }
 
 // PIDs to stop on Windows: processes whose exact image name belongs to this

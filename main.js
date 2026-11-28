@@ -26,6 +26,7 @@ const { cloudConfig } = require('./src/backend/cloud-config.js');
 const { createAccount } = require('./src/backend/account.js');
 const { createCloud } = require('./src/backend/cloud.js');
 const { findSaveFolders } = require('./src/backend/save-locations.js');
+const { steamAccounts } = require('./src/backend/save-roots.js');
 const { httpsGet } = require('./src/backend/api.js');
 const Fuzzy = require('./src/lib/fuzzy.js');
 const Capture = require('./src/backend/capture.js');
@@ -64,6 +65,42 @@ function patchGame(gameId, patch) {
     refreshTray();
     return changed;
   });
+}
+
+// Windows signing out, restarting or shutting down: Electron sends no
+// before-quit then, and the process is ended right after the window's
+// session-end event. Running sessions (and one in its wait after the game
+// closed) are ended and written here, at once, so they are not lost. They are
+// kept too, so a save the window still sends can't drop them.
+let windowsEndingSessions = null;
+function addEndedSessions(games, ended) {
+  let changed = false;
+  for (const e of ended || []) {
+    const hours = e.discarded ? 0 : Math.max(0, Number(e.sessionHours) || 0);
+    if (!(hours > 0)) continue;
+    const g = games.find((x) => x && typeof x === 'object' && String(x.id) === String(e.gameId));
+    if (!g) continue;
+    if (!Array.isArray(g.sessions)) g.sessions = [];
+    if (g.sessions.some((s) => s && s.start === e.sessionStart)) continue; // the window saved it already
+    g.hours = (Number(g.hours) || 0) + hours;
+    g.sessions.push({ start: e.sessionStart, end: e.sessionEnd, duration: hours });
+    g.lastPlayed = e.sessionEnd || Date.now();
+    changed = true;
+  }
+  return changed;
+}
+function saveSessionsOnWindowsEnd() {
+  if (windowsEndingSessions) return;
+  forceQuit = true;
+  if (bgPollInterval) { clearInterval(bgPollInterval); bgPollInterval = null; }
+  windowsEndingSessions = stopAllTracking().filter((e) => !e.discarded && e.sessionHours > 0);
+  if (!windowsEndingSessions.length) return;
+  try {
+    const games = loadGames();
+    if (addEndedSessions(games, windowsEndingSessions)) saveGames(games);
+  } catch (err) {
+    console.warn('[games] could not save sessions at sign-out:', err && err.message);
+  }
 }
 
 // Download the remote covers of a saved library, then swap the local copies
@@ -635,6 +672,12 @@ function createWindow() {
     }
   });
 
+  // Windows is signing out, restarting or shutting down (see saveSessionsOnWindowsEnd)
+  win.on('session-end', () => {
+    saveSessionsOnWindowsEnd();
+    try { if (!win.isDestroyed()) win.webContents.send('app:flush'); } catch (_) {}
+  });
+
   // Window maximize state sync
   win.on('maximize', () => {
     if (win && !win.isDestroyed()) {
@@ -936,6 +979,7 @@ function createWindow() {
     // afterwards (a slow image host must never hold up, or lose, a save made
     // just before quitting)
     return enqueueGamesWrite(() => {
+      if (windowsEndingSessions) addEndedSessions(games, windowsEndingSessions);
       saveGames(games);
       refreshTray();
       cacheImagesAfterSave(games);
@@ -1301,9 +1345,17 @@ function createWindow() {
     const r = await dialog.showOpenDialog(win, { title: 'Choose the game’s save folder', defaultPath: current || app.getPath('documents'), properties: ['openDirectory'] });
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
   });
-  ipcMain.handle('saves:backup', (_, p) => accountReply(() => cloud().backupSaves(p || {})));
+  // backups note where the saves were, restores find this PC's folder for
+  // them (save-roots.js): both need this PC's Steam accounts and profile folder
+  const saveWhere = (p) => {
+    const q = p && typeof p === 'object' ? p : {};
+    const out = { ...q, accounts: steamAccounts(saveLauncherDirs().steamDir), home: app.getPath('home') };
+    if ((!out.installDir || !fs.existsSync(out.installDir)) && q.steamAppId) out.installDir = resolveSteamInstallDir(q.steamAppId) || out.installDir || null;
+    return out;
+  };
+  ipcMain.handle('saves:backup', (_, p) => accountReply(() => cloud().backupSaves(saveWhere(p))));
   ipcMain.handle('saves:list', (_, gameId) => accountReply(() => cloud().listBackups(gameId)));
-  ipcMain.handle('saves:restore', (_, p) => accountReply(() => cloud().restoreBackup(p || {})));
+  ipcMain.handle('saves:restore', (_, p) => accountReply(() => cloud().restoreBackup(saveWhere(p))));
   ipcMain.handle('saves:delete', (_, id) => accountReply(() => cloud().deleteBackup(id)));
   // Settings → Backups: every game with copies in the cloud, and failed tries
   ipcMain.handle('saves:overview', () => accountReply(() => cloud().overview()));
@@ -1324,9 +1376,9 @@ function createWindow() {
     }
     return localSavesInstance;
   };
-  ipcMain.handle('lsaves:backup', (_, p) => accountReply(() => localSaves().backupSaves(p || {})));
+  ipcMain.handle('lsaves:backup', (_, p) => accountReply(() => localSaves().backupSaves(saveWhere(p))));
   ipcMain.handle('lsaves:list', (_, gameId) => accountReply(() => localSaves().listBackups(gameId)));
-  ipcMain.handle('lsaves:restore', (_, p) => accountReply(() => localSaves().restoreBackup(p || {})));
+  ipcMain.handle('lsaves:restore', (_, p) => accountReply(() => localSaves().restoreBackup(saveWhere(p))));
   ipcMain.handle('lsaves:delete', (_, id) => accountReply(() => localSaves().deleteBackup(id)));
   ipcMain.handle('lsaves:overview', () => accountReply(() => localSaves().overview()));
   ipcMain.handle('lsaves:has-previous', (_, gameId) => !!localSaves().safetyFolder(String(gameId || '')));
