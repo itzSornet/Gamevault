@@ -4017,6 +4017,7 @@
     return anim.finished.catch(() => {}).then(() => { if (to !== 0) el.style.overflow = ''; });
   }
 
+  const LIVE_STALE_MS = 6000;
   function startDetailTick(g) {
     stopDetailTick();
     const live = state.live[String(g.id)];
@@ -4027,7 +4028,12 @@
     const paint = () => {
       const valueEl = document.querySelector('[data-timer-value]');
       if (!valueEl || typeof state.live[String(g.id)] !== 'number') { stopDetailTick(); return; }
-      const elapsed = Math.max(0, Date.now() - state.liveStart[String(g.id)]);
+      // The tracker reports every few seconds while it sees the game. When the
+      // reports stop (the game closed; the session is saved after a short wait
+      // in case it comes back), the clock stops too instead of running on.
+      const seen = state.liveSeen && state.liveSeen[String(g.id)];
+      const now = seen ? Math.min(Date.now(), seen + LIVE_STALE_MS) : Date.now();
+      const elapsed = Math.max(0, now - state.liveStart[String(g.id)]);
       valueEl.textContent = Sessions.formatClock(elapsed);
     };
     paint();
@@ -7568,9 +7574,28 @@
     }
     // copies on this PC and signed in: the cloud is one (asked) step away
     const toCloud = savesMode() === 'local' && signedIn() ? '<button type="button" class="sv-link sv-prev" data-sv="turn-on">Back up to the cloud instead…</button>' : '';
+    // a restore that needs an answer first: which account folder, or where
+    if (ui.choices) {
+      return head() + '<p class="sv-text">This game has saves for more than one account here. Restore into which?</p>' +
+        ui.choices.map((c, i) => `<button type="button" class="sv-pick" data-sv="use-choice" data-i="${i}" title="${esc(c.path)}"><b>${esc(lastDirs(c.path, 2))}</b><span>${c.files ? `${c.files} file${c.files === 1 ? '' : 's'} · changed ${agoLabel(c.newest)}` : 'empty'}</span></button>`).join('') +
+        '<div class="sv-row"><button type="button" class="sv-link" data-sv="cancel">Cancel</button></div>';
+    }
+    if (ui.needFolder) {
+      return head() + (ui.needFolder.source
+        ? `<p class="sv-text">This backup came from <b title="${esc(ui.needFolder.source)}">${esc(lastDirs(ui.needFolder.source, 3))}</b>, and that folder isn’t on this PC yet. Open the game once so it makes its save folder, then restore again. Or show GameVault the folder:</p>`
+        : '<p class="sv-text">Where does this game keep its saves on this PC? GameVault restores the backup there.</p>') +
+        '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button><button type="button" class="sv-link" data-sv="cancel">Cancel</button></div>';
+    }
     if (!g.saveDir) {
-      return head() + '<p class="sv-text">Backups are on. Where does this game keep its saves?</p>' +
-        '<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>' + toCloud;
+      const have = ui.backups && ui.backups[0];
+      const asking = have && ui.confirm === have.id;
+      const restore = have
+        ? `<p class="sv-status"><b>Backed up ${esc(agoLabel(have.created_at))}</b><span>${copiesText(ui.backups.length)}${have.device ? ' · ' + esc(have.device) : ''}</span></p>` +
+          `<div class="sv-row"><button type="button" class="btn btn-primary sv-btn" data-sv="restore" data-id="${esc(have.id)}" ${ui.busy ? 'disabled' : ''}>${ui.busy || (asking ? 'Restore it here?' : 'Restore the latest')}</button></div>` +
+          '<p class="sv-text">Or set where it saves, to back it up from this PC:</p>'
+        : '<p class="sv-text">Backups are on. Where does this game keep its saves?</p>';
+      return head(have ? 'ok' : '') + restore +
+        `<div class="sv-row"><button type="button" class="${have ? 'sv-link' : 'btn btn-primary sv-btn'}" data-sv="find">Find automatically</button><button type="button" class="sv-link" data-sv="pick">Choose folder…</button></div>` + toCloud;
     }
     const backups = ui.backups;
     const latest = backups && backups[0];
@@ -7610,7 +7635,7 @@
       ui.hasPrev = false;
       svApi().hasPrev(String(g.id)).then((v) => { ui.hasPrev = !!v; if (v && state.selectedId === String(g.id)) paintSavesCard(g); }).catch(() => {});
     }
-    if (g.saveDir && savesMode() && ui && ui.id === String(g.id) && !ui.backups && !ui.loading) {
+    if (savesMode() && ui && ui.id === String(g.id) && !ui.backups && !ui.loading) {
       ui.loading = true;
       svApi().list(String(g.id)).then((res) => {
         ui.loading = false;
@@ -7634,7 +7659,7 @@
     if (!g || !g.saveDir || !savesMode()) return;
     const ui = state._sv && state._sv.id === String(g.id) ? state._sv : null;
     if (ui) { ui.busy = 'Backing up…'; ui.error = null; paintSavesCard(g); }
-    const res = await svApi().backup({ gameId: String(g.id), gameName: g.name, saveDir: g.saveDir, force });
+    const res = await svApi().backup({ gameId: String(g.id), gameName: g.name, saveDir: g.saveDir, installDir: g.installDir || null, steamAppId: g.steamAppId || null, force });
     if (ui) { ui.busy = null; ui.backups = null; }
     if (res && res.ok) {
       if (!quiet) toast(res.data.skipped ? 'Saves haven’t changed since the last backup' : `Backed up ${g.name} saves`, 'ok');
@@ -7707,37 +7732,60 @@
     } else if (act === 'use') {
       const c = ui.found && ui.found[Number(btn.dataset.i)];
       ui.found = null;
-      if (c) setSaveDir(g, c.path);
+      if (c && ui.needFolder) restoreSaves(g, ui.needFolder.backupId, { saveDir: c.path });
+      else if (c) setSaveDir(g, c.path);
     } else if (act === 'pick') {
       const dir = await api.savesPick(g.saveDir || null);
       ui.found = null;
-      if (dir) setSaveDir(g, dir); else paintSavesCard(g);
+      if (dir && ui.needFolder) restoreSaves(g, ui.needFolder.backupId, { saveDir: dir });
+      else if (dir) setSaveDir(g, dir); else paintSavesCard(g);
+    } else if (act === 'use-choice') {
+      const c = ui.choices && ui.choices[Number(btn.dataset.i)];
+      const pending = ui.choicesFor;
+      ui.choices = null;
+      if (c && pending) restoreSaves(g, pending, { saveDir: c.path, exact: true }); else paintSavesCard(g);
     } else if (act === 'cancel') {
-      ui.found = null; paintSavesCard(g);
+      ui.found = null; ui.needFolder = null; ui.choices = null; ui.confirm = null; paintSavesCard(g);
     } else if (act === 'backup') {
       backupNow(g, { quiet: false, force: true });
     } else if (act === 'restore') {
       const id = btn.dataset.id;
       if (ui.confirm !== id) { ui.confirm = id; ui.confirmDel = null; paintSavesCard(g); return; }
       ui.confirm = null;
-      if (typeof state.live[String(g.id)] === 'number') { toast('Close the game before restoring its saves', 'error'); paintSavesCard(g); return; }
-      ui.busy = 'Restoring…'; paintSavesCard(g);
-      const res = await svApi().restore({ gameId: String(g.id), backupId: id, saveDir: g.saveDir });
-      ui.busy = null;
-      if (res && res.ok) {
-        ui.hasPrev = !!res.data.safety || ui.hasPrev;
-        toast(`Restored ${res.data.files} file${res.data.files === 1 ? '' : 's'}. The saves it replaced are kept: open them from this card.`, 'ok');
-      }
-      else {
-        problemDialog({
-          title: 'Saves weren’t restored',
-          body: `The backup of <b>${esc(g.name || 'this game')}</b> couldn’t be put back. Check that the game is closed and its save folder is still there, then try again.`,
-          detail: (res && res.error && res.error.message) || '',
-          fallback: (res && res.error && res.error.message) || 'Restore failed',
-        });
-      }
-      paintSavesCard(g);
+      restoreSaves(g, id, { saveDir: g.saveDir || null });
     }
+  }
+
+  // Restore a backup on this PC. The backup knows where it came from, so the
+  // main process works out the folder here (another Steam account's number,
+  // a parent folder picked by mistake, no folder set yet); when it can't, it
+  // asks back: which account folder, or where the game saves.
+  async function restoreSaves(g, backupId, { saveDir = null, exact = false } = {}) {
+    const ui = state._sv && state._sv.id === String(g.id) ? state._sv : (state._sv = { id: String(g.id) });
+    if (typeof state.live[String(g.id)] === 'number') { toast('Close the game before restoring its saves', 'error'); paintSavesCard(g); return; }
+    ui.needFolder = null; ui.choices = null;
+    ui.busy = 'Restoring…'; paintSavesCard(g);
+    const res = await svApi().restore({ gameId: String(g.id), backupId, saveDir, exact, installDir: g.installDir || null, steamAppId: g.steamAppId || null });
+    ui.busy = null;
+    const d = res && res.ok ? res.data : null;
+    if (d && d.pending === 'choose') {
+      ui.choices = d.choices || []; ui.choicesFor = backupId;
+    } else if (d && d.pending) {
+      ui.needFolder = { backupId, source: d.source || null };
+    } else if (d) {
+      if (d.target && d.target !== g.saveDir) { g.saveDir = d.target; saveGamesSoon(); }
+      ui.hasPrev = !!d.safety || ui.hasPrev;
+      ui.backups = null;
+      toast(`Restored ${d.files} file${d.files === 1 ? '' : 's'} to ${lastDirs(d.target, 2)}.${d.safety ? ' The saves it replaced are kept: open them from this card.' : ''}`, 'ok');
+    } else {
+      problemDialog({
+        title: 'Saves weren’t restored',
+        body: `The backup of <b>${esc(g.name || 'this game')}</b> couldn’t be put back. Check that the game is closed and its save folder is still there, then try again.`,
+        detail: (res && res.error && res.error.message) || '',
+        fallback: (res && res.error && res.error.message) || 'Restore failed',
+      });
+    }
+    if (state.selectedId === String(g.id)) paintSavesCard(g);
   }
 
   if (window.api && window.api.onAccountChanged) {
@@ -9848,12 +9896,16 @@
 
     const findGame = (gameId) => state.games.find((x) => String(x.id) === String(gameId));
 
+    const seenNow = (id) => { if (!state.liveSeen) state.liveSeen = {}; state.liveSeen[id] = Date.now(); };
+    const forgetSeen = (id) => { if (state.liveSeen) delete state.liveSeen[id]; };
+
     const markRunning = (gameId) => {
       const id = String(gameId);
       clearLaunchWatchdog(id);
       state.live[id] = 0;
       if (!state.liveStart) state.liveStart = {};
       state.liveStart[id] = Date.now();
+      seenNow(id);
       return findGame(id);
     };
 
@@ -9880,6 +9932,7 @@
       state.live[id] = mins;
       if (!state.liveStart) state.liveStart = {};
       state.liveStart[id] = Date.now() - mins * 60000;
+      seenNow(id);
       if (!wasRunning) backdrop.play();
       const g = findGame(id);
       if (!g) return;
@@ -9893,6 +9946,7 @@
       clearLaunchWatchdog(id);
       delete state.live[id];
       if (state.liveStart) delete state.liveStart[id];
+      forgetSeen(id);
       backdrop.play();
       const g = findGame(id);
       if (!g) return;
@@ -9921,6 +9975,7 @@
       if (was == null || was === 'stopping') return;
       delete state.live[id];
       if (state.liveStart) delete state.liveStart[id];
+      forgetSeen(id);
       const g = findGame(id);
       refreshGameUi(g);
       // noticed outside GameVault and gone before tracking began: just clear it
@@ -9937,6 +9992,7 @@
       if (id) clearLaunchWatchdog(id);
       if (id && Object.prototype.hasOwnProperty.call(state.live, id)) delete state.live[id];
       if (id && state.liveStart) delete state.liveStart[id];
+      if (id) forgetSeen(id);
       const g = id ? findGame(id) : null;
       undoOpened(g);
       refreshGameUi(g);

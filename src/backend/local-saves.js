@@ -2,9 +2,10 @@
 // cloud ones (cloud.js pack/unpack), gzipped but not encrypted, since they
 // never leave the machine. One folder per game under userData/save-copies.
 //
-//   backupSaves({ gameId, gameName, saveDir, force })  -> { skipped } | { backup }
+//   backupSaves({ gameId, gameName, saveDir, force, accounts?, installDir?, home? })  -> { skipped } | { backup }
 //   listBackups(gameId)                                -> [{ id, created_at, size, files, device }]
-//   restoreBackup({ gameId, backupId, saveDir })       -> { files, safety, from }
+//   restoreBackup({ gameId, backupId, saveDir, exact?, accounts?, installDir?, home? })
+//                                                      -> { files, safety, from, target } | { pending, source, choices? }
 //   deleteBackup(backupId)                             -> true
 //   overview()                                         -> { games: [...], problems: {} }
 //   safetyFolder(gameId)                               -> folder with the saves a restore replaced, or null
@@ -15,7 +16,8 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const { promisify } = require('util');
-const { pack, unpack, safeJoin, listFiles } = require('./cloud.js');
+const { pack, unpack, writeRestore, listFiles } = require('./cloud.js');
+const { describeSaveDir } = require('./save-roots.js');
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -78,7 +80,7 @@ function createLocalSaves({ dir, device = 'This PC', now = () => Date.now() }) {
       .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
   }
 
-  async function backupSaves({ gameId, gameName, saveDir, force = false }) {
+  async function backupSaves({ gameId, gameName, saveDir, force = false, accounts, installDir, home }) {
     try {
       if (!gameId) throw err('BAD_INPUT', 'No game given.');
       if (!saveDir || !fs.existsSync(saveDir) || !fs.statSync(saveDir).isDirectory()) throw err('NO_FOLDER', 'The save folder isn’t there anymore. Pick it again.');
@@ -87,7 +89,7 @@ function createLocalSaves({ dir, device = 'This PC', now = () => Date.now() }) {
       const mh = manifestHash(files);
       const st = (readJson(stateFile) || {})[String(gameId)] || {};
       if (!force && st.hash === mh && listBackups(gameId).length) return { skipped: true };
-      const blob = await gzip(pack(files), { level: 6 });
+      const blob = await gzip(pack(files, describeSaveDir(saveDir, { accounts, installDir, home })), { level: 6 });
       if (blob.length > MAX_PACKED) throw err('TOO_BIG', 'Those saves are too big to keep copies of (over 500 MB packed).');
       const t = now();
       const d = gameDir(gameId);
@@ -120,33 +122,16 @@ function createLocalSaves({ dir, device = 'This PC', now = () => Date.now() }) {
     } catch (_) {}
   }
 
-  async function restoreBackup({ gameId, backupId, saveDir }) {
-    if (!saveDir) throw err('NO_FOLDER', 'Pick the game’s save folder first.');
+  async function restoreBackup(p) {
+    const { gameId, backupId } = p;
     const file = fileFor(backupId);
     if (!file || !fs.existsSync(file)) throw err('NOT_FOUND', 'That copy is gone.');
     const files = unpack(await gunzip(fs.readFileSync(file)));
-    const targets = files.map((f) => ({ f, to: safeJoin(saveDir, f.p) }));
-    if (targets.some((t) => !t.to)) throw err('CORRUPT', 'This copy has a file path GameVault won’t write. Nothing was changed.');
-    let safety = null;
-    if (fs.existsSync(saveDir)) {
-      safety = path.join(safetyDir(gameId), String(now()));
-      fs.mkdirSync(path.dirname(safety), { recursive: true });
-      try {
-        fs.cpSync(saveDir, safety, { recursive: true });
-      } catch (e) {
-        try { fs.rmSync(safety, { recursive: true, force: true }); } catch (_) {}
-        throw err('READ', 'Couldn’t copy your current saves aside first, so nothing was changed. Close the game and try again.');
-      }
-      pruneSafety(gameId);
-    }
-    for (const { f, to } of targets) {
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.writeFileSync(to, f.data);
-      try { fs.utimesSync(to, new Date(f.mtime), new Date(f.mtime)); } catch (_) {}
-    }
-    try { note(gameId, { hash: manifestHash(listFiles(saveDir).files), at: now() }); } catch (_) {}
+    const out = writeRestore(files, p, { safetyDir: safetyDir(gameId), now, pruneSafety: () => pruneSafety(gameId) });
+    if (!out.target) return out;
+    try { note(gameId, { hash: manifestHash(listFiles(out.target).files), at: now() }); } catch (_) {}
     const t = Number(String(backupId).split('/')[1]);
-    return { files: files.length, safety, from: new Date(t).toISOString() };
+    return { ...out, from: new Date(t).toISOString() };
   }
 
   function deleteBackup(backupId) {

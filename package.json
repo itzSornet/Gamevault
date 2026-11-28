@@ -1,6 +1,6 @@
 {
   "name": "gamevault",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Modern personal game library manager, playtime tracker, and launcher.",
   "main": "main.js",
   "author": "itzSornet",
